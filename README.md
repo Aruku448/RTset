@@ -70,8 +70,9 @@ The NRD denoiser also needs the Windows x64 bridge at
 `src/main/resources/rtest/natives/windows-x86_64/prime_nrd.dll`. Build it with the instructions
 in `native/nrd/README.md`; the Linux `.so` cannot be renamed or used on Windows.
 
-For a new Windows instance, the helper script writes `earlyWindowControl = false` and installs
-RTest automatically:
+For a new Windows instance, the portable helper script writes `earlyWindowControl = false` and
+installs RTest automatically. If `-GameDirectory` is omitted, it detects the standard
+`%APPDATA%\.minecraft` directory; custom launchers should pass the instance path explicitly:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
