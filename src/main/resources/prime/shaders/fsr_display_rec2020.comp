@@ -1,0 +1,29 @@
+#version 460
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D primeFsrLinearOutput;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D primeDisplayOutput;
+
+layout(push_constant) uniform PrimeFsrDisplayPushConstants {
+    uvec2 outputExtent;
+    uint colorManagementMode;
+} primeFsrDisplayPush;
+
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pixel, primeFsrDisplayPush.outputExtent))) {
+        return;
+    }
+
+    // The FSR output is already scene-referred linear Rec.2020, and this variant is only selected
+    // when the swapchain exposes Rec.2020 primaries, so the wide gamut survives to the compositor.
+    // Only non-finite and negative radiance is sanitized; 1.0 keeps meaning reference white so SDR
+    // content composited on top retains its authored appearance.
+    vec3 radiance = texelFetch(primeFsrLinearOutput, ivec2(pixel), 0).rgb;
+    if (any(isnan(radiance)) || any(isinf(radiance))) {
+        radiance = vec3(0.0);
+    }
+    imageStore(primeDisplayOutput, ivec2(pixel), vec4(max(radiance, vec3(0.0)), 1.0));
+}

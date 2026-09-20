@@ -1,0 +1,93 @@
+#version 460
+#extension GL_EXT_samplerless_texture_functions : require
+
+// Ported from Prime 26.3 service/reconstruct/display.slang. Prime licensing and additional
+// permissions are preserved in third_party/PRIME-LICENSE*.txt.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform texture2D primeFsrLinearOutput;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D primeDisplayOutput;
+layout(push_constant) uniform DisplayPush {
+    uvec2 outputExtent;
+    uint colorManagementMode;
+    float outputPeak;
+    float curvePeak;
+} settings;
+
+const vec3 PRIME_NEUTRAL_WEIGHTS = vec3(
+    0.2120053547549465, 0.3921825078090138, 0.3958121374360396);
+const float PRIME_GAMUT_COMPRESSION = 0.04;
+const float PRIME_COMPRESSION_START = 0.18;
+
+vec3 rec2020ToBt709(vec3 color) {
+    return vec3(
+        dot(vec3(1.6604910, -0.5876411, -0.0728499), color),
+        dot(vec3(-0.1245505, 1.1328999, -0.0083494), color),
+        dot(vec3(-0.0181508, -0.1005789, 1.1187297), color));
+}
+vec3 toVirtualRgb(vec3 color) {
+    float neutral = dot(color, PRIME_NEUTRAL_WEIGHTS);
+    return mix(color, vec3(neutral), PRIME_GAMUT_COMPRESSION);
+}
+vec3 fromVirtualRgb(vec3 color) {
+    float neutral = dot(color, PRIME_NEUTRAL_WEIGHTS);
+    return (color - PRIME_GAMUT_COMPRESSION * vec3(neutral))
+        / (1.0 - PRIME_GAMUT_COMPRESSION);
+}
+float curveComponent(float value) {
+    if (value <= PRIME_COMPRESSION_START) return value;
+    float distance = value - PRIME_COMPRESSION_START;
+    float extent = settings.curvePeak - PRIME_COMPRESSION_START;
+    return PRIME_COMPRESSION_START + extent / (1.0 + extent / distance);
+}
+vec3 encodeSrgb(vec3 linearRgb) {
+    bvec3 cutoff = lessThan(linearRgb, vec3(0.0031308));
+    vec3 higher = 1.055 * pow(max(linearRgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    vec3 lower = linearRgb * 12.92;
+    return mix(higher, lower, cutoff);
+}
+vec3 rgbToHsv(vec3 color) {
+    float maximum = max(color.x, max(color.y, color.z));
+    float minimum = min(color.x, min(color.y, color.z));
+    float chroma = maximum - minimum;
+    float hue = 0.0;
+    if (chroma > 1.0e-7) {
+        if (maximum == color.x) hue = (color.y - color.z) / chroma;
+        else if (maximum == color.y) hue = (color.z - color.x) / chroma + 2.0;
+        else hue = (color.x - color.y) / chroma + 4.0;
+        hue = fract(hue / 6.0);
+    }
+    return vec3(hue, maximum > 1.0e-7 ? chroma / maximum : 0.0, maximum);
+}
+vec3 hsvToRgb(vec3 hsv) {
+    vec3 primary = clamp(
+        abs(fract(hsv.x + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0,
+        0.0, 1.0);
+    return hsv.z * mix(vec3(1.0), primary, hsv.y);
+}
+vec3 protectHue(vec3 originalLinear, vec3 mappedDisplay) {
+    vec3 originalHsv = rgbToHsv(encodeSrgb(originalLinear));
+    vec3 mappedHsv = rgbToHsv(mappedDisplay);
+    if (originalHsv.y <= 1.0e-7 || mappedHsv.y <= 1.0e-7) return mappedDisplay;
+    float hueOffset = originalHsv.x - mappedHsv.x;
+    hueOffset -= floor(hueOffset + 0.5);
+    mappedHsv.x = fract(mappedHsv.x + 0.5 * hueOffset);
+    return hsvToRgb(mappedHsv);
+}
+vec3 primeRgbReinhard(vec3 linearBt709) {
+    vec3 nonnegative = max(linearBt709, vec3(0.0));
+    vec3 working = toVirtualRgb(nonnegative);
+    vec3 mapped = fromVirtualRgb(vec3(
+        curveComponent(working.x), curveComponent(working.y), curveComponent(working.z)));
+    return protectHue(nonnegative, encodeSrgb(mapped));
+}
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pixel, settings.outputExtent))) return;
+    vec3 radiance = texelFetch(primeFsrLinearOutput, ivec2(pixel), 0).rgb;
+    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
+    vec3 linearBt709 = max(rec2020ToBt709(radiance), vec3(0.0));
+    vec3 mapped = settings.colorManagementMode != 0u
+        ? primeRgbReinhard(linearBt709)
+        : encodeSrgb(linearBt709);
+    imageStore(primeDisplayOutput, ivec2(pixel), vec4(clamp(mapped, 0.0, settings.outputPeak), 1.0));
+}

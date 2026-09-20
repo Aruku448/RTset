@@ -1,0 +1,23 @@
+#version 460
+
+// Adapted from Prime 26.3 offline sample-resolve running-mean contract.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba16f) uniform image2D currentOutput;
+layout(set = 0, binding = 1, rgba32f) uniform image2D runningMean;
+
+layout(push_constant) uniform OfflineSettings {
+    uvec2 extent;
+    uint sampleIndex;
+} settings;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, ivec2(settings.extent)))) return;
+    vec4 sampleValue = imageLoad(currentOutput, pixel);
+    vec4 previousMean = imageLoad(runningMean, pixel);
+    vec4 mean = settings.sampleIndex == 0u
+        ? sampleValue
+        : previousMean + (sampleValue - previousMean) / float(settings.sampleIndex + 1u);
+    imageStore(runningMean, pixel, mean);
+    imageStore(currentOutput, pixel, mean);
+}

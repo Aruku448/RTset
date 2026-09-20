@@ -1,0 +1,215 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// RTest's ray generator writes linear radiance and hit distances into the two NRD images when
+// signal splitting is enabled. This pass is the only producer of NRD's public YCoCg/material/
+// guide contract. When NRD is disabled the ray generator keeps the old YCoCg contract for Sundial.
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D nrdMotion;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D nrdViewZ;
+layout(set = 0, binding = 2, rgba32f) uniform readonly image2D primaryPosition;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D reprojectionError;
+layout(set = 0, binding = 4, r32f) uniform writeonly image2D fsrDepth;
+layout(set = 0, binding = 5, rgba16f) uniform image2D noisyDiffuse;
+layout(set = 0, binding = 6, rgba16f) uniform image2D noisySpecular;
+layout(set = 0, binding = 7, rgb10_a2) uniform writeonly image2D normalRoughness;
+layout(set = 0, binding = 8, rgba16f) uniform image2D material;
+layout(set = 0, binding = 9, rgba16f) uniform image2D specularMaterial;
+layout(set = 0, binding = 10, rg16f) uniform readonly image2D raygenMotion;
+
+layout(push_constant) uniform MotionSettings {
+    mat4 currentClipToWorld;
+    mat4 previousWorldToClip;
+    mat4 previousRenderedWorldToClip;
+} settings;
+
+const float SKY_VIEW_Z = 65504.0;
+const float FSR_NEAR_PLANE = 0.05;
+const float FP16_MAX = 65504.0;
+const float NRD_EPSILON = 1.0e-6;
+const float NRD_MATERIAL_FACTOR_MIN = 0.02;
+const float NRD_ROUGHNESS_FACTOR_MIN = 0.1;
+const uint TRANSMISSIVE = 4u;
+const uint DYNAMIC = 256u;
+
+vec3 linearToYCoCg(vec3 color) {
+    return vec3(
+        dot(color, vec3(0.25, 0.5, 0.25)),
+        dot(color, vec3(0.5, 0.0, -0.5)),
+        dot(color, vec3(-0.25, 0.5, -0.25)));
+}
+
+vec3 sanitize(vec3 value) {
+    return any(isnan(value)) || any(isinf(value))
+        ? vec3(0.0)
+        : clamp(value, vec3(0.0), vec3(FP16_MAX));
+}
+
+vec4 packNormalRoughness(vec3 normal, float roughness) {
+    normal = normalize(normal);
+    vec3 oct = normal / max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-6);
+    vec2 packed;
+    packed.y = oct.y * 0.5 + 0.5;
+    packed.x = oct.x * 0.5 + packed.y;
+    packed.y -= oct.x * 0.5;
+    float signedRoughness = oct.z < 0.0
+        ? -max(roughness, 1.5 / 512.0)
+        : max(roughness, 1.5 / 512.0);
+    return vec4(packed, signedRoughness * 0.5 + 0.5, 0.0);
+}
+
+vec3 motionRayDirection(vec2 uv) {
+    vec2 clipXY = uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
+    vec4 nearPoint = settings.currentClipToWorld * vec4(clipXY, 1.0, 1.0);
+    vec4 farPoint = settings.currentClipToWorld * vec4(clipXY, 0.0, 1.0);
+    if (abs(nearPoint.w) <= 1.0e-6) {
+        return vec3(0.0, 0.0, -1.0);
+    }
+    if (abs(farPoint.w) <= 1.0e-6) {
+        // Reversed infinite projections encode the far point as a homogeneous direction.
+        return normalize(farPoint.xyz);
+    }
+    return normalize(farPoint.xyz / farPoint.w - nearPoint.xyz / nearPoint.w);
+}
+
+float normalizedHitDistance(float hitDistance, float viewZ, float roughness) {
+    if (!(hitDistance > 0.0)) {
+        return 0.0;
+    }
+    float spread = 1.0 - exp2(-200.0 * roughness * roughness);
+    spread *= sqrt(max(roughness, 0.0));
+    float scale = (3.0 + abs(viewZ) * 0.1) * mix(20.0, 1.0, spread);
+    return clamp(hitDistance / max(scale, 1.0e-6), 0.0, 1.0);
+}
+
+vec3 nrdEnvironmentTerm(vec3 reflectanceAtNormal, float cosineView, float roughness) {
+    // This is the NRD REBLUR environment term, kept local so the preparation pass uses the same
+    // material-factor curve as Prime without making the raygen shader carry the extra matrix work.
+    float squaredRoughness = clamp(roughness * roughness, 0.0, 1.0);
+    vec4 x = vec4(1.0, cosineView, cosineView * cosineView, 0.0);
+    x.w = x.y * x.z;
+    vec4 y = vec4(1.0, squaredRoughness, squaredRoughness * squaredRoughness, 0.0);
+    y.w = y.y * y.z;
+
+    vec2 m1x = vec2(
+        dot(vec2(0.99044, -1.28514), x.xy),
+        dot(vec2(1.29678, -0.755907), x.xy));
+    vec3 m2x = vec3(
+        dot(vec3(1.0, 2.92338, 59.4188), x.xyw),
+        dot(vec3(20.3225, -27.0302, 222.592), x.xyw),
+        dot(vec3(121.563, 626.13, 316.627), x.xyw));
+    vec2 m3x = vec2(
+        dot(vec2(0.0365463, 3.32707), x.xy),
+        dot(vec2(9.0632, -9.04756), x.xy));
+    vec3 m4x = vec3(
+        dot(vec3(1.0, 3.59685, -1.36772), x.xzw),
+        dot(vec3(9.04401, -16.3174, 9.22949), x.xzw),
+        dot(vec3(5.56589, 19.7886, -20.2123), x.xzw));
+    float bias = dot(m1x, y.xy) / max(dot(m2x, y.xyw), NRD_EPSILON);
+    float scale = dot(m3x, y.xy) / max(dot(m4x, y.xyw), NRD_EPSILON);
+    return clamp(reflectanceAtNormal * scale + bias, 0.0, 1.0);
+}
+
+void materialFactors(
+        vec3 normal,
+        vec3 viewDirection,
+        vec3 baseColor,
+        vec3 reflectanceAtNormal,
+        float roughness,
+        out vec3 diffuseFactor,
+        out vec3 specularFactor) {
+    float cosineView = abs(dot(normal, viewDirection));
+    vec3 environmentFresnel = nrdEnvironmentTerm(
+        reflectanceAtNormal, cosineView, roughness);
+    diffuseFactor = mix(
+        vec3(NRD_MATERIAL_FACTOR_MIN), vec3(1.0),
+        (vec3(1.0) - environmentFresnel) * clamp(baseColor, 0.0, 1.0));
+    specularFactor = environmentFresnel
+        * mix(NRD_ROUGHNESS_FACTOR_MIN, 1.0, roughness);
+    specularFactor = mix(
+        vec3(NRD_MATERIAL_FACTOR_MIN), vec3(1.0), specularFactor);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(nrdViewZ);
+    if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+
+    vec4 primary = imageLoad(primaryPosition, pixel);
+    vec4 rawMaterial = imageLoad(material, pixel);
+    vec4 rawSpecularMaterial = imageLoad(specularMaterial, pixel);
+    uint flags = uint(max(round(rawSpecularMaterial.a), 0.0));
+    bool hit = rawMaterial.a >= 0.0 && dot(primary.xyz, primary.xyz) > 1.0e-12;
+    float primaryDistance = hit ? length(primary.xyz) : 0.0;
+    vec3 primaryDirection = hit ? normalize(primary.xyz) : motionRayDirection(
+        (vec2(pixel) + vec2(0.5)) / vec2(extent));
+    vec3 cameraForward = motionRayDirection(vec2(0.5));
+    float currentViewZ = hit
+        ? primaryDistance * dot(primaryDirection, cameraForward)
+        : SKY_VIEW_Z;
+    if (!(currentViewZ > 0.0) || currentViewZ >= SKY_VIEW_Z) {
+        currentViewZ = SKY_VIEW_Z;
+    }
+
+    float roughness = hit ? clamp(rawMaterial.a, 0.0, 1.0) : 0.8;
+    vec3 normal = hit ? normalize(rawSpecularMaterial.rgb) : vec3(0.0, 0.0, 1.0);
+    vec2 packedMaterial = unpackHalf2x16(floatBitsToUint(primary.w));
+    float metallic = packedMaterial.x;
+    float reflectivity = packedMaterial.y;
+    vec3 diffuseFactor = vec3(1.0);
+    vec3 specularFactor = vec3(1.0);
+    if (hit && (flags & TRANSMISSIVE) == 0u) {
+        vec3 reflectanceAtNormal = mix(
+            vec3(clamp(reflectivity, 0.04, 1.0)),
+            rawMaterial.rgb,
+            clamp(metallic, 0.0, 1.0));
+        materialFactors(normal, -primaryDirection, rawMaterial.rgb,
+            reflectanceAtNormal, roughness, diffuseFactor, specularFactor);
+    }
+
+    vec4 rawDiffuse = imageLoad(noisyDiffuse, pixel);
+    vec4 rawSpecular = imageLoad(noisySpecular, pixel);
+    imageStore(noisyDiffuse, pixel, vec4(
+        linearToYCoCg(sanitize(rawDiffuse.rgb) / max(diffuseFactor, vec3(0.02))),
+        normalizedHitDistance(rawDiffuse.a, currentViewZ, 1.0)));
+    imageStore(noisySpecular, pixel, vec4(
+        linearToYCoCg(sanitize(rawSpecular.rgb) / max(specularFactor, vec3(0.02))),
+        normalizedHitDistance(rawSpecular.a, currentViewZ, roughness)));
+    imageStore(normalRoughness, pixel, packNormalRoughness(normal, roughness));
+    imageStore(material, pixel, vec4(hit ? diffuseFactor : vec3(1.0), hit ? roughness : -1.0));
+    float compositionMask = ((flags & TRANSMISSIVE) != 0u) ? 1.0 : 0.0;
+    imageStore(specularMaterial, pixel, vec4(specularFactor, compositionMask));
+    imageStore(nrdViewZ, pixel, vec4(currentViewZ, 0.0, 0.0, 0.0));
+    imageStore(fsrDepth, pixel, vec4(
+        currentViewZ >= SKY_VIEW_Z ? 0.0 : FSR_NEAR_PLANE / currentViewZ));
+
+    vec2 currentUv = (vec2(pixel) + vec2(0.5)) / vec2(extent);
+    vec4 rawMotion = imageLoad(raygenMotion, pixel);
+    vec2 screenMotion = rawMotion.xy;
+    float previousViewZ = currentViewZ;
+    if (hit && (flags & DYNAMIC) == 0u) {
+        vec3 nonJitteredDirection = motionRayDirection(currentUv);
+        float forwardProjection = dot(nonJitteredDirection, cameraForward);
+        if (forwardProjection > 1.0e-6) {
+            vec3 currentPoint = nonJitteredDirection * (currentViewZ / forwardProjection);
+            vec4 previousClip = settings.previousWorldToClip * vec4(currentPoint, 1.0);
+            if (abs(previousClip.w) > 1.0e-6
+                    && !any(isnan(previousClip)) && !any(isinf(previousClip))) {
+                vec2 previousUv = previousClip.xy / previousClip.w * vec2(0.5, -0.5)
+                    + vec2(0.5);
+                screenMotion = previousUv - currentUv;
+                previousViewZ = abs(previousClip.w);
+            }
+        }
+    }
+    if (!hit || currentViewZ >= SKY_VIEW_Z) {
+        // RayGen already accounts for sky rotation and current jitter in this vector. Translation
+        // must not create parallax for an infinite environment, so only its XY component is used.
+        screenMotion = rawMotion.xy;
+        previousViewZ = currentViewZ;
+    }
+    imageStore(nrdMotion, pixel, vec4(screenMotion, previousViewZ - currentViewZ, 0.0));
+    imageStore(reprojectionError, pixel, vec4(0.0));
+}

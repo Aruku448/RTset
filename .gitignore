@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+.lwjgl/
+src/generated/
+bin/
+
+# IDE
+.idea/
+*.iml
+out/
+.vscode/
+.classpath
+.project
+.settings/
+
+# NeoForge development run data
+run/
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+hs_err_pid*
+*.hprof

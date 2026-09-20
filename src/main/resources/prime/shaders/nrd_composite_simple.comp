@@ -1,0 +1,67 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D outputColor;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D denoisedDiffuse;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D denoisedSpecular;
+layout(set = 0, binding = 3, r32f) uniform readonly image2D viewZ;
+layout(set = 0, binding = 4, rgba16f) uniform readonly image2D material;
+layout(set = 0, binding = 5, rgba16f) uniform readonly image2D specularMaterial;
+// Current-frame detail layer. Directly visible emission and camera-segment atmosphere bypass NRD;
+// every shadowed surface-light term is carried by the diffuse/specular histories.
+layout(set = 0, binding = 6, rgba16f) uniform readonly image2D emission;
+layout(set = 0, binding = 7, rgba16f) uniform readonly image2D directDiffuse;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image2D indirectDiffuse;
+
+layout(push_constant) uniform CompositeSettings {
+    float strength;
+} settings;
+
+vec3 yCoCgToLinear(vec3 color) {
+    float t = color.x - color.z;
+    return max(vec3(t + color.y, color.x + color.z, t - color.y), vec3(0.0));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(outputColor)))) {
+        return;
+    }
+    vec4 rawValue = imageLoad(outputColor, pixel);
+    vec3 raw = max(rawValue.rgb, vec3(0.0));
+    float viewZValue = imageLoad(viewZ, pixel).r;
+    // RayGen's environment path is not a surface signal. Do not let a surface history overwrite
+    // it when a camera ray changes from geometry to sky (or the reverse).
+    if (viewZValue >= 65503.0) {
+        imageStore(outputColor, pixel, rawValue);
+        return;
+    }
+    vec4 diffuseMaterial = imageLoad(material, pixel);
+    if (diffuseMaterial.a < 0.0) {
+        imageStore(outputColor, pixel, rawValue);
+        return;
+    }
+    // Dynamic entity shadows have no stable receiver-side motion vector. Reusing surface history
+    // would smear or lag their visibility, so these pixels keep the exact current-frame result.
+    vec4 directSample = imageLoad(directDiffuse, pixel);
+    if (directSample.a > 0.5) {
+        imageStore(outputColor, pixel, rawValue);
+        return;
+    }
+    vec3 diffuse = yCoCgToLinear(imageLoad(denoisedDiffuse, pixel).rgb)
+        * max(diffuseMaterial.rgb, vec3(0.02));
+    vec3 specular = yCoCgToLinear(imageLoad(denoisedSpecular, pixel).rgb)
+        * max(imageLoad(specularMaterial, pixel).rgb, vec3(0.02));
+    // directDiffuse stays in the descriptor ABI for Sundial/older captures, but the NRD path
+    // intentionally leaves it empty. Finite-sun visibility is stochastic and must be filtered.
+    vec3 visibleEmission = max(imageLoad(emission, pixel).rgb, vec3(0.0));
+    float strength = clamp(settings.strength, 0.0, 1.0);
+    // outputColor is the complete current-frame path sample. Removing the unfiltered channel
+    // gives an exact diffuse+specular fallback even when the NRD strength is zero.
+    vec3 rawSurface = max(raw - visibleEmission, vec3(0.0));
+    vec3 filteredSurface = mix(rawSurface, diffuse + specular, strength);
+    vec3 denoised = max(filteredSurface
+        + visibleEmission, vec3(0.0));
+    imageStore(outputColor, pixel, vec4(denoised, 1.0));
+}

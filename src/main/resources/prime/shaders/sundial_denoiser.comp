@@ -1,0 +1,324 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D noisyDiffuse;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D noisySpecular;
+layout(set = 0, binding = 2, rgb10_a2) uniform readonly image2D normalRoughness;
+layout(set = 0, binding = 3, r32f) uniform readonly image2D viewZ;
+layout(set = 0, binding = 4, rgba16f) uniform readonly image2D motion;
+layout(set = 0, binding = 5, rgba16f) uniform readonly image2D historyColor;
+layout(set = 0, binding = 6, rgba16f) uniform readonly image2D historyMeta;
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D nextHistoryColor;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D nextHistoryMeta;
+layout(set = 0, binding = 9, rgba16f) uniform image2D outputColor;
+// Sundial filters only the indirect/specular payload. The complete primary direct-light layer
+// (diffuse plus direct specular) and emission remain deterministic composition terms so
+// high-frequency sun light, reflections, and glow are never blurred away.
+layout(set = 0, binding = 10, rgba16f) uniform readonly image2D directDiffuse;
+layout(set = 0, binding = 11, rgba16f) uniform readonly image2D emission;
+
+layout(push_constant) uniform Settings {
+    float strength;
+    float historyFrames;
+    float reset;
+    float unused;
+} settings;
+
+struct TemporalSample {
+    vec3 color;
+    float confidence;
+};
+
+ivec2 imageExtent() {
+    return imageSize(noisyDiffuse);
+}
+
+bool inside(ivec2 pixel) {
+    ivec2 size = imageExtent();
+    return all(greaterThanEqual(pixel, ivec2(0))) && all(lessThan(pixel, size));
+}
+
+vec3 decodeYCoCg(vec3 encoded) {
+    float t = encoded.x - encoded.z;
+    return max(vec3(t + encoded.y, encoded.x + encoded.z, t - encoded.y), vec3(0.0));
+}
+
+vec3 decodeNormal(vec3 encoded) {
+    // RayGen packs octNormal as x=(ox+oy)/2+0.5 and y=(oy-ox)/2+0.5.
+    vec2 oct = vec2(encoded.x - encoded.y, encoded.x + encoded.y - 1.0);
+    vec3 normal = vec3(oct, 1.0 - abs(oct.x) - abs(oct.y));
+    if (normal.z < 0.0) {
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    }
+    return normalize(normal);
+}
+
+vec3 encodeNormal(vec3 normal) {
+    normal = normalize(normal);
+    vec3 oct = normal / max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-6);
+    return vec3(
+        oct.x * 0.5 + oct.y * 0.5 + 0.5,
+        oct.y * 0.5 - oct.x * 0.5 + 0.5,
+        0.0);
+}
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 rawColor(ivec2 pixel) {
+    return decodeYCoCg(imageLoad(noisyDiffuse, pixel).rgb)
+        + decodeYCoCg(imageLoad(noisySpecular, pixel).rgb);
+}
+
+vec3 directColor(ivec2 pixel) {
+    return max(imageLoad(directDiffuse, pixel).rgb, vec3(0.0));
+}
+
+vec3 emissionColor(ivec2 pixel) {
+    return max(imageLoad(emission, pixel).rgb, vec3(0.0));
+}
+
+vec3 currentNormal(ivec2 pixel) {
+    return decodeNormal(imageLoad(normalRoughness, pixel).rgb);
+}
+
+float currentRoughness(ivec2 pixel) {
+    return abs(imageLoad(normalRoughness, pixel).b * 2.0 - 1.0);
+}
+
+float currentDepth(ivec2 pixel) {
+    return imageLoad(viewZ, pixel).r;
+}
+
+float signalHitDistance(ivec2 pixel) {
+    vec4 diffuse = imageLoad(noisyDiffuse, pixel);
+    vec4 specular = imageLoad(noisySpecular, pixel);
+    float distanceSum = 0.0;
+    float activeSignals = 0.0;
+    if (diffuse.a >= 0.0) {
+        distanceSum += diffuse.a;
+        activeSignals += 1.0;
+    }
+    if (specular.a >= 0.0) {
+        distanceSum += specular.a;
+        activeSignals += 1.0;
+    }
+    return activeSignals > 0.0 ? distanceSum / activeSignals : -1.0;
+}
+
+float hitDistanceWeight(float distanceA, float distanceB) {
+    bool activeA = distanceA >= 0.0;
+    bool activeB = distanceB >= 0.0;
+    if (!activeA && !activeB) {
+        return 1.0;
+    }
+    if (activeA != activeB) {
+        return 0.65;
+    }
+    float scale = max(0.1, 0.25 * max(distanceA, distanceB));
+    return 0.5 + 0.5 * exp(-abs(distanceA - distanceB) / scale);
+}
+
+bool compatibleGeometry(vec3 normalA, float depthA, vec3 normalB, float depthB) {
+    float normalSimilarity = dot(normalA, normalB);
+    bool skyA = depthA > 60000.0;
+    bool skyB = depthB > 60000.0;
+    // A fixed relative threshold is too permissive at Minecraft view distances and lets
+    // history leak across block silhouettes. Keep a small floor for nearby surfaces while
+    // allowing the projected footprint of a far surface to move by a fraction of a block.
+    float depthThreshold = max(0.05, 0.006 * min(depthA, depthB));
+    bool depthCompatible = (skyA && skyB)
+        || (!skyA && !skyB && abs(depthA - depthB) < depthThreshold);
+    return depthCompatible && normalSimilarity > 0.90;
+}
+
+vec3 clipHistoryLuminance(vec3 history, vec2 localMoments) {
+    float localMean = max(localMoments.x, 0.0);
+    float localVariance = max(localMoments.y, 0.0);
+    float clipRadius = max(0.05, 2.5 * sqrt(localVariance) + 0.05 * localMean);
+    float upperLuminance = localMean + clipRadius;
+    float historyLuminance = luminance(history);
+    if (historyLuminance > upperLuminance && historyLuminance > 1.0e-5) {
+        history *= upperLuminance / historyLuminance;
+    }
+    return max(history, vec3(0.0));
+}
+
+TemporalSample temporalAt(ivec2 pixel, vec2 localMoments) {
+    TemporalSample result;
+    result.color = rawColor(pixel);
+    result.confidence = 1.0 / max(settings.historyFrames, 1.0);
+
+    if (settings.reset > 0.5) {
+        return result;
+    }
+
+    ivec2 size = imageExtent();
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 previousUv = uv + imageLoad(motion, pixel).xy;
+    if (any(lessThan(previousUv, vec2(0.0))) || any(greaterThanEqual(previousUv, vec2(1.0)))) {
+        return result;
+    }
+
+    // Four-tap bilinear history sampling follows iterationRP's temporal pass. Each tap is
+    // validated independently so a disocclusion cannot be reintroduced by a neighboring tap.
+    vec2 previousTexel = previousUv * vec2(size) - 0.5;
+    ivec2 basePixel = ivec2(floor(previousTexel));
+    vec2 fractional = fract(previousTexel);
+    vec3 normal = currentNormal(pixel);
+    float depth = currentDepth(pixel);
+    vec3 history = vec3(0.0);
+    float historyWeightSum = 0.0;
+    float previousFrames = 0.0;
+    for (int tap = 0; tap < 4; tap++) {
+        ivec2 offset = ivec2(tap & 1, tap >> 1);
+        ivec2 previousPixel = basePixel + offset;
+        if (!inside(previousPixel)) {
+            continue;
+        }
+        vec2 tapWeight = mix(vec2(1.0) - fractional, fractional, vec2(offset));
+        float weight = tapWeight.x * tapWeight.y;
+        vec4 previousColor = imageLoad(historyColor, previousPixel);
+        vec4 previousMeta = imageLoad(historyMeta, previousPixel);
+        vec3 previousNormal = decodeNormal(previousMeta.rgb);
+        if (weight <= 0.0 || !compatibleGeometry(normal, depth, previousNormal, previousMeta.a)) {
+            continue;
+        }
+        history += max(previousColor.rgb, vec3(0.0)) * weight;
+        previousFrames += clamp(previousColor.a * settings.historyFrames, 0.0, settings.historyFrames)
+            * weight;
+        historyWeightSum += weight;
+    }
+    if (historyWeightSum <= 1.0e-4) {
+        return result;
+    }
+
+    history /= historyWeightSum;
+    previousFrames /= historyWeightSum;
+    history = clipHistoryLuminance(history, localMoments);
+    float frameCount = min(previousFrames + 1.0, settings.historyFrames);
+    // Do not let a long stationary history become effectively immutable. This keeps the
+    // temporal pass responsive to small lighting changes while still accumulating most of
+    // the available samples.
+    float historyWeight = min(previousFrames / max(frameCount, 1.0), 0.92);
+    result.color = mix(result.color, history, historyWeight);
+    result.confidence = frameCount / max(settings.historyFrames, 1.0);
+    return result;
+}
+
+vec2 localLumaMoments(ivec2 pixel) {
+    vec2 moments = vec2(0.0);
+    float sampleCount = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            ivec2 samplePixel = pixel + ivec2(x, y) * 2;
+            if (!inside(samplePixel)) {
+                continue;
+            }
+            float sampleLuma = luminance(rawColor(samplePixel));
+            moments += vec2(sampleLuma, sampleLuma * sampleLuma);
+            sampleCount += 1.0;
+        }
+    }
+    if (sampleCount <= 0.0) {
+        return vec2(0.0);
+    }
+    moments /= sampleCount;
+    return vec2(moments.x, max(moments.y - moments.x * moments.x, 0.0));
+}
+
+float spatialWeight(
+        vec3 centerColor, vec3 sampleColor,
+        vec3 centerNormal, vec3 sampleNormal,
+        float centerDepth, float sampleDepth,
+        float centerRoughness, float sampleRoughness,
+        float centerHitDistance, float sampleHitDistance,
+        float centerVariance) {
+    float normalWeight = pow(max(dot(centerNormal, sampleNormal), 0.0), 48.0);
+    float depthScale = max(0.05, 0.012 * min(centerDepth, sampleDepth));
+    float depthWeight = exp(-abs(centerDepth - sampleDepth) / depthScale);
+    float lumaSigma = max(0.02, sqrt(centerVariance) + 0.04 * max(luminance(centerColor), 0.1));
+    float luminanceWeight = exp(-abs(luminance(sampleColor) - luminance(centerColor)) / lumaSigma);
+    vec3 colorScale = max(abs(centerColor), vec3(0.25));
+    vec3 relativeDifference = (sampleColor - centerColor) / colorScale;
+    float colorWeight = exp(-0.05 * dot(relativeDifference, relativeDifference));
+    float roughnessWeight = 0.75 + 0.25 * exp(-abs(centerRoughness - sampleRoughness) * 8.0);
+    float hitDistanceFactor = hitDistanceWeight(centerHitDistance, sampleHitDistance);
+    return normalWeight * depthWeight * luminanceWeight * colorWeight
+        * roughnessWeight * hitDistanceFactor;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (!inside(pixel)) {
+        return;
+    }
+
+    // RayGen writes the environment directly to outputColor, while the split Sundial AOVs
+    // intentionally contain no surface signal for a primary miss. Do not reconstruct the sky
+    // from those empty AOVs: that would replace the valid skybox with black (and could also seed
+    // a surface history that leaks across a later geometry disocclusion).
+    vec4 currentOutput = imageLoad(outputColor, pixel);
+    if (currentDepth(pixel) > 60000.0) {
+        imageStore(outputColor, pixel, currentOutput);
+        imageStore(nextHistoryColor, pixel, vec4(0.0));
+        imageStore(nextHistoryMeta, pixel, vec4(encodeNormal(currentNormal(pixel)), currentDepth(pixel)));
+        return;
+    }
+
+    vec3 centerColor = rawColor(pixel);
+    vec3 deterministicDirect = directColor(pixel);
+    vec3 deterministicEmission = emissionColor(pixel);
+    vec3 centerNormal = currentNormal(pixel);
+    float centerDepth = currentDepth(pixel);
+    float centerRoughness = currentRoughness(pixel);
+    float centerHitDistance = signalHitDistance(pixel);
+    vec2 centerMoments = localLumaMoments(pixel);
+    float centerVariance = centerMoments.y;
+    TemporalSample centerTemporal = temporalAt(pixel, centerMoments);
+    vec3 accumulation = vec3(0.0);
+    float weightAccumulation = 0.0;
+
+    // A 3x3 cross-compatible spatial pass follows the reprojection. It keeps the filter
+    // tight at normal/depth/material boundaries instead of applying a Gaussian blur globally.
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            ivec2 samplePixel = pixel + ivec2(x, y);
+            if (!inside(samplePixel)) {
+                continue;
+            }
+            TemporalSample temporal = (x == 0 && y == 0)
+                ? centerTemporal
+                : temporalAt(samplePixel, centerMoments);
+            vec3 sampleNormal = currentNormal(samplePixel);
+            float sampleDepth = currentDepth(samplePixel);
+            float sampleRoughness = currentRoughness(samplePixel);
+            float sampleHitDistance = signalHitDistance(samplePixel);
+            float weight = spatialWeight(
+                    centerColor, temporal.color, centerNormal, sampleNormal,
+                    centerDepth, sampleDepth, centerRoughness, sampleRoughness,
+                    centerHitDistance, sampleHitDistance, centerVariance);
+            if (x == 0 && y == 0) {
+                weight = 1.0;
+            }
+            accumulation += temporal.color * weight;
+            weightAccumulation += weight;
+        }
+    }
+
+    vec3 filteredColor = accumulation / max(weightAccumulation, 1.0e-5);
+    float strength = clamp(settings.strength, 0.0, 1.0);
+    // Only indirect/specular energy is temporally/spatially filtered. The direct/emission
+    // terms have their own explicit contract and are composed after the filter.
+    vec3 outputRadiance = deterministicDirect + deterministicEmission
+        + mix(centerColor, filteredColor, strength);
+    float historyConfidence = max(centerTemporal.confidence, 1.0 / max(settings.historyFrames, 1.0));
+
+    imageStore(outputColor, pixel, vec4(outputRadiance, 1.0));
+    imageStore(nextHistoryColor, pixel, vec4(filteredColor, historyConfidence));
+    // Store the same octahedral encoding used by RayGen. The previous implementation wrote
+    // decoded XYZ normals and decoded them again on the next frame, corrupting history tests.
+    imageStore(nextHistoryMeta, pixel, vec4(encodeNormal(centerNormal), centerDepth));
+}

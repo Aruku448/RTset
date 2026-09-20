@@ -1,0 +1,34 @@
+#version 460
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D primeFsrLinearOutput;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D primeDisplayOutput;
+
+layout(push_constant) uniform PrimeFsrDisplayPushConstants {
+    uvec2 outputExtent;
+    uint colorManagementMode;
+} primeFsrDisplayPush;
+
+vec3 rec2020ToBt709(vec3 color) {
+    return vec3(
+        dot(vec3(1.6604910, -0.5876411, -0.0728499), color),
+        dot(vec3(-0.1245505, 1.1328999, -0.0083494), color),
+        dot(vec3(-0.0181508, -0.1005789, 1.1187297), color));
+}
+
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pixel, primeFsrDisplayPush.outputExtent))) {
+        return;
+    }
+
+    // The FSR output is linear Rec.2020 HDR. Extended-sRGB-linear swapchains expect
+    // linear BT.709 values and perform the HDR presentation transform in the compositor.
+    vec3 radiance = texelFetch(primeFsrLinearOutput, ivec2(pixel), 0).rgb;
+    if (any(isnan(radiance)) || any(isinf(radiance))) {
+        radiance = vec3(0.0);
+    }
+    imageStore(primeDisplayOutput, ivec2(pixel), vec4(max(rec2020ToBt709(radiance), vec3(0.0)), 1.0));
+}

@@ -1,0 +1,289 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'idea'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+version = mod_version
+group = mod_group_id
+
+def defaultGameDirectory = new File(
+    new File(System.getProperty('user.home'), '.minecraft'),
+    'versions/RTest')
+
+repositories {
+    mavenCentral()
+}
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+neoForge {
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+            gameDirectory = project.file(project.findProperty('game_directory') ?: defaultGameDirectory)
+            if (project.findProperty('graphics_backend')) {
+                programArguments.addAll '--graphicsBackend', project.findProperty('graphics_backend')
+            }
+            if (project.hasProperty('vulkan_validation')) {
+                programArguments.add '--vulkanValidation'
+            }
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            gameDirectory = project.file(project.findProperty('game_directory') ?: defaultGameDirectory)
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        gameTestServer {
+            type = 'gameTestServer'
+            gameDirectory = project.file(project.findProperty('game_directory') ?: defaultGameDirectory)
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        clientData {
+            clientData()
+            programArguments.addAll '--mod', project.mod_id,
+                    '--all',
+                    '--output', file('src/generated/resources/').getAbsolutePath(),
+                    '--existing', file('src/main/resources/').getAbsolutePath()
+        }
+
+        configureEach {
+            logLevel = org.slf4j.event.Level.INFO
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+tasks.named('processResources') {
+    from('third_party') {
+        include 'PRIME-LICENSE.txt', 'PRIME-LICENSE-EXCEPTIONS.txt'
+        into 'META-INF/licenses/rtest'
+    }
+}
+// Model capture tests execute the same Minecraft classes used by the client.
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var replaceProperties = [minecraft_version      : minecraft_version,
+                             minecraft_version_range: minecraft_version_range,
+                             neo_version            : neo_version,
+                             neo_version_range      : neo_version_range,
+                             loader_version_range   : loader_version_range,
+                             mod_id                 : mod_id,
+                             mod_name               : mod_name,
+                             mod_license            : mod_license,
+                             mod_version            : mod_version,
+                             mod_authors            : mod_authors,
+                             mod_description        : mod_description]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into 'build/generated/sources/modMetadata'
+}
+
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+// Contract tests in this prototype are dependency-free Java entry points. Keep them
+// executable by Gradle instead of silently treating their source files as no tests.
+def fluidContractTest = tasks.register('fluidContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.FluidGeometryCaptureTest'
+}
+def dynamicContractTest = tasks.register('dynamicContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicInstanceRegistryTest'
+}
+def nativeEffectsContractTest = tasks.register('nativeEffectsContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.NativeEffectsCompositionTest'
+}
+def hdrPolicyContractTest = tasks.register('hdrPolicyContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.HdrFrameGraphPolicyTest'
+}
+def dynamicVulkanSliceContractTest = tasks.register('dynamicVulkanSliceContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicVulkanResourceSliceTest'
+}
+def dynamicPlaceholderContractTest = tasks.register('dynamicPlaceholderContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicPlaceholderGeometryTest'
+}
+def dynamicTlasInstanceContractTest = tasks.register('dynamicTlasInstanceContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicTlasInstanceWriterTest'
+}
+def playerAnimationContractTest = tasks.register('playerAnimationContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.PlayerAnimationContractTest'
+}
+def playerBlasCommandTest = tasks.register('playerBlasCommandTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.PlayerBlasCommandTest'
+}
+def blockEntityModelContractTest = tasks.register('blockEntityModelContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.BlockEntityModelGeometryContractTest'
+}
+def blockEntityRasterFallbackContractTest = tasks.register('blockEntityRasterFallbackContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.BlockEntityRasterFallbackContractTest'
+}
+def entityRasterFallbackContractTest = tasks.register('entityRasterFallbackContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.EntityRasterFallbackContractTest'
+}
+def itemModelGeometryAdapterTest = tasks.register('itemModelGeometryAdapterTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.ItemModelGeometryAdapterTest'
+}
+def rayTracingShaderContractTest = tasks.register('rayTracingShaderContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingShaderContractTest'
+}
+def nativeColorManagementTest = tasks.register('nativeColorManagementTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.NativeColorManagementTest'
+}
+def rayTracingPbrMaterialsTest = tasks.register('rayTracingPbrMaterialsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingPbrMaterialsTest'
+}
+def nrdNativeContractTest = tasks.register('nrdNativeContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.NrdNativeContractTest'
+}
+def nrdNativePlatformTest = tasks.register('nrdNativePlatformTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.fsr.NrdNativePlatformTest'
+}
+def nrdCompositeContractTest = tasks.register('nrdCompositeContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.NrdCompositeShaderContractTest'
+}
+def nrdMotionContractTest = tasks.register('nrdMotionContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.NrdMotionShaderContractTest'
+}
+def sceneWindowDeltaTest = tasks.register('sceneWindowDeltaTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SceneWindowDeltaTest'
+}
+def sceneGeometryMergeContractTest = tasks.register('sceneGeometryMergeContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SceneGeometryMergeContractTest'
+}
+def vulkanResourceLifecycleTest = tasks.register('vulkanResourceLifecycleTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.VulkanResourceLifecycleTest'
+}
+def rayTracingVisibilityPolicyTest = tasks.register('rayTracingVisibilityPolicyTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingVisibilityPolicyTest'
+}
+def rayTracingFrameTimingContractTest = tasks.register('rayTracingFrameTimingContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingFrameTimingContractTest'
+}
+def vanillaRenderControllerTest = tasks.register('vanillaRenderControllerTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.VanillaRenderControllerTest'
+}
+def sundialDenoiserContractTest = tasks.register('sundialDenoiserContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SundialDenoiserContractTest'
+}
+def lightTreeProbeDiag = tasks.register('lightTreeProbeDiag', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.LightTreeProbeDiag'
+}
+def compiledSectionMeshCacheTest = tasks.register('compiledSectionMeshCacheTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.CompiledSectionMeshCacheTest'
+}
+def rayTracingLightTreeTest = tasks.register('rayTracingLightTreeTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingLightTreeTest'
+}
+def primeOfflineColorContractTest = tasks.register('primeOfflineColorContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.PrimeOfflineColorContractTest'
+}
+def rtActivationContractTest = tasks.register('rtActivationContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RtActivationContractTest'
+}
+def particleRtGeometryContractTest = tasks.register('particleRtGeometryContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.ParticleRtGeometryContractTest'
+}
+tasks.named('test') {
+    dependsOn compiledSectionMeshCacheTest, rayTracingLightTreeTest, primeOfflineColorContractTest,
+        rtActivationContractTest, particleRtGeometryContractTest
+    dependsOn playerAnimationContractTest, playerBlasCommandTest, blockEntityModelContractTest,
+        blockEntityRasterFallbackContractTest, entityRasterFallbackContractTest,
+        itemModelGeometryAdapterTest, rayTracingShaderContractTest,
+        nativeColorManagementTest, rayTracingPbrMaterialsTest, nrdNativeContractTest, nrdNativePlatformTest, nrdCompositeContractTest, nrdMotionContractTest, sceneWindowDeltaTest,
+        sceneGeometryMergeContractTest, vulkanResourceLifecycleTest, rayTracingVisibilityPolicyTest,
+        rayTracingFrameTimingContractTest, vanillaRenderControllerTest, sundialDenoiserContractTest
+    failOnNoDiscoveredTests = false
+    dependsOn fluidContractTest, dynamicContractTest, nativeEffectsContractTest, hdrPolicyContractTest, dynamicVulkanSliceContractTest, dynamicPlaceholderContractTest, dynamicTlasInstanceContractTest
+}
+
+tasks.named('runClient') {
+    doFirst {
+        if (project.findProperty('graphics_backend')?.toString()?.equalsIgnoreCase('vulkan')) {
+            def gameDir = file(project.findProperty('game_directory') ?: defaultGameDirectory)
+            def fmlConfig = new File(gameDir, 'config/fml.toml')
+            fmlConfig.parentFile.mkdirs()
+            def content = fmlConfig.exists() ? fmlConfig.getText('UTF-8') : ''
+            if (content =~ /(?m)^earlyWindowControl\s*=/) {
+                content = content.replaceFirst('(?m)^earlyWindowControl\s*=.*$', 'earlyWindowControl = false')
+            } else {
+                content += '\nearlyWindowControl = false\n'
+            }
+            fmlConfig.setText(content, 'UTF-8')
+        }
+    }
+}
+
+tasks.register('installToInstance', Copy) {
+    group = 'rtest'
+    description = 'Copies the built mod JAR into the selected Minecraft instance mods directory.'
+    dependsOn tasks.named('jar')
+    from tasks.named('jar')
+    into file(project.findProperty('instance_directory') ?: new File(defaultGameDirectory, 'mods'))
+}
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            name = 'staging'
+            url = layout.buildDirectory.dir('repo')
+        }
+    }
+}
