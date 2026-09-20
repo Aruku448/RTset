@@ -70,6 +70,18 @@ The NRD denoiser also needs the Windows x64 bridge at
 `src/main/resources/rtest/natives/windows-x86_64/prime_nrd.dll`. Build it with the instructions
 in `native/nrd/README.md`; the Linux `.so` cannot be renamed or used on Windows.
 
+For a new Windows instance, the helper script writes `earlyWindowControl = false` and installs
+RTest automatically:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\setup-windows-instance.ps1 `
+  -GameDirectory "C:\path\to\new\instance"
+```
+
+The script does not edit launcher-owned arguments; keep `--graphicsBackend vulkan` in the PCL
+launch arguments. Use `-SkipBuild` when only the instance configuration needs to be repaired.
+
 The Gradle fallback defaults are derived from `user.home` and are portable across Linux and
 Windows; explicit `game_directory`/`instance_directory` values always take precedence.
 
