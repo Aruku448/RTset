@@ -10,12 +10,13 @@ public final class SceneGeometryMergeContractTest {
     }
 
     public static void main(String[] args) throws IOException {
+        // Normalize CRLF so multi-line source contracts run identically on Windows and Linux.
         String source = Files.readString(Path.of(
-                "src/main/java/com/rtest/client/RayTracingScene.java"));
+                "src/main/java/com/rtest/client/RayTracingScene.java")).replace("\r\n", "\n");
         String compiledSource = Files.readString(Path.of(
-                "src/main/java/com/rtest/client/CompiledSectionMeshCache.java"));
+                "src/main/java/com/rtest/client/CompiledSectionMeshCache.java")).replace("\r\n", "\n");
         String probeSource = Files.readString(Path.of(
-                "src/main/java/com/rtest/client/RayTracingProbe.java"));
+                "src/main/java/com/rtest/client/RayTracingProbe.java")).replace("\r\n", "\n");
         assertEmissionCalibration();
         require(source, "containsEmitter = containsEmissiveBlock(this.level, origin);");
         require(source, "section.maybeHas(state -> state.getLightEmission() > 0)");

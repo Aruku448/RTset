@@ -8,10 +8,11 @@ public final class RtActivationContractTest {
     public static void main(String[] args) throws Exception {
         verifyActivationFreezePolicy();
 
+        // Normalize Windows CRLF so multi-line source contracts are platform independent.
         String probe = Files.readString(Path.of(
-            "src/main/java/com/rtest/client/RayTracingProbe.java"));
+            "src/main/java/com/rtest/client/RayTracingProbe.java")).replace("\r\n", "\n");
         String settings = Files.readString(Path.of(
-            "src/main/java/com/rtest/client/RayTracingSettingsScreen.java"));
+            "src/main/java/com/rtest/client/RayTracingSettingsScreen.java")).replace("\r\n", "\n");
 
         require(probe, "RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.set(true)");
 

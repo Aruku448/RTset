@@ -48,19 +48,29 @@ After building, install the mod into that instance with:
   -Pinstance_directory=/home/aruku/.minecraft/versions/RTest/mods
 ```
 
-On Windows PowerShell, use the bundled wrapper and override the instance directory when the
-launcher keeps the instance elsewhere:
+On Windows PowerShell, use the bundled wrapper. This checkout automatically uses
+`C:\Program Files (x86)\mc\DS2\.minecraft` when that directory exists; explicit properties
+always take precedence:
 
 ```powershell
-.\gradlew.bat runClient `
-  -Pgame_directory="$env:APPDATA\.minecraft\versions\RTest" `
-  -Pgraphics_backend=vulkan
-
 .\gradlew.bat installToInstance `
-  -Pinstance_directory="$env:APPDATA\.minecraft\versions\RTest\mods"
+  -Pgame_directory="C:\Program Files (x86)\mc\DS2\.minecraft" `
+  -Pinstance_directory="C:\Program Files (x86)\mc\DS2\.minecraft\mods"
+
+.\gradlew.bat runClient `
+  -Pgame_directory="C:\Program Files (x86)\mc\DS2\.minecraft" `
+  -Pgraphics_backend=vulkan
 ```
 
-The Gradle defaults are derived from `user.home` and are therefore portable across Linux and
+`installToInstance` and `runClient` update `config/fml.toml` with
+`earlyWindowControl = false`. Vulkan must create the GLFW window with `GLFW_NO_API`; leaving
+NeoForge's early OpenGL window enabled causes `GLFW error 65540` on Windows.
+
+The NRD denoiser also needs the Windows x64 bridge at
+`src/main/resources/rtest/natives/windows-x86_64/prime_nrd.dll`. Build it with the instructions
+in `native/nrd/README.md`; the Linux `.so` cannot be renamed or used on Windows.
+
+The Gradle fallback defaults are derived from `user.home` and are portable across Linux and
 Windows; explicit `game_directory`/`instance_directory` values always take precedence.
 
 Current progress:

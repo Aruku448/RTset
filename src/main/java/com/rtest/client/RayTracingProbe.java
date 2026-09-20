@@ -232,9 +232,25 @@ public final class RayTracingProbe {
             vanillaWorldReplacementRequested = false;
             return false;
         }
-        // Once a complete RT image exists, the whole level render is replaced. Entity and
-        // block-entity geometry is admitted to the dynamic TLAS; there is deliberately no
-        // native object replay or per-object raster escape hatch after this decision.
+        // There is no per-object raster replay after the whole LevelRenderer is cancelled.
+        // Never hide vanilla entities that failed dynamic admission: on Windows this is an
+        // especially important safety path because a driver/backend-specific model submission
+        // can fail without invalidating the rest of the RT scene.
+        if (lastEntityFrame == null || lastEntityFrame.admissionFailures() != 0) {
+            vanillaWorldReplacementRequested = false;
+            return false;
+        }
+        // Keep vanilla visible while a section/window update is in flight. The previous RT
+        // image is safe to reuse only until the scene generation changes; cancelling vanilla
+        // during the replacement window can expose an incomplete TLAS/FSR image as a missing
+        // chunk, which is particularly easy to reproduce on the Windows Vulkan path.
+        if (sceneDirty || fullCaptureRequested || pendingFullGeometryBuild != null
+                || pendingGeometryMerge != null || !pendingDirtySections.isEmpty()) {
+            vanillaWorldReplacementRequested = false;
+            return false;
+        }
+        // Once a complete RT image exists, the whole level render is replaced only when every
+        // visible dynamic object has a valid RT representation.
         vanillaWorldReplacementRequested = VanillaRenderController.INSTANCE
             .shouldCancelLevelRenderer(isRtFrameReady());
         return vanillaWorldReplacementRequested;

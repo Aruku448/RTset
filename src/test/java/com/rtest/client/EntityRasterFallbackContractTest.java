@@ -84,7 +84,9 @@ public final class EntityRasterFallbackContractTest {
     }
 
     private static String source(String path) throws Exception {
-        return Files.readString(Path.of(path));
+        // Git/Gradle may preserve CRLF on Windows; contract fragments use LF so normalize
+        // before checking multi-line source invariants.
+        return Files.readString(Path.of(path)).replace("\r\n", "\n");
     }
 
     private static void require(String source, String fragment) {

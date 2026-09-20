@@ -8,9 +8,27 @@ plugins {
 version = mod_version
 group = mod_group_id
 
-def defaultGameDirectory = new File(
+def portableGameDirectory = new File(
     new File(System.getProperty('user.home'), '.minecraft'),
     'versions/RTest')
+def configuredWindowsInstance = file('C:/Program Files (x86)/mc/DS2/.minecraft')
+// Prefer the instance used by the local Windows launcher when it is present. All paths remain
+// overridable with -Pgame_directory/-Pinstance_directory for other launchers and installations.
+def defaultGameDirectory = configuredWindowsInstance.isDirectory()
+        ? configuredWindowsInstance
+        : portableGameDirectory
+
+def configureVulkanEarlyWindow = { File gameDir ->
+    def fmlConfig = new File(gameDir, 'config/fml.toml')
+    fmlConfig.parentFile.mkdirs()
+    def content = fmlConfig.exists() ? fmlConfig.getText('UTF-8') : ''
+    if (content.readLines().any { it.trim().startsWith('earlyWindowControl') }) {
+        content = content.replaceAll('(?m)^earlyWindowControl *=.*$', 'earlyWindowControl = false')
+    } else {
+        content += System.lineSeparator() + 'earlyWindowControl = false' + System.lineSeparator()
+    }
+    fmlConfig.setText(content, 'UTF-8')
+}
 
 repositories {
     mavenCentral()
@@ -253,23 +271,25 @@ tasks.named('runClient') {
     doFirst {
         if (project.findProperty('graphics_backend')?.toString()?.equalsIgnoreCase('vulkan')) {
             def gameDir = file(project.findProperty('game_directory') ?: defaultGameDirectory)
-            def fmlConfig = new File(gameDir, 'config/fml.toml')
-            fmlConfig.parentFile.mkdirs()
-            def content = fmlConfig.exists() ? fmlConfig.getText('UTF-8') : ''
-            if (content =~ /(?m)^earlyWindowControl\s*=/) {
-                content = content.replaceFirst('(?m)^earlyWindowControl\s*=.*$', 'earlyWindowControl = false')
-            } else {
-                content += '\nearlyWindowControl = false\n'
-            }
-            fmlConfig.setText(content, 'UTF-8')
+            configureVulkanEarlyWindow(gameDir)
         }
+    }
+}
+
+tasks.register('prepareVulkanInstance') {
+    group = 'rtest'
+    description = 'Disables NeoForge early OpenGL window creation for a Vulkan instance.'
+    doLast {
+        def gameDir = file(project.findProperty('game_directory') ?: defaultGameDirectory)
+        configureVulkanEarlyWindow(gameDir)
+        logger.lifecycle("Configured Vulkan window startup in ${new File(gameDir, 'config/fml.toml')}")
     }
 }
 
 tasks.register('installToInstance', Copy) {
     group = 'rtest'
     description = 'Copies the built mod JAR into the selected Minecraft instance mods directory.'
-    dependsOn tasks.named('jar')
+    dependsOn tasks.named('jar'), tasks.named('prepareVulkanInstance')
     from tasks.named('jar')
     into file(project.findProperty('instance_directory') ?: new File(defaultGameDirectory, 'mods'))
 }
