@@ -131,7 +131,15 @@ public final class PlayerModelGeometryAdapter {
                                    int light, int overlay, int color, float offsetX, float offsetY, float offsetZ,
                                    TextureAtlasSprite sprite, RayTracingPbrSampler pbrSampler,
                                    float pipelineEmission) {
-        Capture capture = new Capture(buffer, offsetX, offsetY, offsetZ, sprite, pbrSampler,
+        return captureDraw(model, pose, buffer, light, overlay, color, offsetX, offsetY, offsetZ,
+            sprite, null, pbrSampler, pipelineEmission);
+    }
+
+    public static Mesh captureDraw(Model<?> model, PoseStack pose, VertexConsumer buffer,
+                                   int light, int overlay, int color, float offsetX, float offsetY, float offsetZ,
+                                   TextureAtlasSprite sprite, Identifier texture, RayTracingPbrSampler pbrSampler,
+                                   float pipelineEmission) {
+        Capture capture = new Capture(buffer, offsetX, offsetY, offsetZ, sprite, texture, pbrSampler,
             pipelineEmission);
         model.renderToBuffer(pose, capture, light, overlay, color);
         return capture.finish();
@@ -142,6 +150,7 @@ public final class PlayerModelGeometryAdapter {
         private final VertexConsumer delegate;
         private final float offsetX, offsetY, offsetZ;
         private final TextureAtlasSprite sprite;
+        private final Identifier texture;
         private final RayTracingPbrSampler pbrSampler;
         private final float pipelineEmission;
         private final FloatArrayBuilder vertices = new FloatArrayBuilder();
@@ -168,11 +177,18 @@ public final class PlayerModelGeometryAdapter {
         public Capture(VertexConsumer delegate, float offsetX, float offsetY, float offsetZ,
                        TextureAtlasSprite sprite, RayTracingPbrSampler pbrSampler,
                        float pipelineEmission) {
+            this(delegate, offsetX, offsetY, offsetZ, sprite, null, pbrSampler, pipelineEmission);
+        }
+
+        public Capture(VertexConsumer delegate, float offsetX, float offsetY, float offsetZ,
+                       TextureAtlasSprite sprite, Identifier texture, RayTracingPbrSampler pbrSampler,
+                       float pipelineEmission) {
             this.delegate = delegate;
             this.offsetX = offsetX;
             this.offsetY = offsetY;
             this.offsetZ = offsetZ;
             this.sprite = sprite;
+            this.texture = texture;
             this.pbrSampler = pbrSampler;
             this.pipelineEmission = Math.max(pipelineEmission, 0.0F);
         }
@@ -242,11 +258,13 @@ public final class PlayerModelGeometryAdapter {
             float metallic = 0.0F;
             float emission = this.pipelineEmission;
             float reflectivity = 0.04F;
-            if (this.pbrSampler != null && this.sprite != null) {
-                RayTracingPbrMaterials.Sample pbr = this.pbrSampler.sample(this.sprite,
-                    UVPair.pack(quad[a][3], quad[a][4]),
-                    UVPair.pack(quad[b][3], quad[b][4]),
-                    UVPair.pack(quad[c][3], quad[c][4]));
+            if (this.pbrSampler != null && (this.sprite != null || this.texture != null)) {
+                long uv0 = UVPair.pack(quad[a][3], quad[a][4]);
+                long uv1 = UVPair.pack(quad[b][3], quad[b][4]);
+                long uv2 = UVPair.pack(quad[c][3], quad[c][4]);
+                RayTracingPbrMaterials.Sample pbr = this.sprite != null
+                    ? this.pbrSampler.sample(this.sprite, uv0, uv1, uv2)
+                    : this.pbrSampler.sample(this.texture, uv0, uv1, uv2);
                 pbrMapIndex = pbr.mapIndex();
                 if (pbr.hasSpecular()) {
                     roughness = pbr.roughness();

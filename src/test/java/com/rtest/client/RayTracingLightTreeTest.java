@@ -35,6 +35,24 @@ public final class RayTracingLightTreeTest {
         // area=0.5, pi flux factor, emission=2, white importance=1.
         assertClose((float)Math.PI, Float.intBitsToFloat(words[emitter + 11]), "white emitter power");
 
+        // A compact half-area emitter uses the same reference area as this triangle. The
+        // packed fallback emission is therefore stable across the light-tree normalization.
+        assertClose(2.0F, Float.intBitsToFloat(words[emitter + 7]), "reference emitter radiance");
+
+        // A smaller emissive face receives the inverse area radiance boost while preserving the
+        // same source power as a full block-face triangle.
+        float[] smallVertices = {0.0F, 1.0F, 0.0F, 0.5F, 1.0F, 0.0F, 0.5F, 1.0F, 0.5F};
+        float[] smallMaterials = material(1.0F, 1.0F, 1.0F, 2.0F);
+        RayTracingScene.SceneGeometry.SectionGeometry smallSection =
+            constructor.newInstance(0, 0, 0, smallVertices, smallMaterials);
+        RayTracingLightTree.Data smallData = RayTracingLightTree.build(
+            List.of(smallSection), smallMaterials, 0.0, 0.0, 0.0);
+        int smallEmitter = smallData.words()[4];
+        assertClose(8.0F, Float.intBitsToFloat(smallData.words()[smallEmitter + 7]),
+            "compact emitter radiance");
+        assertClose((float)Math.PI, Float.intBitsToFloat(smallData.words()[smallEmitter + 11]),
+            "compact emitter power");
+
         // A colored tint participates in the selection PDF because GPU evaluateEmitter multiplies
         // the same tint into the sampled radiance. This changes variance only, not source energy.
         float[] redTintMaterials = material(0.5F, 0.0F, 0.0F, 2.0F);

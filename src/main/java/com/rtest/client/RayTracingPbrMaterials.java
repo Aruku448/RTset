@@ -18,6 +18,11 @@ import com.mojang.logging.LogUtils;
 @FunctionalInterface
 interface RayTracingPbrSampler {
     RayTracingPbrMaterials.Sample sample(TextureAtlasSprite sprite, long packedUv0, long packedUv1, long packedUv2);
+
+    default RayTracingPbrMaterials.Sample sample(Identifier texture, long packedUv0,
+                                                  long packedUv1, long packedUv2) {
+        return RayTracingPbrMaterials.defaultSample();
+    }
 }
 
 /** Loads optional LabPBR companion textures and publishes stable GPU slots for them. */
@@ -97,6 +102,24 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
             sample.normalX(), sample.normalY(), sample.normalZ(), sample.hasNormal(),
             sample.hasSpecular(), emission, true, sample.porosity(), sample.textureAo(),
             sample.mapIndex());
+    }
+
+    @Override
+    public synchronized Sample sample(Identifier texture, long packedUv0, long packedUv1, long packedUv2) {
+        if (this.closed || texture == null) {
+            return DEFAULT;
+        }
+        Identifier base = normalizeTextureIdentifier(texture);
+        PbrMap map = cache.computeIfAbsent(base,
+            id -> Optional.ofNullable(load(id, null))).orElse(null);
+        if (map == null) {
+            return DEFAULT;
+        }
+        float u = (UVPair.unpackU(packedUv0) + UVPair.unpackU(packedUv1)
+            + UVPair.unpackU(packedUv2)) / 3.0F;
+        float v = (UVPair.unpackV(packedUv0) + UVPair.unpackV(packedUv1)
+            + UVPair.unpackV(packedUv2)) / 3.0F;
+        return map.sample(Math.clamp(u, 0.0F, 1.0F), Math.clamp(v, 0.0F, 1.0F));
     }
 
     static Sample defaultSample() {
@@ -266,10 +289,10 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
                     specular,
                     normalOffset,
                     specularOffset,
-                    sprite.getU0(),
-                    sprite.getU1(),
-                    sprite.getV0(),
-                    sprite.getV1()
+                    sprite == null ? 0.0F : sprite.getU0(),
+                    sprite == null ? 1.0F : sprite.getU1(),
+                    sprite == null ? 0.0F : sprite.getV0(),
+                    sprite == null ? 1.0F : sprite.getV1()
                 );
             } catch (IllegalStateException capacityFailure) {
                 return rejectCapacity(baseName, normal, specular,
@@ -312,6 +335,17 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
         if (normal != null) normal.close();
         if (specular != null) specular.close();
         return null;
+    }
+
+    private Identifier normalizeTextureIdentifier(Identifier texture) {
+        String path = texture.getPath();
+        if (path.startsWith("textures/")) {
+            path = path.substring("textures/".length());
+        }
+        if (path.endsWith(".png")) {
+            path = path.substring(0, path.length() - 4);
+        }
+        return Identifier.fromNamespaceAndPath(texture.getNamespace(), path);
     }
 
     private Identifier companion(Identifier baseName, String suffix) {

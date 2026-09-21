@@ -23,6 +23,10 @@ final class RayTracingLightTree {
     private static final int LEAF_FLAG = Integer.MIN_VALUE;
     private static final int INDEX_MASK = Integer.MAX_VALUE;
     private static final float MIN_SOFTENING_DISTANCE_SQUARED = 0.25F;
+    // A full block face triangle is 0.5 block². Minecraft block-light levels describe a
+    // source, not the authored mesh area; normalize small torch/lantern panels to this
+    // reference so their total light is not lost merely because their model is compact.
+    private static final float REFERENCE_EMITTER_AREA = 0.5F;
 
     private RayTracingLightTree() {
     }
@@ -62,11 +66,13 @@ final class RayTracingLightTree {
                         float area = twiceArea * 0.5F;
                         float inverse = 1.0F / twiceArea;
                         // The GPU evaluates the sampled emitter as surface color * emission.
-                        // Keep the tree's selection PDF aligned with that radiance instead of
-                        // assigning the same power to a black atlas triangle and a bright one.
-                        // This is an importance proxy only; the sampled radiance and PDF still
-                        // make the direct-light estimator unbiased.
-                        float power = area * (float)Math.PI * emission
+                        // Normalize compact emissive panels to a reference block-face triangle:
+                        // Minecraft's light level describes source strength, while using raw
+                        // mesh area makes lanterns and torches contribute far less than a full
+                        // glowstone face. Keep the tree's selection PDF aligned with that
+                        // normalized radiance.
+                        float emitterEmission = emission * REFERENCE_EMITTER_AREA / area;
+                        float power = area * (float)Math.PI * emitterEmission
                             * emitterImportance(materialData, materialOffset);
                         if (!(power > 0.0F) || !Float.isFinite(power)) {
                             continue;
@@ -94,7 +100,7 @@ final class RayTracingLightTree {
                         }
                         int emitterIndex = emitters.size();
                         emitters.add(new Emitter(ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z,
-                            emitterNormalX, emitterNormalY, emitterNormalZ, area, emission, power,
+                            emitterNormalX, emitterNormalY, emitterNormalZ, area, emitterEmission, power,
                             materialIndex, emitterIndex));
                         materialToEmitter[materialIndex] = emitterIndex;
                     }

@@ -8,6 +8,15 @@ final class RayTracingShaders {
             }
             float sampleU = clamp(u, 0.0, 0.99999994);
             float sampleV = clamp(v, 0.0, 0.99999994);
+            // Animated companion maps are square frames stacked vertically. Keep the frame
+            // aspect ratio instead of squeezing the whole strip into one sprite, and advance
+            // it from the Minecraft game tick supplied in random.w.
+            if (height > width && width > 0u) {
+                uint frameHeight = width;
+                uint frameCount = max(height / frameHeight, 1u);
+                uint frame = (floatBitsToUint(camera.random.w) / 2u) % frameCount;
+                sampleV = (float(frame) + sampleV) * float(frameHeight) / float(height);
+            }
             uint x = min(uint(sampleU * float(width)), width - 1u);
             uint y = min(uint(sampleV * float(height)), height - 1u);
             return pbrData.values[offset + y * width + x];
@@ -30,6 +39,11 @@ final class RayTracingShaders {
         }
         float pbrHeight(uint offset, uint width, uint height, float u, float v) {
             if (offset == 0xffffffffu || width == 0u || height == 0u) return 1.0;
+            if (height > width) {
+                uint frameCount = max(height / width, 1u);
+                uint frame = (floatBitsToUint(camera.random.w) / 2u) % frameCount;
+                v = (float(frame) + clamp(v, 0.0, 0.99999994)) * float(width) / float(height);
+            }
             vec2 texelPosition = fract(vec2(u, v)) * vec2(width, height) - vec2(0.5);
             ivec2 texel00 = ivec2(floor(texelPosition));
             vec2 blend = fract(texelPosition);
@@ -991,6 +1005,12 @@ final class RayTracingShaders {
             if (offset == 0xffffffffu || width == 0u || height == 0u) return 0u;
             float sampleU = clamp(u, 0.0, 0.99999994);
             float sampleV = clamp(v, 0.0, 0.99999994);
+            if (height > width && width > 0u) {
+                uint frameHeight = width;
+                uint frameCount = max(height / frameHeight, 1u);
+                uint frame = (floatBitsToUint(camera.random.w) / 2u) % frameCount;
+                sampleV = (float(frame) + sampleV) * float(frameHeight) / float(height);
+            }
             uint x = min(uint(sampleU * float(width)), width - 1u);
             uint y = min(uint(sampleV * float(height)), height - 1u);
             return pbrData.values[offset + y * width + x];
@@ -1080,6 +1100,11 @@ final class RayTracingShaders {
             vec4 uv2 = materials.entries[materialBase + 3u];
             vec4 lighting = materials.entries[materialBase + 4u];
             vec4 surface = materials.entries[materialBase + 5u];
+            // The light tree stores area-normalized source radiance separately from the
+            // visible material emission. This keeps compact lantern/torch geometry as bright
+            // as a full glowstone face without clipping the directly visible surface.
+            float emitterFallbackEmission =
+                max(uintBitsToFloat(lightData.values[base + 7u]), 0.0);
             vec2 uv = uv01.xy * (1.0 - barycentric.x - barycentric.y)
                 + uv01.zw * barycentric.x + uv2.xy * barycentric.y;
             vec4 texel = uv2.z > 0.5
@@ -1090,7 +1115,7 @@ final class RayTracingShaders {
                 : tint.rgb;
             if (uv2.z > 0.5 && texel.a < 0.5) return vec3(0.0);
             float emitterEmission = evaluateEmitterEmission(
-                max(surface.z, 0.0), uint(max(lighting.w, 0.0) + 0.5), uv);
+                emitterFallbackEmission, uint(max(lighting.w, 0.0) + 0.5), uv);
             return max(color, vec3(0.0)) * emitterEmission;
         }
         float emitterSelectionPdf(vec3 point, uint emitterIndex) {

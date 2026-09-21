@@ -61,12 +61,6 @@ public final class PlayerModelCaptureMixin {
                 }
                 return;
             }
-            // Vanilla's submitted pose is camera-relative. BLAS vertices must be entity-local;
-            // the matching state position is added once by the TLAS, relative to scene origin.
-            var mesh = PlayerModelGeometryAdapter.captureDraw(model, pose, buffer, light, overlay, color,
-                (float)(camera.x - state.x), (float)(camera.y - state.y), (float)(camera.z - state.z),
-                submit.sprite(), RayTracingProbe.pbrSampler(),
-                LivingEntityGeometryAdapter.emissionFor(submit.renderType()));
             var fallbackSkin = state.skin == null || state.skin.body() == null
                 ? null : state.skin.body().texturePath();
             var layerTexture = LivingEntityGeometryAdapter.textureFor(submit, state);
@@ -74,6 +68,12 @@ public final class PlayerModelCaptureMixin {
                 layerTexture = fallbackSkin;
                 LivingEntityGeometryAdapter.rememberTextureLocation(layerTexture);
             }
+            // Armor render types use standalone PNGs rather than atlas sprites. Pass the
+            // resolved layer texture so its LabPBR companions can be loaded with local UVs.
+            var mesh = PlayerModelGeometryAdapter.captureDraw(model, pose, buffer, light, overlay, color,
+                (float)(camera.x - state.x), (float)(camera.y - state.y), (float)(camera.z - state.z),
+                submit.sprite(), layerTexture, RayTracingProbe.pbrSampler(),
+                LivingEntityGeometryAdapter.emissionFor(submit.renderType()));
             var tagged = LivingEntityGeometryAdapter.retag(mesh, layerTexture);
             if (bodyLayer && !emissiveLayer) {
                 PlayerModelGeometryAdapter.publish(state.id, state.x, state.y, state.z,
@@ -88,11 +88,11 @@ public final class PlayerModelCaptureMixin {
             && !(model instanceof PlayerModel && state instanceof AvatarRenderState)) {
             Integer entityId = LivingEntityGeometryAdapter.entityId(state);
             if (entityId != null) {
+                var texture = LivingEntityGeometryAdapter.textureFor(submit, state);
                 var mesh = PlayerModelGeometryAdapter.captureDraw(model, pose, buffer, light, overlay, color,
                     (float)(camera.x - state.x), (float)(camera.y - state.y), (float)(camera.z - state.z),
-                    submit.sprite(), RayTracingProbe.pbrSampler(),
+                    submit.sprite(), texture, RayTracingProbe.pbrSampler(),
                     LivingEntityGeometryAdapter.emissionFor(submit.renderType()));
-                var texture = LivingEntityGeometryAdapter.textureFor(submit, state);
                 LivingEntityGeometryAdapter.publishModel(entityId, state,
                     texture != null ? texture
                         : net.minecraft.client.renderer.texture.MissingTextureAtlasSprite.getLocation(), mesh);

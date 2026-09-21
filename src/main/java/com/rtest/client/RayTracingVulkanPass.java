@@ -2002,10 +2002,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     .putFloat(116, RayTracingClientConfig.INSTANCE.sunColorTemperature.get().floatValue())
                     .putFloat(120, RayTracingClientConfig.INSTANCE.ambientColorTemperature.get().floatValue())
                     .putFloat(124, 1.0F);
+                // random.w carries the Minecraft game tick for animated PBR companion maps;
+                // render-frame jitter remains in the dedicated jitter fields below.
                 buffer.putFloat(128, Float.intBitsToFloat(currentFrame))
                     .putFloat(132, Float.intBitsToFloat(0x243f6a88))
                     .putFloat(136, jitter.x())
-                    .putFloat(140, jitter.y());
+                    .putFloat(140, Float.intBitsToFloat((int)level.getGameTime()));
                 putCameraState(buffer, 144, previous, geometry);
                 buffer.putFloat(224, jitter.x()).putFloat(228, jitter.y())
                     .putFloat(232, 0.0F).putFloat(236, 0.0F);
