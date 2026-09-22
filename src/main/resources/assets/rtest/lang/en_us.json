@@ -39,6 +39,7 @@
   "screen.rtest.settings.pbrParallaxEnabled": "PBR parallax occlusion: %s",
   "screen.rtest.settings.pbrEntityParallaxEnabled": "Entity/item parallax: %s",
   "screen.rtest.settings.pbrParallaxDepth": "PBR parallax depth: %s",
+  "screen.rtest.settings.terrainLodEnabled": "Terrain LOD (opaque static terrain): %s",
   "screen.rtest.settings.fluidRtEnabled": "RT fluid capture: %s",
   "screen.rtest.settings.hdrEnabled": "HDR (restart required): %s",
   "screen.rtest.settings.fsrQuality": "FSR3 quality: %s",
@@ -99,6 +100,7 @@
   "screen.rtest.settings.pbrParallaxEnabled.tip": "Run tangent-space parallax occlusion mapping from normal companion alpha height; this changes material UVs, not the coarse RT mesh.",
   "screen.rtest.settings.pbrEntityParallaxEnabled.tip": "Apply the same height-based UV displacement to entities, items, and block entities.",
   "screen.rtest.settings.pbrParallaxDepth.tip": "Height displacement scale; 1.0 matches Sundial's default.",
+  "screen.rtest.settings.terrainLodEnabled.tip": "Use asynchronous coarse LOD beyond the native terrain radius to reduce static-terrain RT geometry; transparent, fluid, emissive, and dynamic geometry stay native.",
   "screen.rtest.settings.fluidRtEnabled.tip": "Use fluid-aware RT capture for water and lava; disable to use the compiled-terrain fallback.",
   "screen.rtest.settings.hdrEnabled.tip": "Use the linear scRGB HDR path on native Wayland when the display exposes it; restart after changing this option.",
   "screen.rtest.settings.fsrQuality.tip": "FSR3 render-resolution and temporal reconstruction quality preset.",
@@ -137,7 +139,7 @@
   "screen.rtest.settings.hdrWideGamutEnabled.tip": "Experimentally select a linear Rec.2020 surface; enable only when the compositor converts it correctly, then restart.",
   "screen.rtest.settings.nativeColorDecodeEnabled": "Linear decode for vanilla content: %s",
   "screen.rtest.settings.nativeColorDecodeEnabled.tip": "Decode sRGB output from vanilla entities, UI, and effects into the HDR linear target; restart or reload resources after changing it.",
-  "screen.rtest.settings.offlineRender.inactive": "Start offline accumulation (Right Alt + F2)",
+  "screen.rtest.settings.offlineRender.inactive": "Start offline accumulation (Right Shift)",
   "screen.rtest.settings.offlineRender.active": "Stop offline accumulation (%s samples)",
-  "screen.rtest.settings.offlineRender.tip": "Freeze camera, scene, sun, weather, and atlas animation while a GPU RGBA32F running mean accumulates. Shortcut: Right Alt + F2."
+  "screen.rtest.settings.offlineRender.tip": "Freeze camera, scene, sun, weather, and atlas animation while a GPU RGBA32F running mean accumulates. Shortcut: Right Shift."
 }

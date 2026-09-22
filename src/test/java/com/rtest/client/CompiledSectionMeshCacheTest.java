@@ -28,6 +28,7 @@ public final class CompiledSectionMeshCacheTest {
                 verify(layer, DefaultVertexFormat.POSITION_TEX, 0, true);
             }
             verifyMultipleLayers();
+            verifyStaleCompilationIsRejected();
             if (args.length > 0 && args[0].equals("--benchmark")) benchmark();
             System.out.println("Compiled mesh conversion tests passed");
         } finally {
@@ -74,6 +75,26 @@ public final class CompiledSectionMeshCacheTest {
             CompiledSectionMeshCache.publish(SECTION, new Results());
             if (CompiledSectionMeshCache.get(BlockPos.ZERO) != null) throw new AssertionError("Empty section retained");
             assertEqual(expectedMaterials, converted.materialData, "snapshot lifetime");
+        }
+    }
+
+    private static void verifyStaleCompilationIsRejected() {
+        try (ByteBufferBuilder buffer = new ByteBufferBuilder(1024);
+             MeshData mesh = mesh(buffer, DefaultVertexFormat.POSITION_TEX, 0, false, 1)) {
+            Results results = new Results();
+            results.renderedLayers.put(ChunkSectionLayer.SOLID, mesh);
+            var stale = CompiledSectionMeshCache.beginCompile(SECTION);
+            CompiledSectionMeshCache.invalidate(BlockPos.ZERO);
+            CompiledSectionMeshCache.publish(stale, results);
+            if (CompiledSectionMeshCache.get(BlockPos.ZERO) != null) {
+                throw new AssertionError("Stale compiled section was published after invalidation");
+            }
+
+            var current = CompiledSectionMeshCache.beginCompile(SECTION);
+            CompiledSectionMeshCache.publish(current, results);
+            if (CompiledSectionMeshCache.get(BlockPos.ZERO) == null) {
+                throw new AssertionError("Current compiled section was rejected");
+            }
         }
     }
 

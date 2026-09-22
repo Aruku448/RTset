@@ -36,8 +36,10 @@ public final class IncrementalGeometryContractTest {
 
     private static void assertCompilerPublication(String source) {
         require(source, "@Inject(method = \"compile(Lnet/minecraft/core/SectionPos;");
+        require(source, "at = @At(\"HEAD\"))");
+        require(source, "CompiledSectionMeshCache.beginCompile(sectionPos)");
         require(source, "at = @At(\"RETURN\"))");
-        require(source, "CompiledSectionMeshCache.publish(sectionPos, callbackInfo.getReturnValue());");
+        require(source, "CompiledSectionMeshCache.publish(token, callbackInfo.getReturnValue());");
     }
 
     private static void assertDirtyNeighborPropagation(String source) {

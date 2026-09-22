@@ -236,6 +236,12 @@ public final class RayTracingSettingsScreen extends Screen {
 
     private List<SettingsEntry> reconstructionEntries() {
         return List.of(
+            cycle("screen.rtest.settings.terrainLodEnabled", "screen.rtest.settings.terrainLodEnabled.tip", "off",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.terrainLodEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.terrainLodEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.terrainLodEnabled.set(value))),
             cycle("screen.rtest.settings.fluidRtEnabled", "screen.rtest.settings.fluidRtEnabled.tip", "on",
                 CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
                         RayTracingClientConfig.INSTANCE.fluidRtEnabled.get())

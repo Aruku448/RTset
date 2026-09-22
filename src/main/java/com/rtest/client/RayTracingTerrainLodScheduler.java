@@ -145,7 +145,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
 
     /** Polls only completed work that is still the current request for its node. */
     public List<Result<T>> poll(int resultBudget) {
-        return poll(resultBudget, null, null, null);
+        return pollInternal(resultBudget, null, null, null);
     }
 
     /**
@@ -154,11 +154,11 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
      */
     public List<Result<T>> poll(int resultBudget, long worldGeneration, long windowGeneration,
                                 Map<NodeKey, NodeVersion> nodeVersions) {
-        return poll(resultBudget, worldGeneration, windowGeneration,
+        return pollInternal(resultBudget, worldGeneration, windowGeneration,
                 Objects.requireNonNull(nodeVersions, "nodeVersions"));
     }
 
-    private List<Result<T>> poll(int budget, Long world, Long window, Map<NodeKey, NodeVersion> versions) {
+    private List<Result<T>> pollInternal(int budget, Long world, Long window, Map<NodeKey, NodeVersion> versions) {
         if (budget <= 0) {
             return List.of();
         }
@@ -169,6 +169,9 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
                 Job job = current.get(completed.request.nodeKey());
                 if (job == null || job.request != completed.request || job.cancelled
                         || (world != null && !matches(completed.request, world, window, versions))) {
+                    if (job != null && job.request == completed.request) {
+                        current.remove(completed.request.nodeKey());
+                    }
                     continue;
                 }
                 current.remove(completed.request.nodeKey());
@@ -246,7 +249,13 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
             }
             T value;
             try {
-                value = Objects.requireNonNull(generator.apply(job.request), "generator returned null");            } catch (RuntimeException | Error ignored) {
+                value = Objects.requireNonNull(generator.apply(job.request), "generator returned null");
+            } catch (RuntimeException | Error ignored) {
+                synchronized (lock) {
+                    if (current.get(job.request.nodeKey()) == job) {
+                        current.remove(job.request.nodeKey());
+                    }
+                }
                 return;
             }
             synchronized (lock) {

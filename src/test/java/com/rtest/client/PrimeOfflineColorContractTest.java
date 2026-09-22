@@ -35,8 +35,7 @@ public final class PrimeOfflineColorContractTest {
         require(controller, "frozenCamera");
         require(controller, "frozenSceneRevision");
         require(controller, "frozenEnvironment");
-        require(controller, "key.getValue() != InputConstants.KEY_F2");
-        require(controller, "InputConstants.KEY_RALT");
+        require(controller, "key.getValue() != InputConstants.KEY_RSHIFT");
 
         String settings = read("src/main/java/com/rtest/client/RayTracingSettingsScreen.java");
         require(settings, "screen.rtest.settings.category.output");

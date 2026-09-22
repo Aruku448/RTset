@@ -50,6 +50,7 @@ public final class RayTracingSmokeTest {
     public static boolean hasPresentedFrameFor(
         VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry) {
         if (activeResources == null || activeFsr == null || !activeResources.hasPresentedFrame()
+            || !activeResources.usesGeometry(geometry)
             || target == null || blockAtlas == null) {
             return false;
         }

@@ -91,7 +91,7 @@ public final class RayTracingTerrainLod {
         public NodeKey key() { return key; }
         public Bounds bounds() { return bounds; }
         public Mesh mesh() { return mesh; }
-        public boolean ready() { return mesh != null; }
+        public boolean ready() { return mesh != null && mesh.triangleCount() > 0; }
     }
 
     public enum GeometryChoice { NATIVE, COARSE }
@@ -198,11 +198,13 @@ public final class RayTracingTerrainLod {
     }
 
     private static boolean opaque(float[] m) {
-        // ABI: opacity=3, alpha-test=14, emission=21, transmission flag=22,
-        // absorption RGB=23..25, IOR=26. Alpha-test/cutout is retained; it is not translucent.
-        return m[3] >= 0.999F && m[21] <= 1.0e-6F && m[22] < 1.0F
-                && Math.abs(m[23]) <= 1.0e-6F && Math.abs(m[24]) <= 1.0e-6F
-                && Math.abs(m[25]) <= 1.0e-6F && Math.abs(m[26] - 1.0F) <= 1.0e-4F;
+        // Seven vec4 records: tint, normal, uv01, uv2, lighting, surface, optical.
+        // The ABI stores opacity at 3, emission at surface.z (22), absorption at 24..26,
+        // and IOR at optical.x (27). Metallic/reflectivity are valid opaque properties and
+        // must not be mistaken for transmission. Alpha-test/cutout remains eligible.
+        return m[3] >= 0.999F && m[22] <= 1.0e-6F
+                && Math.abs(m[24]) <= 1.0e-6F && Math.abs(m[25]) <= 1.0e-6F
+                && Math.abs(m[26]) <= 1.0e-6F && Math.abs(m[27] - 1.0F) <= 1.0e-4F;
     }
 
     private static int bin(float x, float y, float z, Bounds b) {

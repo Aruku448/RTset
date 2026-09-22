@@ -21,8 +21,7 @@ public final class OfflineRenderController {
     }
 
     public static synchronized boolean handleShortcut(Minecraft minecraft, InputConstants.Key key) {
-        if (key.getValue() != InputConstants.KEY_F2
-                || !InputConstants.isKeyDown(minecraft.getWindow(), InputConstants.KEY_RALT)
+        if (key.getValue() != InputConstants.KEY_RSHIFT
                 || minecraft.level == null) {
             return false;
         }
@@ -30,7 +29,7 @@ public final class OfflineRenderController {
         return true;
     }
 
-    /** Shared by the F9 control and Right Alt + F2. */
+    /** Shared by the F9 control and Right Shift shortcut. */
     public static synchronized boolean toggle(Minecraft minecraft) {
         if (minecraft.level == null && !active) {
             return false;

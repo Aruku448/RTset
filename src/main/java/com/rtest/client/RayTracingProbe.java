@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -58,11 +59,14 @@ public final class RayTracingProbe {
     private static RayTracingScene.SceneGeometry activeGeometry;
     private static RayTracingTerrainLodScheduler<RayTracingTerrainLod.Node> terrainLodScheduler;
     private static final Map<Long, RayTracingTerrainLod.Node> terrainLodResults = new HashMap<>();
-    private static final Map<Long, RayTracingTerrainLod.Node> terrainLodNodes = new HashMap<>();
-    private static final Map<Long, List<RayTracingTerrainLod.SectionInput>> terrainLodInputs = new HashMap<>();
+    private static final Map<Long, List<RayTracingTerrainLod.SectionInput>> terrainLodInputs = new LinkedHashMap<>();
+    private static final Map<Long, Long> terrainLodFingerprints = new HashMap<>();
+    private static final Set<Long> terrainLodBlocked = new LinkedHashSet<>();
     private static final Set<Long> terrainLodPending = new LinkedHashSet<>();
+    private static final Set<Long> terrainLodSelected = new LinkedHashSet<>();
     private static final Map<RayTracingTerrainLodScheduler.Token, List<RayTracingTerrainLod.SectionInput>> terrainLodWorkerInputs = new ConcurrentHashMap<>();
-    private static long terrainLodSourceRevision = Long.MIN_VALUE;
+    private static RayTracingScene.SceneGeometry terrainLodSourceGeometry;
+    private static long terrainLodSceneGeneration = Long.MIN_VALUE;
     private static long terrainLodConfigFingerprint = Long.MIN_VALUE;
     private static int terrainLodCameraChunkX;
     private static int terrainLodCameraChunkZ;
@@ -558,7 +562,13 @@ public final class RayTracingProbe {
         if (smokeGeometry == null) {
             return;
         }
-        updateTerrainLod(camera);
+        try {
+            updateTerrainLod(camera);
+        } catch (Throwable throwable) {
+            // LOD is an optional reduction layer. A bad coarse node must not be allowed to
+            // escape through the level-render seam and tear down an otherwise valid RT scene.
+            disableTerrainLodAfterFailure(throwable);
+        }
 
     }
 
@@ -597,10 +607,11 @@ public final class RayTracingProbe {
             return;
         }
         finishDeferredEntityCapture();
+        RayTracingScene.SceneGeometry renderGeometry = activeGeometry == null ? smokeGeometry : activeGeometry;
         boolean rtPresented = RayTracingSmokeTest.run(
             vulkanDevice,
             target,
-            activeGeometry == null ? smokeGeometry : activeGeometry,
+            renderGeometry,
             minecraft.level,
             camera,
             blockAtlas,
@@ -608,6 +619,23 @@ public final class RayTracingProbe {
             pbrMaterials,
             lastEntityFrame
         );
+        // A coarse mesh must never take the complete RT path down with it. Rebuild once from
+        // the immutable native snapshot and turn the experimental switch off for this session
+        // if publication/BLAS creation rejects the LOD geometry.
+        if (!rtPresented && renderGeometry != smokeGeometry && smokeGeometry != null) {
+            disableTerrainLodAfterFailure(null);
+            rtPresented = RayTracingSmokeTest.run(
+                vulkanDevice,
+                target,
+                smokeGeometry,
+                minecraft.level,
+                camera,
+                blockAtlas,
+                minecraft.getResourceManager(),
+                pbrMaterials,
+                lastEntityFrame
+            );
+        }
         VanillaRenderController.INSTANCE.markRtResult(rtPresented);
         if (rtPresented) {
             if (activationFreeze) {
@@ -1018,7 +1046,9 @@ public final class RayTracingProbe {
         int cz = cameraChunkZ(camera);
         long window = (((long) cx) << 32) ^ (cz & 0xffffffffL);
         boolean configChanged = config != terrainLodConfigFingerprint;
-        boolean sourceChanged = smokeGeometry.revision() != terrainLodSourceRevision;
+        // Partial Section merges intentionally preserve SceneGeometry.revision for temporal
+        // continuity, so identity—not revision—is the source snapshot boundary for LOD inputs.
+        boolean sourceChanged = smokeGeometry != terrainLodSourceGeometry;
         boolean windowChanged = !terrainLodSelectionValid || cx != terrainLodCameraChunkX || cz != terrainLodCameraChunkZ;
         boolean compositionNeeded = sourceChanged || windowChanged;
         if (terrainLodScheduler == null || configChanged) {
@@ -1028,28 +1058,43 @@ public final class RayTracingProbe {
                     terrainLodNodeKey(request.nodeKey().nodeId()),
                     terrainLodWorkerInputs.getOrDefault(request.token(), List.of())));
             terrainLodConfigFingerprint = config;
+            terrainLodSceneGeneration = sceneGeneration;
             sourceChanged = true;
             windowChanged = true;
             compositionNeeded = true;
         }
-        if (sourceChanged) {
-            terrainLodSourceRevision = smokeGeometry.revision();
-            terrainLodResults.clear();
-            terrainLodNodes.clear();
-            terrainLodInputs.clear();
+        if (terrainLodSceneGeneration != sceneGeneration) {
+            terrainLodSceneGeneration = sceneGeneration;
+            terrainLodScheduler.cancelAll();
             terrainLodPending.clear();
+            terrainLodWorkerInputs.clear();
+            terrainLodResults.clear();
+            terrainLodSelected.clear();
+            compositionNeeded = true;
+        }
+        if (sourceChanged) {
+            terrainLodSourceGeometry = smokeGeometry;
+            terrainLodResults.clear();
+            terrainLodInputs.clear();
+            terrainLodFingerprints.clear();
+            terrainLodBlocked.clear();
+            terrainLodPending.clear();
+            terrainLodSelected.clear();
+            terrainLodWorkerInputs.clear();
             terrainLodScheduler.cancelAll();
             for (RayTracingScene.SceneGeometry.SectionGeometry section : smokeGeometry.sections) {
-                if (!isOpaqueSection(section)) continue;
                 RayTracingTerrainLod.NodeKey key = terrainLodKey(section);
                 long id = terrainLodId(key);
+                if (!isOpaqueSection(section)) {
+                    terrainLodBlocked.add(id);
+                    continue;
+                }
                 terrainLodInputs.computeIfAbsent(id, ignored -> new ArrayList<>()).add(
                     new RayTracingTerrainLod.SectionInput(section.originX, section.originY, section.originZ,
                         section.vertices, section.materialData));
             }
             for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
-                RayTracingTerrainLod.NodeKey key = terrainLodKeyFromId(entry.getKey());
-                terrainLodNodes.put(entry.getKey(), new RayTracingTerrainLod.Node(key, null));
+                terrainLodFingerprints.put(entry.getKey(), inputFingerprint(entry.getValue()));
             }
         }
         if (windowChanged) {
@@ -1058,12 +1103,16 @@ public final class RayTracingProbe {
             terrainLodWindowGeneration = window;
             terrainLodSelectionValid = true;
             terrainLodPending.clear();
+            terrainLodSelected.clear();
+            terrainLodWorkerInputs.clear();
             terrainLodScheduler.cancelAll();
         }
         Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion> versions = new HashMap<>();
         for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
+            if (terrainLodBlocked.contains(entry.getKey())) continue;
             versions.put(new RayTracingTerrainLodScheduler.NodeKey(entry.getKey()),
-                new RayTracingTerrainLodScheduler.NodeVersion(1L, inputFingerprint(entry.getValue())));
+                new RayTracingTerrainLodScheduler.NodeVersion(1L,
+                    terrainLodFingerprints.getOrDefault(entry.getKey(), 0L)));
         }
         for (RayTracingTerrainLodScheduler.Result<RayTracingTerrainLod.Node> result :
                 terrainLodScheduler.poll(budget, sceneGeneration, terrainLodWindowGeneration, versions)) {
@@ -1073,14 +1122,29 @@ public final class RayTracingProbe {
             terrainLodResults.put(id, result.value());
             compositionNeeded = true;
         }
+        Set<Long> previousSelected = new LinkedHashSet<>(terrainLodSelected);
+        terrainLodSelected.clear();
+        double enterDistance = radius * 16.0;
+        double exitDistance = Math.max(0.0, (radius - 1) * 16.0);
+        for (Map.Entry<Long, RayTracingTerrainLod.Node> entry : terrainLodResults.entrySet()) {
+            if (terrainLodBlocked.contains(entry.getKey())) continue;
+            RayTracingTerrainLod.GeometryChoice previous = previousSelected.contains(entry.getKey())
+                ? RayTracingTerrainLod.GeometryChoice.COARSE : RayTracingTerrainLod.GeometryChoice.NATIVE;
+            if (RayTracingTerrainLod.select(entry.getValue(), camera.position().x, camera.position().z,
+                    enterDistance, exitDistance, previous) == RayTracingTerrainLod.GeometryChoice.COARSE) {
+                terrainLodSelected.add(entry.getKey());
+            }
+        }
+        compositionNeeded |= !terrainLodSelected.equals(previousSelected);
         int submitted = 0;
         for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
             long id = entry.getKey();
-            if (terrainLodPending.contains(id) || terrainLodResults.containsKey(id)) continue;
+            if (terrainLodBlocked.contains(id)
+                    || terrainLodPending.contains(id) || terrainLodResults.containsKey(id)) continue;
             RayTracingTerrainLod.NodeKey key = terrainLodKeyFromId(id);
             double distance = distanceToNode(key, camera);
             if (distance < radius * 16.0) continue;
-            long fingerprint = inputFingerprint(entry.getValue());
+            long fingerprint = terrainLodFingerprints.getOrDefault(id, 0L);
             RayTracingTerrainLodScheduler.Request request = terrainLodScheduler.request(
                 new RayTracingTerrainLodScheduler.NodeKey(id), sceneGeneration, terrainLodWindowGeneration,
                 1L, fingerprint, 0, distance);
@@ -1104,12 +1168,13 @@ public final class RayTracingProbe {
             }
             long id = terrainLodId(terrainLodKey(section));
             RayTracingTerrainLod.Node coarse = terrainLodResults.get(id);
-            if (coarse == null || distanceToNode(coarse.key(), camera) < radius * 16.0) {
+            if (coarse == null || !terrainLodSelected.contains(id)) {
                 nativeSections.add(section);
             }
         }
-        for (RayTracingTerrainLod.Node node : terrainLodResults.values()) {
-            if (distanceToNode(node.key(), camera) >= radius * 16.0) {
+        for (Map.Entry<Long, RayTracingTerrainLod.Node> entry : terrainLodResults.entrySet()) {
+            RayTracingTerrainLod.Node node = entry.getValue();
+            if (terrainLodSelected.contains(entry.getKey())) {
                 RayTracingScene.SceneGeometry.SectionGeometry coarse =
                     RayTracingScene.SceneGeometry.SectionGeometry.coarse(node);
                 if (coarse != null) coarseSections.add(coarse);
@@ -1122,10 +1187,13 @@ public final class RayTracingProbe {
     private static boolean isOpaqueSection(RayTracingScene.SceneGeometry.SectionGeometry section) {
         for (int i = 0; i < section.materialData.length; i += RayTracingTerrainLod.MATERIAL_FLOATS_PER_TRIANGLE) {
             float[] material = section.materialData;
-            if (!(material[i + 3] >= 0.999F && material[i + 21] <= 1.0e-6F
-                    && material[i + 22] < 1.0F && Math.abs(material[i + 23]) <= 1.0e-6F
-                    && Math.abs(material[i + 24]) <= 1.0e-6F && Math.abs(material[i + 25]) <= 1.0e-6F
-                    && Math.abs(material[i + 26] - 1.0F) <= 1.0e-4F)) return false;
+            // Match RayTracingTerrainLod's seven-vec4 ABI: opacity=3, emission=22,
+            // absorption=24..26, IOR=27. Metallic/reflectivity are valid opaque values.
+            if (!(material[i + 3] >= 0.999F && material[i + 22] <= 1.0e-6F
+                    && Math.abs(material[i + 24]) <= 1.0e-6F
+                    && Math.abs(material[i + 25]) <= 1.0e-6F
+                    && Math.abs(material[i + 26]) <= 1.0e-6F
+                    && Math.abs(material[i + 27] - 1.0F) <= 1.0e-4F)) return false;
         }
         return section.materialData.length != 0;
     }
@@ -1166,6 +1234,24 @@ public final class RayTracingProbe {
         return terrainLodKeyFromId(id);
     }
 
+    private static void disableTerrainLodAfterFailure(Throwable failure) {
+        if (failure == null) {
+            LOGGER.error("RTest disabled terrain LOD after a coarse geometry publication failure; retrying with native terrain");
+        } else {
+            LOGGER.error("RTest disabled terrain LOD after a coarse geometry preparation failure; retrying with native terrain", failure);
+        }
+        closeTerrainLodScheduler();
+        activeGeometry = smokeGeometry;
+        if (RayTracingClientConfig.INSTANCE.terrainLodEnabled.get()) {
+            try {
+                RayTracingClientConfig.INSTANCE.terrainLodEnabled.set(false);
+                RayTracingClientConfig.INSTANCE.save();
+            } catch (Throwable configFailure) {
+                LOGGER.warn("RTest could not persist the terrain LOD safety disable", configFailure);
+            }
+        }
+    }
+
     private static void closeTerrainLodScheduler() {
         if (terrainLodScheduler != null) {
             terrainLodScheduler.close();
@@ -1173,10 +1259,14 @@ public final class RayTracingProbe {
         }
         terrainLodPending.clear();
         terrainLodResults.clear();
-        terrainLodNodes.clear();
         terrainLodInputs.clear();
+        terrainLodFingerprints.clear();
+        terrainLodBlocked.clear();
+        terrainLodSelected.clear();
+        terrainLodWorkerInputs.clear();
         terrainLodSelectionValid = false;
-        terrainLodSourceRevision = Long.MIN_VALUE;
+        terrainLodSourceGeometry = null;
+        terrainLodSceneGeneration = Long.MIN_VALUE;
     }
 
     private static int cameraChunkX(Camera camera) {
@@ -1284,6 +1374,14 @@ public final class RayTracingProbe {
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         Minecraft minecraft = Minecraft.getInstance();
+        // F9 is a configuration screen, not an RT activation control. Handle it before
+        // Vulkan/level checks so the LOD switch is reachable from menus and vanilla rendering.
+        if (ClientKeyMappings.OPEN_RAY_TRACING_SETTINGS.consumeClick()) {
+            if (!(minecraft.gui.screen() instanceof RayTracingSettingsScreen)) {
+                minecraft.gui.setScreen(new RayTracingSettingsScreen(minecraft.gui.screen()));
+            }
+            return;
+        }
         if (minecraft.isPaused()) {
             return;
         }
@@ -1328,10 +1426,6 @@ public final class RayTracingProbe {
             return;
         }
 
-        if (ClientKeyMappings.OPEN_RAY_TRACING_SETTINGS.consumeClick()) {
-            minecraft.gui.setScreen(new RayTracingSettingsScreen(minecraft.gui.screen()));
-            return;
-        }
         if (!ClientKeyMappings.RUN_RAY_TRACING_SMOKE_TEST.consumeClick()) {
             return;
         }

@@ -26,6 +26,9 @@ import com.mojang.blaze3d.vertex.VertexFormatElement;
  */
 public final class CompiledSectionMeshCache {
     private static final int MAX_ENTRIES = 2048;
+    // Keep stale compile tokens bounded when a player explores many chunks. Clearing this table
+    // advances the global epoch, so tokens from entries removed here can never publish again.
+    private static final int MAX_GENERATIONS = 8192;
     // Entry count alone is unsafe: one compiled section can contain a large model and retain
     // several megabytes of primitive arrays. Bound the actual Java heap footprint as well.
     private static final long MAX_BYTES = 256L * 1024L * 1024L;
@@ -122,6 +125,10 @@ public final class CompiledSectionMeshCache {
 
     private static void advanceGeneration(long key) {
         GENERATIONS.put(key, GENERATIONS.getOrDefault(key, 0L) + 1L);
+        if (GENERATIONS.size() > MAX_GENERATIONS) {
+            globalGeneration++;
+            GENERATIONS.clear();
+        }
     }
 
     private static void remove(long key) {
