@@ -137,7 +137,7 @@ public final class RayTracingClientConfig {
             .comment("Native-detail radius around the camera for terrain LOD, in chunks.")
             .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
         terrainLodMaxLevel = builder
-            .comment("Maximum terrain LOD level; the current MVP clamps this to level 1 (2x2x2 Sections).")
+            .comment("Maximum terrain LOD level: 1=32^3 blocks, 2=64^3 blocks.")
             .defineInRange("terrainLodMaxLevel", 1, 1, 2);
         terrainLodBuildBudget = builder
             .comment("Maximum number of terrain LOD builds started per frame.")
