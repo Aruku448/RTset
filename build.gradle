@@ -218,6 +218,14 @@ def terrainProxyStoreTest = tasks.register('terrainProxyStoreTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.RayTracingTerrainProxyStoreTest'
 }
+def terrainTraversalAbiTest = tasks.register('terrainTraversalAbiTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingTerrainTraversalAbiTest'
+}
+def terrainTraversalShaderContractTest = tasks.register('terrainTraversalShaderContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingTerrainTraversalShaderContractTest'
+}
 def vulkanResourceLifecycleTest = tasks.register('vulkanResourceLifecycleTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.VulkanResourceLifecycleTest'
@@ -273,7 +281,9 @@ tasks.named('test') {
         blockEntityRasterFallbackContractTest, entityRasterFallbackContractTest,
         itemModelGeometryAdapterTest, rayTracingShaderContractTest,
         nativeColorManagementTest, rayTracingPbrMaterialsTest, nrdNativeContractTest, nrdNativePlatformTest, nrdCompositeContractTest, nrdMotionContractTest, sceneWindowDeltaTest,
-        sceneGeometryMergeContractTest, terrainLodTest, terrainProxyStoreTest, vulkanResourceLifecycleTest, rayTracingVisibilityPolicyTest,
+        sceneGeometryMergeContractTest, terrainLodTest, terrainProxyStoreTest,
+        terrainTraversalAbiTest, terrainTraversalShaderContractTest,
+        vulkanResourceLifecycleTest, rayTracingVisibilityPolicyTest,
         rayTracingFrameTimingContractTest, vanillaRenderControllerTest, sundialDenoiserContractTest
     failOnNoDiscoveredTests = false
     dependsOn fluidContractTest, dynamicContractTest, nativeEffectsContractTest, hdrPolicyContractTest, dynamicVulkanSliceContractTest, dynamicPlaceholderContractTest, dynamicTlasInstanceContractTest
