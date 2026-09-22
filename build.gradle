@@ -254,9 +254,13 @@ def particleRtGeometryContractTest = tasks.register('particleRtGeometryContractT
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.ParticleRtGeometryContractTest'
 }
+def incrementalGeometryContractTest = tasks.register('incrementalGeometryContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.IncrementalGeometryContractTest'
+}
 tasks.named('test') {
     dependsOn compiledSectionMeshCacheTest, rayTracingLightTreeTest, primeOfflineColorContractTest,
-        rtActivationContractTest, particleRtGeometryContractTest
+        rtActivationContractTest, particleRtGeometryContractTest, incrementalGeometryContractTest
     dependsOn playerAnimationContractTest, playerBlasCommandTest, blockEntityModelContractTest,
         blockEntityRasterFallbackContractTest, entityRasterFallbackContractTest,
         itemModelGeometryAdapterTest, rayTracingShaderContractTest,
