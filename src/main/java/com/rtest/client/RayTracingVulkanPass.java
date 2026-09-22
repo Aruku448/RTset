@@ -425,6 +425,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
         private static final class DynamicBlasCache implements AutoCloseable {
             private final Map<Long, DynamicCachedBlas> entries = new HashMap<>();
+            // A replaced/removed dynamic BLAS may still be referenced by the old TLAS while
+            // the current submission records its replacement update. Retire it only after the
+            // submission fence, rather than destroying its storage during instance publication.
+            private final List<DynamicCachedBlas> retired = new ArrayList<>();
 
             DynamicCachedBlas acquire(VulkanDevice device, long topologyKey, DynamicPlaceholderGeometry.Mesh mesh) {
                 DynamicCachedBlas cached = entries.get(topologyKey);
@@ -461,7 +465,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 try {
                     DynamicCachedBlas previous = entries.put(topologyKey, candidate);
                     if (previous != null && previous != candidate) {
-                        previous.close();
+                        retired.add(previous);
                     }
                     return candidate;
                 } catch (Throwable throwable) {
@@ -475,7 +479,26 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
             void release(long key) {
                 DynamicCachedBlas cached = entries.remove(key);
-                if (cached != null) cached.close();
+                if (cached != null) {
+                    retired.add(cached);
+                }
+            }
+
+            void retireCompleted() {
+                Throwable failure = null;
+                for (DynamicCachedBlas cached : retired) {
+                    try {
+                        cached.close();
+                    } catch (Throwable cleanupFailure) {
+                        if (failure == null) {
+                            failure = cleanupFailure;
+                        } else {
+                            failure.addSuppressed(cleanupFailure);
+                        }
+                    }
+                }
+                retired.clear();
+                rethrow(failure);
             }
 
             @Override
@@ -493,6 +516,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     }
                 }
                 entries.clear();
+                for (DynamicCachedBlas cached : retired) {
+                    try {
+                        cached.close();
+                    } catch (Throwable cleanupFailure) {
+                        if (failure == null) {
+                            failure = cleanupFailure;
+                        } else {
+                            failure.addSuppressed(cleanupFailure);
+                        }
+                    }
+                }
+                retired.clear();
                 rethrow(failure);
             }
         }
@@ -636,6 +671,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
         }
 
         private record SectionKey(int x, int y, int z) {
+        }
+
+        private static boolean sameSectionBlas(List<CachedBlas> previous, List<CachedBlas> next) {
+            if (previous.size() != next.size()) {
+                return false;
+            }
+            for (int index = 0; index < previous.size(); index++) {
+                if (previous.get(index) != next.get(index)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static final class CachedBlas implements AutoCloseable {
@@ -1544,7 +1591,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     ? this.instanceBuffer
                     : NativeBuffer.create(this.device, requiredInstanceSize, geometryUsage, true);
                 writeInstanceBuffer(nextInstance, nextGeometry, nextBlas, this.dynamicSlotCapacity);
-                reuseTopLevel = nextBlas.size() == this.sectionBlas.size();
+                // A TLAS UPDATE may read the previous TLAS while it resolves instance
+                // references. If even one section BLAS changed, the previous TLAS can still
+                // contain the old BLAS address; build a fresh TLAS instead of updating it after
+                // the cache transaction replaces that address.
+                reuseTopLevel = sameSectionBlas(this.sectionBlas, nextBlas);
                 nextTopLevel = reuseTopLevel
                     ? this.topLevel
                     : AccelerationStructure.createTopLevel(this.device, nextInstance, nextBlas.size() + dynamicSlotCapacity);
@@ -2492,18 +2543,26 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private void waitForPreviousFrame(RayTracingFrameTiming timing) {
             GpuFence fence = this.pendingFrameFence;
             if (fence == null) {
+                this.dynamicBlasCache.retireCompleted();
                 return;
             }
-            this.pendingFrameFence = null;
             long fenceWaitStart = System.nanoTime();
+            boolean completed = false;
             try {
                 if (!fence.awaitCompletion(5_000_000_000L)) {
                     throw new IllegalStateException("Timed out waiting for previous RTest RT submission");
                 }
+                completed = true;
             } finally {
                 timing.add(RayTracingFrameTiming.Segment.FENCE_WAIT_CPU, fenceWaitStart);
-                closeAndCapture(fence);
+                // Keep an unresolved fence attached to the pass. close() can make one final
+                // cleanup attempt without forgetting that GPU work may still own resources.
+                if (completed) {
+                    this.pendingFrameFence = null;
+                    closeAndCapture(fence);
+                }
             }
+            this.dynamicBlasCache.retireCompleted();
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 double[] gpuMilliseconds = readGpuTimestamps(stack);

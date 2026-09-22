@@ -33,10 +33,15 @@ public final class VulkanResourceLifecycleTest {
         require(pass, "private boolean closed;");
         require(pass, "entries.remove(key);");
         require(pass, "blasCache.commit(nextBlas);");
+        require(pass, "reuseTopLevel = sameSectionBlas(this.sectionBlas, nextBlas);");
+        require(pass, "if (previous.get(index) != next.get(index))");
         require(pass, "blasCache.abort(nextBlas);");
         require(pass, "nextPbr.close();");
         require(pass, "encoder = new VulkanCommandEncoder(device);");
         require(pass, "private GpuFence pendingFrameFence;");
+        require(pass, "retired.add(previous);");
+        require(pass, "void retireCompleted()");
+        require(pass, "if (completed) {");
         require(pass, "waitForPreviousFrame(timing);");
         require(pass, "VulkanCommandEncoder frameEncoder = this.device.createCommandEncoder();");
         require(pass, "frameEncoder.execute(holder.commandBuffer);");
