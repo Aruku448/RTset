@@ -59,6 +59,14 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
 
     public record NodeVersion(long nodeGeneration, long sourceFingerprint) { }
 
+    /** Worker failure retained until the render thread polls it; failures are no longer silent. */
+    public record Failure(Request request, Throwable cause) {
+        public Failure {
+            Objects.requireNonNull(request, "request");
+            Objects.requireNonNull(cause, "cause");
+        }
+    }
+
     /** Immutable value delivered to the polling thread. */
     public record Result<T>(Request request, T value) {
         public Result {
@@ -73,6 +81,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
     private final ThreadPoolExecutor executor;
     private final Map<NodeKey, Job> current = new HashMap<>();
     private final ArrayList<Completed<T>> ready = new ArrayList<>();
+    private final ArrayList<Failure> failures = new ArrayList<>();
     private boolean closed;
 
     public RayTracingTerrainLodScheduler(int workerCount, int maxQueuedRequests,
@@ -189,6 +198,17 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
                 && request.sourceFingerprint() == version.sourceFingerprint();
     }
 
+    /** Returns and clears worker failures for diagnostics on the polling thread. */
+    public List<Failure> pollFailures(int budget) {
+        if (budget <= 0) return List.of();
+        synchronized (lock) {
+            int count = Math.min(budget, failures.size());
+            ArrayList<Failure> result = new ArrayList<>(failures.subList(0, count));
+            failures.subList(0, count).clear();
+            return List.copyOf(result);
+        }
+    }
+
     /** Cancels queued, running, and ready work. */
     public void cancelAll() {
         synchronized (lock) {
@@ -212,6 +232,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
             }
             current.clear();
             ready.clear();
+            failures.clear();
         }
         executor.shutdownNow();
     }
@@ -250,10 +271,14 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
             T value;
             try {
                 value = Objects.requireNonNull(generator.apply(job.request), "generator returned null");
-            } catch (RuntimeException | Error ignored) {
+            } catch (RuntimeException | Error failure) {
                 synchronized (lock) {
                     if (current.get(job.request.nodeKey()) == job) {
                         current.remove(job.request.nodeKey());
+                    }
+                    if (!closed) {
+                        if (failures.size() >= 64) failures.remove(0);
+                        failures.add(new Failure(job.request, failure));
                     }
                 }
                 return;

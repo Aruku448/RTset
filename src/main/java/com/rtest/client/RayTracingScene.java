@@ -111,8 +111,20 @@ public final class RayTracingScene {
             final float[] materialData;
             final int triangleCount;
             final int vertexFingerprint;
+            // Native sections are level 0; coarse sections retain the exact hierarchy key so
+            // GPU traversal never has to infer level from an origin that may be 32/64 aligned.
+            final RayTracingTerrainLod.NodeKey terrainNodeKey;
 
             private SectionGeometry(int originX, int originY, int originZ, float[] vertices, float[] materialData) {
+                this(originX, originY, originZ, vertices, materialData,
+                    new RayTracingTerrainLod.NodeKey(0,
+                        Math.floorDiv(originX, RayTracingTerrainLod.SECTION_SIZE),
+                        Math.floorDiv(originY, RayTracingTerrainLod.SECTION_SIZE),
+                        Math.floorDiv(originZ, RayTracingTerrainLod.SECTION_SIZE)));
+            }
+
+            private SectionGeometry(int originX, int originY, int originZ, float[] vertices,
+                                    float[] materialData, RayTracingTerrainLod.NodeKey terrainNodeKey) {
                 if (vertices.length == 0 || vertices.length % 9 != 0) {
                     throw new IllegalArgumentException("Section vertices must contain complete triangles");
                 }
@@ -122,6 +134,7 @@ public final class RayTracingScene {
                 this.originX = originX;
                 this.originY = originY;
                 this.originZ = originZ;
+                this.terrainNodeKey = java.util.Objects.requireNonNull(terrainNodeKey, "terrainNodeKey");
                 // SectionGeometry is published to the merge executor. Copy both arrays so a
                 // compiled-section cache or capture accumulator can never mutate a worker input.
                 float[] copiedVertices = vertices.clone();
@@ -203,11 +216,31 @@ public final class RayTracingScene {
                     world[i + 1] -= oy;
                     world[i + 2] -= oz;
                 }
-                return new SectionGeometry(ox, oy, oz, world, mesh.materialData());
+                return new SectionGeometry(ox, oy, oz, world, mesh.materialData(), node.key());
             }
 
             int vertexFingerprint() {
                 return this.vertexFingerprint;
+            }
+
+            RayTracingTerrainLod.NodeKey terrainNodeKey() {
+                return this.terrainNodeKey;
+            }
+
+            /** Coarse LOD may replace only the same opaque static terrain that feeds its mesh. */
+            boolean isOpaqueTerrain() {
+                for (int offset = 0; offset < this.materialData.length;
+                     offset += FLOATS_PER_TRIANGLE_MATERIAL) {
+                    if (!(this.materialData[offset + 3] >= 0.999F
+                            && this.materialData[offset + 22] <= 1.0e-6F
+                            && Math.abs(this.materialData[offset + 24]) <= 1.0e-6F
+                            && Math.abs(this.materialData[offset + 25]) <= 1.0e-6F
+                            && Math.abs(this.materialData[offset + 26]) <= 1.0e-6F
+                            && Math.abs(this.materialData[offset + 27] - 1.0F) <= 1.0e-4F)) {
+                        return false;
+                    }
+                }
+                return this.materialData.length != 0;
             }
         }
 
@@ -355,6 +388,21 @@ public final class RayTracingScene {
         static SceneGeometry compose(List<SectionGeometry> nativeSections,
                                      List<SectionGeometry> coarseSections,
                                      SceneGeometry source) {
+            return compose(nativeSections, coarseSections, source, source.renderDistanceChunks);
+        }
+
+        /**
+         * Composes a terrain variant whose trace horizon may exceed the native ClientLevel
+         * capture window. The extra distance is valid only when every extra triangle came from
+         * an immutable proxy store; it never changes the native capture contract.
+         */
+        static SceneGeometry compose(List<SectionGeometry> nativeSections,
+                                     List<SectionGeometry> coarseSections,
+                                     SceneGeometry source,
+                                     int renderDistanceChunks) {
+            if (renderDistanceChunks < source.renderDistanceChunks) {
+                throw new IllegalArgumentException("composed render distance cannot shrink the source horizon");
+            }
             List<SectionGeometry> sections = new ArrayList<>(nativeSections.size() + coarseSections.size());
             sections.addAll(nativeSections);
             sections.addAll(coarseSections);
@@ -375,7 +423,7 @@ public final class RayTracingScene {
                 mo += section.materialData.length;
             }
             return new SceneGeometry(sections, vertices, materials, source.pbrData,
-                vertices.length / 9, source.renderDistanceChunks,
+                vertices.length / 9, renderDistanceChunks,
                 source.originX, source.originY, source.originZ, false,
                 NEXT_REVISION.incrementAndGet(), true, false);
         }

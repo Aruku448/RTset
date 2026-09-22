@@ -45,6 +45,8 @@ import org.joml.Vector3fc;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanUtils;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -62,6 +64,7 @@ import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildGeometryInfoKHR;
 import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
@@ -89,6 +92,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkImageSubresourceLayers;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
+import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 import org.lwjgl.vulkan.VkRayTracingPipelineCreateInfoKHR;
@@ -135,6 +139,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private NativeBuffer materialBuffer;
         private NativeBuffer lightDataBuffer;
         private NativeBuffer pbrBuffer;
+        // Optional compute-side terrain traversal resources. They are separate from the RT
+        // descriptor set so the fixed ray shader ABI remains unchanged.
+        private NativeBuffer terrainNodeMetadataBuffer;
+        private NativeBuffer terrainBlasAddressBuffer;
+        private NativeBuffer terrainTraversalParamsBuffer;
+        private final long terrainTraversalDescriptorSetLayout;
+        private final long terrainTraversalDescriptorPool;
+        private final long terrainTraversalDescriptorSet;
+        private final long[] terrainHiZDescriptorSets;
+        private final long terrainTraversalPipelineLayout;
+        private final long terrainTraversalPipeline;
+        private final long terrainTraversalShaderModule;
+        private final long terrainHiZPipeline;
+        private final long terrainHiZShaderModule;
+        private final int terrainTraversalNodeCount;
+        private final boolean terrainTraversalEnabled;
         private final RayTracingPbrMaterials pbrMaterials;
         private int pbrMapCount;
         private SceneGeometry geometry;
@@ -249,6 +269,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private float currentSunDirectionY = 1.0F;
         private float currentSunDirectionZ;
         private boolean presentedFrame;
+        private boolean terrainTraversalPrimed;
+        private boolean terrainHiZInitialized;
         private int lastCenterPixel;
         // Keep one RT submission in flight. The encoder and all mapped scene buffers are
         // persistent resources, so the next frame must retire this submission before reusing
@@ -277,6 +299,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer materialBuffer,
             NativeBuffer lightDataBuffer,
             NativeBuffer pbrBuffer,
+            NativeBuffer terrainNodeMetadataBuffer,
+            NativeBuffer terrainBlasAddressBuffer,
+            NativeBuffer terrainTraversalParamsBuffer,
+            long terrainTraversalDescriptorSetLayout,
+            long terrainTraversalDescriptorPool,
+            long terrainTraversalDescriptorSet,
+            long[] terrainHiZDescriptorSets,
+            long terrainTraversalPipelineLayout,
+            long terrainTraversalPipeline,
+            long terrainTraversalShaderModule,
+            long terrainHiZPipeline,
+            long terrainHiZShaderModule,
+            int terrainTraversalNodeCount,
+            boolean terrainTraversalEnabled,
             RayTracingPbrMaterials pbrMaterials,
             SceneGeometry geometry,
             long atlasImageView,
@@ -344,6 +380,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.materialBuffer = materialBuffer;
             this.lightDataBuffer = lightDataBuffer;
             this.pbrBuffer = pbrBuffer;
+            this.terrainNodeMetadataBuffer = terrainNodeMetadataBuffer;
+            this.terrainBlasAddressBuffer = terrainBlasAddressBuffer;
+            this.terrainTraversalParamsBuffer = terrainTraversalParamsBuffer;
+            this.terrainTraversalDescriptorSetLayout = terrainTraversalDescriptorSetLayout;
+            this.terrainTraversalDescriptorPool = terrainTraversalDescriptorPool;
+            this.terrainTraversalDescriptorSet = terrainTraversalDescriptorSet;
+            this.terrainHiZDescriptorSets = terrainHiZDescriptorSets.clone();
+            this.terrainTraversalPipelineLayout = terrainTraversalPipelineLayout;
+            this.terrainTraversalPipeline = terrainTraversalPipeline;
+            this.terrainTraversalShaderModule = terrainTraversalShaderModule;
+            this.terrainHiZPipeline = terrainHiZPipeline;
+            this.terrainHiZShaderModule = terrainHiZShaderModule;
+            this.terrainTraversalNodeCount = terrainTraversalNodeCount;
+            this.terrainTraversalEnabled = terrainTraversalEnabled;
             this.pbrMaterials = pbrMaterials;
             this.pbrMapCount = pbrMaterials == null ? geometry.pbrData[0] : pbrMaterials.loadedMapCount();
             this.geometry = geometry;
@@ -664,6 +714,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer materialBuffer = null;
             NativeBuffer lightDataBuffer = null;
             NativeBuffer pbrBuffer = null;
+            NativeBuffer terrainNodeMetadataBuffer = null;
+            NativeBuffer terrainBlasAddressBuffer = null;
+            NativeBuffer terrainTraversalParamsBuffer = null;
             NativeBuffer shaderBindingTable = null;
             AccelerationStructure topLevel = null;
             VulkanCommandEncoder encoder = null;
@@ -671,6 +724,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long descriptorPool = 0L;
             long pipelineLayout = 0L;
             long pipeline = 0L;
+            long terrainTraversalDescriptorSetLayout = 0L;
+            long terrainTraversalDescriptorPool = 0L;
+            long terrainTraversalDescriptorSet = 0L;
+            long[] terrainHiZDescriptorSets = new long[0];
+            long terrainTraversalPipelineLayout = 0L;
+            long terrainTraversalPipeline = 0L;
+            long terrainTraversalShaderModule = 0L;
+            long terrainHiZPipeline = 0L;
+            long terrainHiZShaderModule = 0L;
+            int terrainTraversalNodeCount = 0;
+            boolean terrainTraversalEnabled = RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
             long[] shaderModules = new long[7];
             RayTracingSupport.Limits limits = RayTracingSupport.queryLimits(device);
             if (limits == null || limits.maxRayRecursionDepth() < 1) {
@@ -786,6 +850,230 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 );
                 try (NativeBuffer.Mapped mapped = pbrBuffer.map()) {
                     mapped.buffer().asIntBuffer().put(initialPbrData);
+                }
+
+                if (terrainTraversalEnabled) {
+                    Map<RayTracingTerrainLod.NodeKey, Integer> traversalIndices = new HashMap<>();
+                    for (int index = 0; index < geometry.sections.size(); index++) {
+                        traversalIndices.put(geometry.sections.get(index).terrainNodeKey(), index);
+                    }
+                    Map<Integer, List<Integer>> traversalChildren = new HashMap<>();
+                    for (int index = 0; index < geometry.sections.size(); index++) {
+                        SceneGeometry.SectionGeometry childSection = geometry.sections.get(index);
+                        RayTracingTerrainLod.NodeKey childKey = childSection.terrainNodeKey();
+                        // Coarse meshes are built from opaque sections only. Keep transparent,
+                        // fluid, emissive, and other native-only level-0 geometry outside every
+                        // coarse parent so GPU traversal can never mask it as a LOD descendant.
+                        if (childKey.level() == 0 && !childSection.isOpaqueTerrain()) continue;
+                        RayTracingTerrainLod.NodeKey parent = childKey.parent();
+                        Integer parentIndex = parent == null ? null : traversalIndices.get(parent);
+                        if (parentIndex != null) {
+                            traversalChildren.computeIfAbsent(parentIndex, ignored -> new ArrayList<>()).add(index);
+                        }
+                    }
+                    List<RayTracingTerrainTraversalAbi.NodeMetadata> traversalNodes = new ArrayList<>();
+                    int materialBase = 0;
+                    for (int index = 0; index < geometry.sections.size(); index++) {
+                        SceneGeometry.SectionGeometry section = geometry.sections.get(index);
+                        RayTracingTerrainLod.NodeKey nodeKey = section.terrainNodeKey();
+                        RayTracingTerrainLod.Bounds nodeBounds = RayTracingTerrainLod.boundsFor(nodeKey);
+                        boolean hierarchyParticipant = nodeKey.level() > 0 || section.isOpaqueTerrain();
+                        int flags = RayTracingTerrainTraversalAbi.NODE_FLAG_READY
+                            | RayTracingTerrainTraversalAbi.NODE_FLAG_RENDERABLE
+                            | RayTracingTerrainTraversalAbi.NODE_FLAG_HAS_BLAS;
+                        Integer parentIndex = !hierarchyParticipant || nodeKey.parent() == null
+                            ? null : traversalIndices.get(nodeKey.parent());
+                        List<Integer> children = traversalChildren.getOrDefault(index, List.of());
+                        if (children.size() > 1) {
+                            children.sort(Integer::compare);
+                        }
+                        // The shader represents children as a contiguous firstChild + bitmask
+                        // range. Do not claim a partial/non-contiguous range: keeping the parent
+                        // as the selected fallback is conservative and avoids a hole in sparse
+                        // ClientLevel captures.
+                        boolean contiguousChildren = !children.isEmpty() && children.size() <= 8;
+                        for (int child = 1; contiguousChildren && child < children.size(); child++) {
+                            contiguousChildren = children.get(child) == children.get(0) + child;
+                        }
+                        int firstChild = contiguousChildren
+                            ? children.get(0) : RayTracingTerrainTraversalAbi.INVALID_INDEX;
+                        int childMask = contiguousChildren ? (1 << children.size()) - 1 : 0;
+                        float lodErrorPixels = nodeKey.level() == 0 ? 0.0F : nodeKey.level() * 16.0F;
+                        traversalNodes.add(new RayTracingTerrainTraversalAbi.NodeMetadata(
+                            new RayTracingTerrainTraversalAbi.Bounds(
+                                (float)nodeBounds.minX(), (float)nodeBounds.minY(), (float)nodeBounds.minZ(),
+                                (float)nodeBounds.maxX(), (float)nodeBounds.maxY(), (float)nodeBounds.maxZ()),
+                            parentIndex == null ? RayTracingTerrainTraversalAbi.INVALID_INDEX : parentIndex,
+                            firstChild, childMask, nodeKey.level(), index, materialBase,
+                            section.triangleCount(), flags, lodErrorPixels));
+                        materialBase += section.triangleCount();
+                    }
+                    terrainTraversalNodeCount = traversalNodes.size();
+                    terrainNodeMetadataBuffer = NativeBuffer.create(device,
+                        (long)terrainTraversalNodeCount * RayTracingTerrainTraversalAbi.NODE_METADATA_BYTES,
+                        VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+                    ByteBuffer nodeBytes = RayTracingTerrainTraversalAbi.nodeMetadataBuffer(traversalNodes);
+                    try (NativeBuffer.Mapped mapped = terrainNodeMetadataBuffer.map()) {
+                        mapped.buffer().put(nodeBytes);
+                    }
+                    terrainBlasAddressBuffer = NativeBuffer.create(device,
+                        (long)Math.max(1, terrainTraversalNodeCount) * 8L,
+                        VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+                    try (NativeBuffer.Mapped mapped = terrainBlasAddressBuffer.map()) {
+                        ByteBuffer addresses = mapped.buffer().order(ByteOrder.nativeOrder());
+                        for (int index = 0; index < terrainTraversalNodeCount; index++) {
+                            long address = sectionBlas.get(index).bottomLevel.deviceAddress;
+                            addresses.putLong(index * 8, address);
+                        }
+                    }
+                    // std140: mat4 + four vec4 values (camera, viewport, config, sceneOrigin)
+                    // plus one vec4 dummy BLAS address, for a stable 144-byte contract.
+                    terrainTraversalParamsBuffer = NativeBuffer.create(device, 144,
+                        VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+                    ShaderModule traversal = ShaderModule.create(device,
+                        loadShaderResource("rtest/shaders/terrain_traversal.comp"),
+                        Shaderc.shaderc_glsl_compute_shader);
+                    terrainTraversalShaderModule = traversal.handle;
+
+                    try (MemoryStack traversalStack = MemoryStack.stackPush()) {
+                        VkDescriptorSetLayoutBinding.Buffer traversalBindings =
+                            VkDescriptorSetLayoutBinding.calloc(6, traversalStack);
+                        traversalBindings.get(0).binding(0)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        traversalBindings.get(1).binding(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        traversalBindings.get(2).binding(2)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        traversalBindings.get(3).binding(3)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        traversalBindings.get(4).binding(4)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        traversalBindings.get(5).binding(5)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                        VkDescriptorSetLayoutCreateInfo traversalLayoutInfo =
+                            VkDescriptorSetLayoutCreateInfo.calloc(traversalStack).sType$Default()
+                                .pBindings(traversalBindings);
+                        LongBuffer traversalHandle = traversalStack.callocLong(1);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkCreateDescriptorSetLayout(vkDevice, traversalLayoutInfo, null, traversalHandle),
+                            "Failed to create terrain traversal descriptor set layout");
+                        terrainTraversalDescriptorSetLayout = traversalHandle.get(0);
+
+                        int mipLevels = fsr.terrainHiZMipLevels();
+                        int descriptorSetCount = 1 + Math.max(0, mipLevels - 1);
+                        VkDescriptorPoolSize.Buffer traversalPoolSizes = VkDescriptorPoolSize.calloc(4, traversalStack);
+                        traversalPoolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                            .descriptorCount(3 * descriptorSetCount);
+                        traversalPoolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                            .descriptorCount(descriptorSetCount);
+                        traversalPoolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                            .descriptorCount(descriptorSetCount);
+                        traversalPoolSizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                            .descriptorCount(descriptorSetCount);
+                        VkDescriptorPoolCreateInfo traversalPoolInfo = VkDescriptorPoolCreateInfo.calloc(traversalStack)
+                            .sType$Default().maxSets(descriptorSetCount).pPoolSizes(traversalPoolSizes);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkCreateDescriptorPool(vkDevice, traversalPoolInfo, null, traversalHandle),
+                            "Failed to create terrain traversal descriptor pool");
+                        terrainTraversalDescriptorPool = traversalHandle.get(0);
+                        LongBuffer setLayouts = traversalStack.mallocLong(descriptorSetCount);
+                        for (int index = 0; index < descriptorSetCount; index++) {
+                            setLayouts.put(terrainTraversalDescriptorSetLayout);
+                        }
+                        setLayouts.flip();
+                        VkDescriptorSetAllocateInfo traversalAllocate = VkDescriptorSetAllocateInfo.calloc(traversalStack)
+                            .sType$Default().descriptorPool(terrainTraversalDescriptorPool)
+                            .pSetLayouts(setLayouts);
+                        LongBuffer setHandles = traversalStack.callocLong(descriptorSetCount);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkAllocateDescriptorSets(vkDevice, traversalAllocate, setHandles),
+                            "Failed to allocate terrain traversal descriptor sets");
+                        terrainTraversalDescriptorSet = setHandles.get(0);
+                        terrainHiZDescriptorSets = new long[mipLevels];
+                        for (int level = 1; level < mipLevels; level++) {
+                            terrainHiZDescriptorSets[level] = setHandles.get(level);
+                        }
+
+                        VkDescriptorBufferInfo.Buffer nodeInfo = VkDescriptorBufferInfo.calloc(1, traversalStack)
+                            .buffer(terrainNodeMetadataBuffer.buffer).offset(0)
+                            .range(terrainNodeMetadataBuffer.size);
+                        VkDescriptorBufferInfo.Buffer addressInfo = VkDescriptorBufferInfo.calloc(1, traversalStack)
+                            .buffer(terrainBlasAddressBuffer.buffer).offset(0)
+                            .range(terrainBlasAddressBuffer.size);
+                        VkDescriptorBufferInfo.Buffer traversalParamsInfo = VkDescriptorBufferInfo.calloc(1, traversalStack)
+                            .buffer(terrainTraversalParamsBuffer.buffer).offset(0)
+                            .range(144);
+                        VkDescriptorBufferInfo.Buffer instanceInfo = VkDescriptorBufferInfo.calloc(1, traversalStack)
+                            .buffer(instanceBuffer.buffer).offset(0).range(instanceBuffer.size);
+                        VkDescriptorImageInfo.Buffer sourceImages = VkDescriptorImageInfo.calloc(descriptorSetCount, traversalStack);
+                        VkDescriptorImageInfo.Buffer targetImages = VkDescriptorImageInfo.calloc(descriptorSetCount, traversalStack);
+                        VkWriteDescriptorSet.Buffer traversalWrites = VkWriteDescriptorSet.calloc(6 * descriptorSetCount, traversalStack);
+                        int writeIndex = 0;
+                        for (int setIndex = 0; setIndex < descriptorSetCount; setIndex++) {
+                            long set = setHandles.get(setIndex);
+                            int reductionLevel = setIndex;
+                            long sourceView = reductionLevel == 0
+                                ? fsr.terrainHiZView() : fsr.terrainHiZMipView(reductionLevel - 1);
+                            int targetLevel = reductionLevel == 0 ? Math.min(1, mipLevels - 1) : reductionLevel;
+                            sourceImages.get(setIndex).sampler(atlasSampler).imageView(sourceView)
+                                .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                            targetImages.get(setIndex).imageView(fsr.terrainHiZMipView(targetLevel))
+                                .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(0)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(nodeInfo);
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(1)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(addressInfo);
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(2)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                                .pImageInfo(VkDescriptorImageInfo.create(sourceImages.get(setIndex).address(), 1));
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(3)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).pBufferInfo(traversalParamsInfo);
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(4)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(instanceInfo);
+                            traversalWrites.get(writeIndex++).sType$Default().dstSet(set).dstBinding(5)
+                                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                                .pImageInfo(VkDescriptorImageInfo.create(targetImages.get(setIndex).address(), 1));
+                        }
+                        VK10.vkUpdateDescriptorSets(vkDevice, traversalWrites, null);
+
+                        VkPushConstantRange.Buffer traversalPushConstants = VkPushConstantRange.calloc(1, traversalStack)
+                            .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(16);
+                        VkPipelineLayoutCreateInfo traversalPipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(traversalStack)
+                            .sType$Default().pSetLayouts(traversalStack.longs(terrainTraversalDescriptorSetLayout))
+                            .pPushConstantRanges(traversalPushConstants);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkCreatePipelineLayout(vkDevice, traversalPipelineLayoutInfo, null, traversalHandle),
+                            "Failed to create terrain traversal pipeline layout");
+                        terrainTraversalPipelineLayout = traversalHandle.get(0);
+                        VkPipelineShaderStageCreateInfo traversalStage = VkPipelineShaderStageCreateInfo.calloc(traversalStack)
+                            .sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT)
+                            .module(terrainTraversalShaderModule).pName(traversalStack.UTF8("main"));
+                        VkComputePipelineCreateInfo.Buffer traversalPipelineInfo = VkComputePipelineCreateInfo.calloc(1, traversalStack);
+                        traversalPipelineInfo.get(0).sType$Default().stage(traversalStage).layout(terrainTraversalPipelineLayout);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkCreateComputePipelines(vkDevice, 0L, traversalPipelineInfo, null, traversalHandle),
+                            "Failed to create terrain traversal compute pipeline");
+                        terrainTraversalPipeline = traversalHandle.get(0);
+                        ShaderModule hizShader = ShaderModule.create(device,
+                            loadShaderResource("rtest/shaders/terrain_hiz.comp"),
+                            Shaderc.shaderc_glsl_compute_shader);
+                        terrainHiZShaderModule = hizShader.handle;
+                        VkPipelineShaderStageCreateInfo hizStage = VkPipelineShaderStageCreateInfo.calloc(traversalStack)
+                            .sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT)
+                            .module(terrainHiZShaderModule).pName(traversalStack.UTF8("main"));
+                        VkComputePipelineCreateInfo.Buffer hizPipelineInfo = VkComputePipelineCreateInfo.calloc(1, traversalStack);
+                        hizPipelineInfo.get(0).sType$Default().stage(hizStage).layout(terrainTraversalPipelineLayout);
+                        VulkanUtils.crashIfFailure(device,
+                            VK10.vkCreateComputePipelines(vkDevice, 0L, hizPipelineInfo, null, traversalHandle),
+                            "Failed to create terrain Hi-Z compute pipeline");
+                        terrainHiZPipeline = traversalHandle.get(0);
+                    }
                 }
 
                 ShaderModule raygen = ShaderModule.create(device, RayTracingShaders.RAYGEN_SHADER, Shaderc.shaderc_glsl_raygen_shader);
@@ -1092,6 +1380,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         materialBuffer,
                         lightDataBuffer,
                         pbrBuffer,
+                        terrainNodeMetadataBuffer,
+                        terrainBlasAddressBuffer,
+                        terrainTraversalParamsBuffer,
+                        terrainTraversalDescriptorSetLayout,
+                        terrainTraversalDescriptorPool,
+                        terrainTraversalDescriptorSet,
+                        terrainHiZDescriptorSets,
+                        terrainTraversalPipelineLayout,
+                        terrainTraversalPipeline,
+                        terrainTraversalShaderModule,
+                        terrainHiZPipeline,
+                        terrainHiZShaderModule,
+                        terrainTraversalNodeCount,
+                        terrainTraversalEnabled,
                         pbrMaterials,
                         geometry,
                         atlasImageView,
@@ -1139,6 +1441,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         }
                     }
                 }
+                if (terrainHiZPipeline != 0L) VK10.vkDestroyPipeline(vkDevice, terrainHiZPipeline, null);
+                if (terrainTraversalPipeline != 0L) VK10.vkDestroyPipeline(vkDevice, terrainTraversalPipeline, null);
+                if (terrainTraversalPipelineLayout != 0L) VK10.vkDestroyPipelineLayout(vkDevice, terrainTraversalPipelineLayout, null);
+                if (terrainTraversalDescriptorPool != 0L) VK10.vkDestroyDescriptorPool(vkDevice, terrainTraversalDescriptorPool, null);
+                if (terrainTraversalDescriptorSetLayout != 0L) VK10.vkDestroyDescriptorSetLayout(vkDevice, terrainTraversalDescriptorSetLayout, null);
+                if (terrainHiZShaderModule != 0L) VK10.vkDestroyShaderModule(vkDevice, terrainHiZShaderModule, null);
+                if (terrainTraversalShaderModule != 0L) VK10.vkDestroyShaderModule(vkDevice, terrainTraversalShaderModule, null);
                 if (pipeline != 0L) VK10.vkDestroyPipeline(vkDevice, pipeline, null);
                 if (pipelineLayout != 0L) VK10.vkDestroyPipelineLayout(vkDevice, pipelineLayout, null);
                 if (descriptorPool != 0L) VK10.vkDestroyDescriptorPool(vkDevice, descriptorPool, null);
@@ -1147,6 +1456,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 closeDuringFailure(topLevel, throwable);
                 closeDuringFailure(shaderBindingTable, throwable);
                 closeDuringFailure(pbrBuffer, throwable);
+                closeDuringFailure(terrainTraversalParamsBuffer, throwable);
+                closeDuringFailure(terrainBlasAddressBuffer, throwable);
+                closeDuringFailure(terrainNodeMetadataBuffer, throwable);
                 closeDuringFailure(lightDataBuffer, throwable);
                 closeDuringFailure(materialBuffer, throwable);
                 closeDuringFailure(cameraBuffer, throwable);
@@ -1177,7 +1489,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 && this.outputFormat == format
                 && this.atlasImageView == atlasImageView
                 && this.atlasSampler == atlasSampler
-                && this.fsr == fsr;
+                && this.fsr == fsr
+                // The experimental GPU traversal owns geometry-sized metadata/address buffers;
+                // recreate the pass on a publication rather than risking a stale node-to-BLAS map.
+                && (!this.terrainTraversalEnabled || this.geometry == geometry)
+                && this.terrainTraversalEnabled == RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
         }
 
         boolean usesGeometry(SceneGeometry candidate) {
@@ -2043,7 +2359,65 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     .putFloat(296, 0.0F)
                     .putFloat(300, pbrParallaxFlags);
             }
+            updateTerrainTraversalCamera(currentCamera);
             previousFsrCamera = currentCamera;
+        }
+
+        private void updateTerrainTraversalCamera(RtestFsrCamera currentCamera) {
+            if (!this.terrainTraversalEnabled || this.terrainTraversalParamsBuffer == null) {
+                return;
+            }
+            try (NativeBuffer.Mapped mapped = this.terrainTraversalParamsBuffer.map()) {
+                ByteBuffer buffer = mapped.buffer().order(ByteOrder.nativeOrder());
+                float rightX = currentCamera.rightX();
+                float rightY = currentCamera.rightY();
+                float rightZ = currentCamera.rightZ();
+                float upX = currentCamera.upX();
+                float upY = currentCamera.upY();
+                float upZ = currentCamera.upZ();
+                float forwardX = currentCamera.forwardX();
+                float forwardY = currentCamera.forwardY();
+                float forwardZ = currentCamera.forwardZ();
+                float cameraX = (float)currentCamera.x();
+                float cameraY = (float)currentCamera.y();
+                float cameraZ = (float)currentCamera.z();
+                float tanHalfFov = 1.0F / currentCamera.projectionM11();
+                float aspect = currentCamera.projectionM11() / currentCamera.projectionM00();
+                float scaleX = 1.0F / Math.max(tanHalfFov * aspect, 1.0e-5F);
+                float scaleY = 1.0F / Math.max(tanHalfFov, 1.0e-5F);
+                // This is a conservative reversed-Z projection: clip z is the near-depth
+                // constant and clip w is forward distance, matching the FSR depth 0.05/viewZ
+                // convention used by the traversal shader.
+                // GLSL mat4 values are column-major: write the four rows by their column
+                // offsets so clip.x/y use the complete world-space camera basis.
+                buffer.putFloat(0, scaleX * rightX).putFloat(4, scaleY * upX)
+                    .putFloat(8, 0.0F).putFloat(12, forwardX);
+                buffer.putFloat(16, scaleX * rightY).putFloat(20, scaleY * upY)
+                    .putFloat(24, 0.0F).putFloat(28, forwardY);
+                buffer.putFloat(32, scaleX * rightZ).putFloat(36, scaleY * upZ)
+                    .putFloat(40, 0.0F).putFloat(44, forwardZ);
+                buffer.putFloat(48, -scaleX * (rightX * cameraX + rightY * cameraY + rightZ * cameraZ))
+                    .putFloat(52, -scaleY * (upX * cameraX + upY * cameraY + upZ * cameraZ))
+                    .putFloat(56, 0.05F)
+                    .putFloat(60, -(forwardX * cameraX + forwardY * cameraY + forwardZ * cameraZ));
+                float renderDistance = (float)((this.geometry.renderDistanceChunks + 1) * 16.0 * Math.sqrt(2.0));
+                buffer.putFloat(64, cameraX).putFloat(68, cameraY).putFloat(72, cameraZ)
+                    .putFloat(76, renderDistance);
+                buffer.putFloat(80, this.outputWidth).putFloat(84, this.outputHeight)
+                    .putFloat(88, 0.0F).putFloat(92, 0.0F);
+                buffer.putInt(96, this.terrainTraversalNodeCount)
+                    .putInt(100, this.sectionBlas.size() + this.dynamicSlotCapacity)
+                    .putInt(104, 1) // reversed-Z
+                    .putInt(108, 0);
+                buffer.putFloat(112, (float)this.geometry.originX)
+                    .putFloat(116, (float)this.geometry.originY)
+                    .putFloat(120, (float)this.geometry.originZ)
+                    .putFloat(124, 0.0F);
+                long dummyAddress = this.sectionBlas.get(0).bottomLevel.deviceAddress;
+                buffer.putInt(128, (int)dummyAddress)
+                    .putInt(132, (int)(dummyAddress >>> 32))
+                    .putInt(136, 0).putInt(140, 0);
+            }
         }
 
         private static void putCameraState(ByteBuffer buffer, int offset, RtestFsrCamera camera,
@@ -2527,6 +2901,128 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
         }
 
+        private void restoreTerrainTraversalInstances() {
+            if (this.instanceBuffer == null) {
+                return;
+            }
+            try (NativeBuffer.Mapped mapped = this.instanceBuffer.map()) {
+                ByteBuffer buffer = mapped.buffer().order(ByteOrder.nativeOrder());
+                for (int index = 0; index < this.sectionBlas.size(); index++) {
+                    int offset = index * VkAccelerationStructureInstanceKHR.SIZEOF
+                        + RayTracingTerrainTraversalAbi.INSTANCE_CUSTOM_INDEX_OFFSET;
+                    int customIndex = buffer.getInt(offset) & RayTracingTerrainTraversalAbi.INSTANCE_CUSTOM_INDEX_MASK;
+                    buffer.putInt(offset, customIndex
+                        | (RayTracingTerrainTraversalAbi.TERRAIN_INSTANCE_MASK << 24));
+                }
+            }
+        }
+
+        private void recordTerrainTraversal(VkCommandBuffer commandBuffer, MemoryStack stack) {
+            // The previous FSR depth image is still in GENERAL here. Build mip 0 from that
+            // history, reduce it conservatively, then let the node traversal sample the complete
+            // pyramid. The first frame is intentionally skipped because depth is uninitialized.
+            barrier(commandBuffer, stack,
+                VK10.VK_PIPELINE_STAGE_HOST_BIT,
+                VK10.VK_ACCESS_HOST_WRITE_BIT,
+                VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT);
+            recordTerrainHiZ(commandBuffer, stack);
+            VK10.vkCmdBindPipeline(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
+                this.terrainTraversalPipeline);
+            VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
+                this.terrainTraversalPipelineLayout, 0, stack.longs(this.terrainTraversalDescriptorSet), null);
+            int groups = (this.terrainTraversalNodeCount + 63) / 64;
+            VK10.vkCmdDispatch(commandBuffer, Math.max(1, groups), 1, 1);
+            // VkAccelerationStructureBuildGeometryInfoKHR reads the same instance buffer as
+            // the compute shader writes. Keep this dependency explicit before the TLAS UPDATE.
+            barrier(commandBuffer, stack,
+                VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK10.VK_ACCESS_SHADER_WRITE_BIT,
+                KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        }
+
+        private void recordTerrainHiZ(VkCommandBuffer commandBuffer, MemoryStack stack) {
+            int width = (int)this.fsr.terrainHiZWidth();
+            int height = (int)this.fsr.terrainHiZHeight();
+            imageBarrier(commandBuffer, stack,
+                KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                    | VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK10.VK_ACCESS_SHADER_WRITE_BIT,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                this.fsr.depthImage(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            imageBarrier(commandBuffer, stack,
+                this.terrainHiZInitialized ? VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                    : VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                this.terrainHiZInitialized ? VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT : 0L,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
+                this.fsr.terrainHiZImage(),
+                this.terrainHiZInitialized ? VK10.VK_IMAGE_LAYOUT_GENERAL : VK10.VK_IMAGE_LAYOUT_UNDEFINED,
+                VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
+            VkImageCopy.Buffer copy = VkImageCopy.calloc(1, stack);
+            copy.srcSubresource(VkImageSubresourceLayers.calloc(stack)
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                    .baseArrayLayer(0).layerCount(1));
+            copy.dstSubresource(VkImageSubresourceLayers.calloc(stack)
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                    .baseArrayLayer(0).layerCount(1));
+            copy.srcOffset().set(0, 0, 0);
+            copy.dstOffset().set(0, 0, 0);
+            copy.extent().set(width, height, 1);
+            VK10.vkCmdCopyImage(commandBuffer, this.fsr.depthImage(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                this.fsr.terrainHiZImage(), VK10.VK_IMAGE_LAYOUT_GENERAL, copy);
+            imageBarrier(commandBuffer, stack,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
+                VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK10.VK_ACCESS_SHADER_READ_BIT,
+                this.fsr.terrainHiZImage(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
+
+            int mipLevels = this.fsr.terrainHiZMipLevels();
+            for (int level = 1; level < mipLevels; level++) {
+                int sourceWidth = Math.max(1, width >> (level - 1));
+                int sourceHeight = Math.max(1, height >> (level - 1));
+                int targetWidth = Math.max(1, width >> level);
+                int targetHeight = Math.max(1, height >> level);
+                imageBarrier(commandBuffer, stack,
+                    this.terrainHiZInitialized ? VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                        : VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    this.terrainHiZInitialized ? VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT : 0L,
+                    VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK10.VK_ACCESS_SHADER_WRITE_BIT,
+                    this.fsr.terrainHiZImage(),
+                    this.terrainHiZInitialized ? VK10.VK_IMAGE_LAYOUT_GENERAL : VK10.VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_ASPECT_COLOR_BIT, level, 1);
+                VK10.vkCmdBindPipeline(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
+                    this.terrainHiZPipeline);
+                VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
+                    this.terrainTraversalPipelineLayout, 0, stack.longs(this.terrainHiZDescriptorSets[level]), null);
+                ByteBuffer push = stack.malloc(16).order(ByteOrder.nativeOrder());
+                push.putInt(0, sourceWidth).putInt(4, sourceHeight).putInt(8, 1).putInt(12, 0);
+                VK10.vkCmdPushConstants(commandBuffer, this.terrainTraversalPipelineLayout,
+                    VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
+                VK10.vkCmdDispatch(commandBuffer, (targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
+                imageBarrier(commandBuffer, stack,
+                    VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK10.VK_ACCESS_SHADER_WRITE_BIT,
+                    VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK10.VK_ACCESS_SHADER_READ_BIT,
+                    this.fsr.terrainHiZImage(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    VK10.VK_IMAGE_ASPECT_COLOR_BIT, level, 1);
+            }
+            imageBarrier(commandBuffer, stack,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_SHADER_WRITE_BIT_KHR,
+                this.fsr.depthImage(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            this.terrainHiZInitialized = true;
+        }
+
         private VkCommandBufferHolder recordAccelerationStructuresAndDispatch(
             VulkanCommandEncoder frameEncoder,
             MemoryStack stack,
@@ -2536,6 +3032,21 @@ import com.rtest.client.fsr.RtestFsrSettings;
             try {
             if (gpuTimestampsAvailable) {
                 VK10.vkCmdResetQueryPool(commandBuffer, gpuTimestampQueryPool, 0, GPU_TIMESTAMP_COUNT);
+            }
+            boolean terrainHistoryUsable = this.terrainTraversalEnabled && this.terrainTraversalPrimed
+                && !fsrToken.reset() && !fsrToken.cameraCut();
+            boolean terrainTraversalMaskReset = this.terrainTraversalEnabled
+                && this.terrainTraversalPrimed && !terrainHistoryUsable;
+            if (this.terrainTraversalEnabled && !terrainHistoryUsable) {
+                // A reset/cut invalidates the depth history just like it invalidates FSR/NRD;
+                // rebuilding Hi-Z from an old view could reject a newly visible node.
+                this.terrainHiZInitialized = false;
+            }
+            if (terrainTraversalMaskReset) {
+                restoreTerrainTraversalInstances();
+            }
+            if (terrainHistoryUsable) {
+                recordTerrainTraversal(commandBuffer, stack);
             }
             this.fsr.prepareForRayTracing(commandBuffer);
             List<DynamicCachedBlas> dynamicBuilds = new ArrayList<>();
@@ -2551,7 +3062,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 recordBlas(commandBuffer, stack, cached.bottomLevel, false);
                 dynamicBuilds.add(cached);
             }
-            if (this.topLevelBuilt && this.topLevelUpdatePending) {
+            if (this.topLevelBuilt && (this.topLevelUpdatePending
+                    || terrainHistoryUsable || terrainTraversalMaskReset)) {
                 barrier(commandBuffer, stack,
                     VK10.VK_PIPELINE_STAGE_HOST_BIT,
                     VK10.VK_ACCESS_HOST_WRITE_BIT,
@@ -2602,6 +3114,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, outputWidth, outputHeight, 1);
             writeGpuTimestamp(commandBuffer, 1, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             this.fsr.recordAfterRayTracing(commandBuffer, fsrToken);
+            this.terrainTraversalPrimed = this.terrainTraversalEnabled;
             writeGpuTimestamp(commandBuffer, 2, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             imageBarrier(commandBuffer, stack,
                 VK12.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -2699,7 +3212,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             int newLayout
         ) {
             imageBarrier(commandBuffer, stack, sourceStage, sourceAccess, destinationStage, destinationAccess,
-                image, oldLayout, newLayout, VK10.VK_IMAGE_ASPECT_COLOR_BIT);
+                image, oldLayout, newLayout, VK10.VK_IMAGE_ASPECT_COLOR_BIT, 0, 1);
         }
 
         private static void imageBarrier(
@@ -2712,7 +3225,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long image,
             int oldLayout,
             int newLayout,
-            int aspectMask
+            int aspectMask,
+            int baseMipLevel,
+            int levelCount
         ) {
             VkImageMemoryBarrier2.Buffer imageBarrier = VkImageMemoryBarrier2.calloc(1, stack).sType$Default()
                 .srcStageMask(sourceStage).srcAccessMask(sourceAccess)
@@ -2723,7 +3238,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 .image(image);
             imageBarrier.subresourceRange(new VkImageSubresourceRange(stack.malloc(VkImageSubresourceRange.SIZEOF))
                 .aspectMask(aspectMask)
-                .baseMipLevel(0).levelCount(1)
+                .baseMipLevel(baseMipLevel).levelCount(levelCount)
                 .baseArrayLayer(0).layerCount(1));
             VkDependencyInfo dependencyInfo = VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(imageBarrier);
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer, dependencyInfo);
@@ -2782,6 +3297,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (gpuTimestampQueryPool != 0L) {
                 VK10.vkDestroyQueryPool(vkDevice, gpuTimestampQueryPool, null);
             }
+            if (terrainHiZPipeline != 0L) VK10.vkDestroyPipeline(vkDevice, terrainHiZPipeline, null);
+            if (terrainTraversalPipeline != 0L) VK10.vkDestroyPipeline(vkDevice, terrainTraversalPipeline, null);
+            if (terrainTraversalPipelineLayout != 0L) VK10.vkDestroyPipelineLayout(vkDevice, terrainTraversalPipelineLayout, null);
+            if (terrainTraversalDescriptorPool != 0L) VK10.vkDestroyDescriptorPool(vkDevice, terrainTraversalDescriptorPool, null);
+            if (terrainTraversalDescriptorSetLayout != 0L) VK10.vkDestroyDescriptorSetLayout(vkDevice, terrainTraversalDescriptorSetLayout, null);
+            if (terrainHiZShaderModule != 0L) VK10.vkDestroyShaderModule(vkDevice, terrainHiZShaderModule, null);
+            if (terrainTraversalShaderModule != 0L) VK10.vkDestroyShaderModule(vkDevice, terrainTraversalShaderModule, null);
             VK10.vkDestroyPipeline(vkDevice, pipeline, null);
             VK10.vkDestroyPipelineLayout(vkDevice, pipelineLayout, null);
             VK10.vkDestroyDescriptorPool(vkDevice, descriptorPool, null);
@@ -2798,6 +3320,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(materialBuffer, failure);
             failure = closeAndCapture(lightDataBuffer, failure);
             failure = closeAndCapture(pbrBuffer, failure);
+            failure = closeAndCapture(terrainTraversalParamsBuffer, failure);
+            failure = closeAndCapture(terrainBlasAddressBuffer, failure);
+            failure = closeAndCapture(terrainNodeMetadataBuffer, failure);
             failure = closeAndCapture(scratchBuffer, failure);
             failure = closeAndCapture(instanceBuffer, failure);
             failure = closeAndCapture(dynamicMotionMetadataBuffer, failure);
@@ -2807,6 +3332,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
     private record VkCommandBufferHolder(org.lwjgl.vulkan.VkCommandBuffer commandBuffer,
                                          List<DynamicCachedBlas> dynamicBuilds) {
+    }
+
+    private static String loadShaderResource(String path) {
+        try (var stream = RayTracingVulkanPass.class.getClassLoader().getResourceAsStream(path)) {
+            if (stream == null) throw new IllegalStateException("Missing shader resource: " + path);
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("Could not read shader resource: " + path, exception);
+        }
     }
 
     private static final class ShaderModule {

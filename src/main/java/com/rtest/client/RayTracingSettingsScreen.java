@@ -242,6 +242,18 @@ public final class RayTracingSettingsScreen extends Screen {
                     .withValues(true, false)
                     .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.terrainLodEnabled"),
                         (button, value) -> RayTracingClientConfig.INSTANCE.terrainLodEnabled.set(value))),
+            cycle("screen.rtest.settings.terrainLodFarCacheEnabled", "screen.rtest.settings.terrainLodFarCacheEnabled.tip", "on",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.terrainLodFarCacheEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.terrainLodFarCacheEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.terrainLodFarCacheEnabled.set(value))),
+            cycle("screen.rtest.settings.terrainLodGpuTraversalEnabled", "screen.rtest.settings.terrainLodGpuTraversalEnabled.tip", "off",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.terrainLodGpuTraversalEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.set(value))),
             cycle("screen.rtest.settings.fluidRtEnabled", "screen.rtest.settings.fluidRtEnabled.tip", "on",
                 CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
                         RayTracingClientConfig.INSTANCE.fluidRtEnabled.get())

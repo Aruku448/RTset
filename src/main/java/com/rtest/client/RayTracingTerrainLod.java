@@ -118,6 +118,11 @@ public final class RayTracingTerrainLod {
         public Bounds bounds() { return bounds; }
         public Mesh mesh() { return mesh; }
         public boolean ready() { return mesh != null && mesh.triangleCount() > 0; }
+
+        /** Rehydrates an immutable node from a proxy-store payload without exposing Mesh's constructor. */
+        public static Node fromMesh(NodeKey key, float[] vertices, float[] materialData) {
+            return new Node(key, new Mesh(vertices, materialData));
+        }
     }
 
     public enum GeometryChoice { NATIVE, COARSE }

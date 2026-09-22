@@ -41,6 +41,8 @@ layout(set = 0, binding = 3, std140) uniform TraversalParameters {
     vec4 cameraAndRenderDistance; // xyz camera position, w XZ render distance
     vec4 viewport;                 // x/y screen dimensions, z unused, w unused
     uvec4 config;                  // node count, instance capacity, depth convention, unused
+    vec4 sceneOrigin;              // world-space origin used by TLAS-local BLAS vertices
+    uvec4 dummyBlasAddress;        // low/high words in x/y; valid address for masked slots
 } params;
 
 // Fixed Vulkan VkAccelerationStructureInstanceKHR record, represented as raw words so the
@@ -66,8 +68,8 @@ ScreenRect projectBounds(NodeMetadata node) {
     vec3 hi = boundsMax(node);
     vec2 rectMin = vec2(1.0);
     vec2 rectMax = vec2(0.0);
-    float depthNear = 1.0;
-    float depthFar = 0.0;
+    float depthNear = params.config.z == 0u ? 1.0 : 0.0;
+    float depthFar = params.config.z == 0u ? 0.0 : 1.0;
     bool behindNearPlane = false;
     for (uint corner = 0u; corner < 8u; corner++) {
         vec3 point = vec3((corner & 1u) == 0u ? lo.x : hi.x,
@@ -82,10 +84,16 @@ ScreenRect projectBounds(NodeMetadata node) {
         vec2 screen = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
         rectMin = min(rectMin, screen);
         rectMax = max(rectMax, screen);
-        depthNear = min(depthNear, ndc.z);
-        depthFar = max(depthFar, ndc.z);
+        if (params.config.z == 0u) {
+            depthNear = min(depthNear, ndc.z);
+            depthFar = max(depthFar, ndc.z);
+        } else {
+            depthNear = max(depthNear, ndc.z);
+            depthFar = min(depthFar, ndc.z);
+        }
     }
-    if (behindNearPlane) return ScreenRect(vec4(0.0, 0.0, 1.0, 1.0), vec2(0.0, 1.0), true);
+    if (behindNearPlane) return ScreenRect(vec4(0.0, 0.0, 1.0, 1.0),
+        params.config.z == 0u ? vec2(0.0, 1.0) : vec2(1.0, 0.0), true);
     bool intersects = rectMax.x >= 0.0 && rectMin.x <= 1.0
                    && rectMax.y >= 0.0 && rectMin.y <= 1.0
                    && depthFar >= 0.0 && depthNear <= 1.0;
@@ -173,7 +181,7 @@ void writeIdentity(uint base) {
     instanceWords[base + 0u] = floatBitsToUint(1.0);
     instanceWords[base + 1u] = 0u;
     instanceWords[base + 2u] = 0u;
-    instanceWords[base + 3u] = 0u;
+    instanceWords[base + 3u] = floatBitsToUint(0.0);
     instanceWords[base + 4u] = 0u;
     instanceWords[base + 5u] = floatBitsToUint(1.0);
     instanceWords[base + 6u] = 0u;
@@ -194,8 +202,8 @@ void main() {
     writeIdentity(outputBase);
     instanceWords[outputBase + 12u] = 0u;
     instanceWords[outputBase + 13u] = FACING_CULL_DISABLE << 24u;
-    instanceWords[outputBase + 14u] = 0u;
-    instanceWords[outputBase + 15u] = 0u;
+    instanceWords[outputBase + 14u] = params.dummyBlasAddress.x;
+    instanceWords[outputBase + 15u] = params.dummyBlasAddress.y;
 
     ScreenRect rect = projectBounds(node);
     bool currentVisible = nodeVisible(node, rect);
@@ -206,6 +214,9 @@ void main() {
     uvec2 address = selected ? blasAddresses[nodeIndex] : uvec2(0u);
     bool hasAddress = address.x != 0u || address.y != 0u;
     if (selected && hasAddress) {
+        instanceWords[outputBase + 3u] = floatBitsToUint(node.boundsMinAndLodError.x - params.sceneOrigin.x);
+        instanceWords[outputBase + 7u] = floatBitsToUint(node.boundsMinAndLodError.y - params.sceneOrigin.y);
+        instanceWords[outputBase + 11u] = floatBitsToUint(node.boundsMinAndLodError.z - params.sceneOrigin.z);
         instanceWords[outputBase + 12u] = node.draw.y & 0x00ffffffu
             | (TERRAIN_INSTANCE_MASK << 24u);
         instanceWords[outputBase + 14u] = address.x;

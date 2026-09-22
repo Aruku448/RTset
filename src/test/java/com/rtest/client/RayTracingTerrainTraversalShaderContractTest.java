@@ -55,7 +55,44 @@ public final class RayTracingTerrainTraversalShaderContractTest {
             Shaderc.shaderc_compile_options_release(options);
             Shaderc.shaderc_compiler_release(compiler);
         }
+        compileShaderResource("rtest/shaders/terrain_hiz.comp");
         System.out.println("Terrain traversal shader contract passed");
+    }
+
+    private static void compileShaderResource(String resource) {
+        String shader;
+        try (var stream = RayTracingTerrainTraversalShaderContractTest.class.getClassLoader()
+                .getResourceAsStream(resource)) {
+            if (stream == null) throw new AssertionError("shader resource is missing: " + resource);
+            shader = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException exception) {
+            throw new AssertionError("could not read shader resource: " + resource, exception);
+        }
+        long compiler = Shaderc.shaderc_compiler_initialize();
+        long options = Shaderc.shaderc_compile_options_initialize();
+        ByteBuffer sourceBytes = org.lwjgl.system.MemoryUtil.memUTF8(shader, false);
+        ByteBuffer fileName = org.lwjgl.system.MemoryUtil.memASCII(resource, true);
+        ByteBuffer entryPoint = org.lwjgl.system.MemoryUtil.memASCII("main", true);
+        long result = 0L;
+        try {
+            Shaderc.shaderc_compile_options_set_source_language(options, Shaderc.shaderc_source_language_glsl);
+            Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan,
+                Shaderc.shaderc_env_version_vulkan_1_2);
+            result = Shaderc.shaderc_compile_into_spv(compiler, sourceBytes,
+                Shaderc.shaderc_glsl_compute_shader, fileName, entryPoint, options);
+            if (Shaderc.shaderc_result_get_compilation_status(result)
+                    != Shaderc.shaderc_compilation_status_success) {
+                throw new AssertionError(resource + " compilation failed: "
+                    + Shaderc.shaderc_result_get_error_message(result));
+            }
+        } finally {
+            if (result != 0L) Shaderc.shaderc_result_release(result);
+            org.lwjgl.system.MemoryUtil.memFree(sourceBytes);
+            org.lwjgl.system.MemoryUtil.memFree(fileName);
+            org.lwjgl.system.MemoryUtil.memFree(entryPoint);
+            Shaderc.shaderc_compile_options_release(options);
+            Shaderc.shaderc_compiler_release(compiler);
+        }
     }
 
     private static void require(String source, String fragment) {

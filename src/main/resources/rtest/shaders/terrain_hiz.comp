@@ -1,0 +1,29 @@
+#version 460
+
+// Builds a conservative reversed-Z Hi-Z pyramid. The source contains 0.05/viewZ,
+// therefore the minimum of a 2x2 tile is the farthest surface in that tile.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 2) uniform sampler2D sourceDepth;
+layout(set = 0, binding = 5, r32f) uniform writeonly image2D targetDepth;
+
+layout(push_constant, std430) uniform HiZParameters {
+    uvec4 values; // source width, source height, reversed-Z(1), unused
+} params;
+
+void main() {
+    ivec2 destination = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 destinationSize = imageSize(targetDepth);
+    if (destination.x >= destinationSize.x || destination.y >= destinationSize.y) return;
+    ivec2 sourceSize = ivec2(params.values.xy);
+    ivec2 sourceOrigin = destination * 2;
+    float aggregate = 1.0;
+    for (int y = 0; y < 2; y++) {
+        for (int x = 0; x < 2; x++) {
+            ivec2 source = min(sourceOrigin + ivec2(x, y), sourceSize - ivec2(1));
+            float value = texelFetch(sourceDepth, source, 0).r;
+            if (isnan(value) || isinf(value)) value = 0.0;
+            aggregate = min(aggregate, value);
+        }
+    }
+    imageStore(targetDepth, destination, vec4(aggregate, 0.0, 0.0, 0.0));
+}

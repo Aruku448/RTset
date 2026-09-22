@@ -10,14 +10,15 @@ import java.util.Optional;
 /**
  * A Minecraft-independent cache for far-terrain RT proxies.
  *
- * <p>This is the RTest-native storage boundary for a later loaded-window extension. It stores
+ * <p>This is the RTest-native storage boundary for loaded-window retention. It stores
  * only immutable opaque coarse meshes and never retains a {@code ClientLevel}, a block state, a
  * renderer object, or any other Minecraft-owned value. Workers may build a mesh off-thread and
  * publish it through {@link #load(LoadRequest, OpaqueNodeMesh)}; publication and snapshotting are
  * atomic with respect to one another.</p>
  *
  * <p>The cache is deliberately a store, not a scene selector or a renderer integration. The
- * current {@link RayTracingProbe} path does not depend on it.</p>
+ * {@link RayTracingProbe} uses it only for already-seen opaque terrain; it is never a source of
+ * fabricated chunks or a replacement for native capture.</p>
  */
 public final class RayTracingTerrainProxyStore implements AutoCloseable {
     /** Opaque caller-owned identity. Values should be stable for the lifetime of a session. */
@@ -238,6 +239,22 @@ public final class RayTracingTerrainProxyStore implements AutoCloseable {
     public boolean retire(WorldIdentity identity, RayTracingTerrainLod.NodeKey nodeKey,
                           long generation, long sourceFingerprint) {
         return retire(request(identity, nodeKey, generation, sourceFingerprint));
+    }
+
+    /**
+     * Invalidates a node without requiring the caller to know the version currently in storage.
+     * This is used when a newly captured native window proves that an old proxy overlaps changed
+     * source data; an asynchronous replacement can subsequently publish the new fingerprint.
+     */
+    public boolean invalidate(WorldIdentity identity, RayTracingTerrainLod.NodeKey nodeKey) {
+        Objects.requireNonNull(identity, "identity");
+        Objects.requireNonNull(nodeKey, "nodeKey");
+        synchronized (lock) {
+            if (closed) return false;
+            boolean removed = entries.remove(new NodeId(identity, nodeKey)) != null;
+            if (removed) revision++;
+            return removed;
+        }
     }
 
     /** Removes every node for one world/dimension/session identity. */

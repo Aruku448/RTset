@@ -21,7 +21,8 @@ public final class RtestFsr3 implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int COMMON_USAGE = VK12.VK_IMAGE_USAGE_SAMPLED_BIT
             | VK12.VK_IMAGE_USAGE_STORAGE_BIT
-            | VK12.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            | VK12.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+            | VK12.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     private static final int DISPLAY_USAGE = VK12.VK_IMAGE_USAGE_STORAGE_BIT
             | VK12.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
@@ -29,6 +30,7 @@ public final class RtestFsr3 implements AutoCloseable {
     private final RtestVulkanImage sceneColor;
     private final RtestVulkanImage motion;
     private final RtestVulkanImage depth;
+    private final RtestVulkanImage terrainHiZ;
     private final RtestVulkanImage reactive;
     private final RtestVulkanImage transparency;
     private final RtestVulkanImage displayOutput;
@@ -56,13 +58,14 @@ public final class RtestFsr3 implements AutoCloseable {
 
     private RtestFsr3(RtestVulkanContext context, RtestVulkanImage sceneColor,
                      RtestVulkanImage motion, RtestVulkanImage depth,
-                     RtestVulkanImage reactive, RtestVulkanImage transparency,
+                     RtestVulkanImage terrainHiZ, RtestVulkanImage reactive, RtestVulkanImage transparency,
                      RtestVulkanImage displayOutput, RtestFsr3Upscaler upscaler,
                      NrdDenoiser nrd, SundialDenoiser sundial) {
         this.context = context;
         this.sceneColor = sceneColor;
         this.motion = motion;
         this.depth = depth;
+        this.terrainHiZ = terrainHiZ;
         this.reactive = reactive;
         this.transparency = transparency;
         this.displayOutput = displayOutput;
@@ -85,6 +88,12 @@ public final class RtestFsr3 implements AutoCloseable {
                     VK12.VK_FORMAT_R16G16_SFLOAT, COMMON_USAGE, "RTest FSR motion"));
             RtestVulkanImage depth = own(created, context.createImage2D(renderWidth, renderHeight,
                     VK12.VK_FORMAT_R32_SFLOAT, COMMON_USAGE, "RTest FSR depth"));
+            int terrainHiZLevels = 1 + (31 - Integer.numberOfLeadingZeros(Math.max(renderWidth, renderHeight)));
+            RtestVulkanImage terrainHiZ = own(created, context.createMipmappedImage2D(
+                    renderWidth, renderHeight, terrainHiZLevels, VK12.VK_FORMAT_R32_SFLOAT,
+                    VK12.VK_IMAGE_USAGE_SAMPLED_BIT | VK12.VK_IMAGE_USAGE_STORAGE_BIT
+                        | VK12.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    "RTest terrain Hi-Z"));
             RtestVulkanImage reactive = own(created, context.createImage2D(renderWidth, renderHeight,
                     VK12.VK_FORMAT_R8G8B8A8_UNORM, COMMON_USAGE, "RTest FSR reactive mask"));
             RtestVulkanImage transparency = own(created, context.createImage2D(renderWidth, renderHeight,
@@ -103,7 +112,7 @@ public final class RtestFsr3 implements AutoCloseable {
             RtestFsr3Upscaler upscaler = RtestFsr3Upscaler.create(
                     context, renderWidth, renderHeight, displayWidth, displayHeight,
                     qualityMode, scene, motion, depth, reactive, transparency, display);
-            return new RtestFsr3(context, scene, motion, depth, reactive, transparency,
+            return new RtestFsr3(context, scene, motion, depth, terrainHiZ, reactive, transparency,
                     display, upscaler, nrd, sundial);
         } catch (RuntimeException | Error exception) {
             if (sundial != null) {
@@ -158,6 +167,35 @@ public final class RtestFsr3 implements AutoCloseable {
 
     public long depthView() {
         return this.depth.view();
+    }
+
+    /** Image handle used by optional compute passes that read the previous depth history. */
+    public long depthImage() {
+        return this.depth.image();
+    }
+
+    public long terrainHiZImage() {
+        return this.terrainHiZ.image();
+    }
+
+    public long terrainHiZView() {
+        return this.terrainHiZ.view();
+    }
+
+    public long terrainHiZMipView(int level) {
+        return this.terrainHiZ.mipView(level);
+    }
+
+    public int terrainHiZMipLevels() {
+        return this.terrainHiZ.mipLevels();
+    }
+
+    public long terrainHiZWidth() {
+        return this.terrainHiZ.width();
+    }
+
+    public long terrainHiZHeight() {
+        return this.terrainHiZ.height();
     }
 
     public long reactiveView() {
@@ -355,6 +393,7 @@ public final class RtestFsr3 implements AutoCloseable {
         this.transparency.destroy();
         this.reactive.destroy();
         this.depth.destroy();
+        this.terrainHiZ.destroy();
         this.motion.destroy();
         this.sceneColor.destroy();
     }

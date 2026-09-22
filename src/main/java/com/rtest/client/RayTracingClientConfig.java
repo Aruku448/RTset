@@ -31,6 +31,9 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.IntValue terrainLodMaxLevel;
     public final ModConfigSpec.IntValue terrainLodBuildBudget;
     public final ModConfigSpec.IntValue terrainLodQueueLimit;
+    public final ModConfigSpec.BooleanValue terrainLodFarCacheEnabled;
+    public final ModConfigSpec.IntValue terrainLodFarRadiusChunks;
+    public final ModConfigSpec.BooleanValue terrainLodGpuTraversalEnabled;
     public final ModConfigSpec.BooleanValue pbrParallaxEnabled;
     public final ModConfigSpec.BooleanValue pbrEntityParallaxEnabled;
     public final ModConfigSpec.DoubleValue pbrParallaxDepth;
@@ -138,13 +141,22 @@ public final class RayTracingClientConfig {
             .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
         terrainLodMaxLevel = builder
             .comment("Maximum terrain LOD level: 1=32^3 blocks, 2=64^3 blocks.")
-            .defineInRange("terrainLodMaxLevel", 1, 1, 2);
+            .defineInRange("terrainLodMaxLevel", 2, 1, 2);
         terrainLodBuildBudget = builder
             .comment("Maximum number of terrain LOD builds started per frame.")
             .defineInRange("terrainLodBuildBudget", 1, 1, 8);
         terrainLodQueueLimit = builder
             .comment("Maximum queued terrain LOD builds.")
             .defineInRange("terrainLodQueueLimit", 32, 4, 256);
+        terrainLodFarCacheEnabled = builder
+            .comment("Retain immutable opaque terrain proxies after chunks leave the loaded client window. Unknown chunks are never fabricated.")
+            .define("terrainLodFarCacheEnabled", true);
+        terrainLodFarRadiusChunks = builder
+            .comment("Maximum camera distance for cached far-terrain proxies, in chunks.")
+            .defineInRange("terrainLodFarRadiusChunks", 64, 8, 256);
+        terrainLodGpuTraversalEnabled = builder
+            .comment("Use the experimental GPU terrain node/Hi-Z traversal to rewrite static TLAS instance masks before tracing.")
+            .define("terrainLodGpuTraversalEnabled", false);
         pbrParallaxEnabled = builder
             .comment("Enable RT parallax occlusion mapping from the normal companion alpha channel.")
             .define("pbrParallaxEnabled", true);

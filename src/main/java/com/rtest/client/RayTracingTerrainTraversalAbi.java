@@ -251,11 +251,20 @@ public final class RayTracingTerrainTraversalAbi {
 
     /** Projects a closed world-space AABB using a column-major Vulkan clip matrix. */
     public static ScreenRect projectBounds(Bounds bounds, float[] viewProjection) {
-        if (bounds == null || viewProjection == null || viewProjection.length != 16) {
-            throw new IllegalArgumentException("viewProjection must contain 16 floats");
+        return projectBounds(bounds, viewProjection, DepthConvention.FORWARD_Z);
+    }
+
+    /** Projects an AABB while keeping the nearest depth consistent with the Hi-Z convention. */
+    public static ScreenRect projectBounds(Bounds bounds, float[] viewProjection,
+                                           DepthConvention convention) {
+        if (bounds == null || viewProjection == null || viewProjection.length != 16
+                || convention == null) {
+            throw new IllegalArgumentException("viewProjection and depth convention are required");
         }
         float minX = 1.0F, minY = 1.0F, maxX = 0.0F, maxY = 0.0F;
-        float depthNear = 1.0F, depthFar = 0.0F;
+        boolean reversed = convention == DepthConvention.REVERSED_Z;
+        float depthNear = reversed ? 0.0F : 1.0F;
+        float depthFar = reversed ? 1.0F : 0.0F;
         boolean behindNearPlane = false;
         for (int i = 0; i < 8; i++) {
             float x = ((i & 1) == 0) ? bounds.minX() : bounds.maxX();
@@ -276,11 +285,18 @@ public final class RayTracingTerrainTraversalAbi {
             maxX = Math.max(maxX, ndcX * 0.5F + 0.5F);
             minY = Math.min(minY, 0.5F - ndcY * 0.5F);
             maxY = Math.max(maxY, 0.5F - ndcY * 0.5F);
-            depthNear = Math.min(depthNear, ndcZ);
-            depthFar = Math.max(depthFar, ndcZ);
+            if (reversed) {
+                depthNear = Math.max(depthNear, ndcZ);
+                depthFar = Math.min(depthFar, ndcZ);
+            } else {
+                depthNear = Math.min(depthNear, ndcZ);
+                depthFar = Math.max(depthFar, ndcZ);
+            }
         }
         if (behindNearPlane) {
-            return new ScreenRect(0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 1.0F, true);
+            return reversed
+                ? new ScreenRect(0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.0F, true)
+                : new ScreenRect(0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 1.0F, true);
         }
         boolean intersects = maxX >= 0.0F && minX <= 1.0F && maxY >= 0.0F && minY <= 1.0F
                 && depthFar >= 0.0F && depthNear <= 1.0F;
