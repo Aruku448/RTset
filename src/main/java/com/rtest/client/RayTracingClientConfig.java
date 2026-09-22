@@ -26,6 +26,11 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue pbrEmissionStrength;
     public final ModConfigSpec.BooleanValue pbrPredefinedMetalsEnabled;
     public final ModConfigSpec.BooleanValue pbrTerrainCpuCaptureEnabled;
+    public final ModConfigSpec.BooleanValue terrainLodEnabled;
+    public final ModConfigSpec.IntValue terrainLodNativeRadiusChunks;
+    public final ModConfigSpec.IntValue terrainLodMaxLevel;
+    public final ModConfigSpec.IntValue terrainLodBuildBudget;
+    public final ModConfigSpec.IntValue terrainLodQueueLimit;
     public final ModConfigSpec.BooleanValue pbrParallaxEnabled;
     public final ModConfigSpec.BooleanValue pbrEntityParallaxEnabled;
     public final ModConfigSpec.DoubleValue pbrParallaxDepth;
@@ -125,6 +130,21 @@ public final class RayTracingClientConfig {
         pbrTerrainCpuCaptureEnabled = builder
             .comment("Capture terrain through block sprites so PBR companion maps retain their material IDs.")
             .define("pbrTerrainCpuCaptureEnabled", true);
+        terrainLodEnabled = builder
+            .comment("Enable MVP terrain LOD; only opaque static terrain is supported. Transparent, fluid, emissive, and dynamic entity geometry is never degraded.")
+            .define("terrainLodEnabled", false);
+        terrainLodNativeRadiusChunks = builder
+            .comment("Native-detail radius around the camera for terrain LOD, in chunks.")
+            .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
+        terrainLodMaxLevel = builder
+            .comment("Maximum terrain LOD level; 1=coarse, 2=coarser.")
+            .defineInRange("terrainLodMaxLevel", 1, 1, 2);
+        terrainLodBuildBudget = builder
+            .comment("Maximum number of terrain LOD builds started per frame.")
+            .defineInRange("terrainLodBuildBudget", 1, 1, 8);
+        terrainLodQueueLimit = builder
+            .comment("Maximum queued terrain LOD builds.")
+            .defineInRange("terrainLodQueueLimit", 32, 4, 256);
         pbrParallaxEnabled = builder
             .comment("Enable RT parallax occlusion mapping from the normal companion alpha channel.")
             .define("pbrParallaxEnabled", true);
