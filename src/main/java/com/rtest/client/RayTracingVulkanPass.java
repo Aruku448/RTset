@@ -280,7 +280,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private int pendingFrameTimingFrame;
         private int pendingFrameGpuIndex;
         private boolean closed;
-        private static final int GPU_TIMESTAMP_COUNT = 4;
+        // 0..3 retain RT/post/total timing; 4..5 bracket the optional terrain traversal.
+        private static final int GPU_TIMESTAMP_COUNT = 6;
         private final long gpuTimestampQueryPool;
         private final double gpuTimestampPeriodNs;
         private final boolean gpuTimestampsAvailable;
@@ -2508,12 +2509,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 double[] gpuMilliseconds = readGpuTimestamps(stack);
                 if (gpuMilliseconds != null && this.pendingFrameGpuIndex % 120 == 0) {
                     LOGGER.info(
-                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} period_ns={}",
+                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={}",
                         this.pendingFrameGpuIndex,
                         formatGpuMs(gpuMilliseconds[0]),
                         formatGpuMs(gpuMilliseconds[1]),
                         formatGpuMs(gpuMilliseconds[2]),
+                        formatGpuMs(gpuMilliseconds[3]),
                         gpuTimestampPeriodNs);
+                }
+                if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
+                    logTerrainTraversalStats(this.pendingFrameGpuIndex);
                 }
                 // The center-pixel readback is diagnostic only and is intentionally performed
                 // after the fence, never while the current submission is still writing output.
@@ -3037,6 +3042,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 && !fsrToken.reset() && !fsrToken.cameraCut();
             boolean terrainTraversalMaskReset = this.terrainTraversalEnabled
                 && this.terrainTraversalPrimed && !terrainHistoryUsable;
+            writeGpuTimestamp(commandBuffer, 4, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             if (this.terrainTraversalEnabled && !terrainHistoryUsable) {
                 // A reset/cut invalidates the depth history just like it invalidates FSR/NRD;
                 // rebuilding Hi-Z from an old view could reject a newly visible node.
@@ -3092,6 +3098,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                     VK12.VK_ACCESS_SHADER_READ_BIT);
             }
+            writeGpuTimestamp(commandBuffer, 5,
+                KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
             VK10.vkCmdBindPipeline(commandBuffer, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VK10.vkCmdBindDescriptorSets(
@@ -3171,6 +3179,38 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
         }
 
+        private void logTerrainTraversalStats(int frame) {
+            long triangleCount = 0L;
+            long vertexBytes = 0L;
+            long blasStorageBytes = 0L;
+            int coarseSections = 0;
+            for (SceneGeometry.SectionGeometry section : this.geometry.sections) {
+                triangleCount += section.triangleCount();
+                if (section.terrainNodeKey().level() > 0) coarseSections++;
+            }
+            for (CachedBlas cached : this.sectionBlas) {
+                vertexBytes += cached.vertexBuffer.size;
+                blasStorageBytes += cached.bottomLevel.storage.size;
+            }
+            long tlasStorageBytes = this.topLevel == null ? 0L : this.topLevel.storage.size;
+            LOGGER.info(
+                "RTest terrain traversal stats: frame={} nodes={} coarse_sections={} native_sections={} triangles={} "
+                    + "blas_storage_bytes={} tlas_storage_bytes={} instance_bytes={} metadata_bytes={} address_bytes={} "
+                    + "hiz={}x{} mips={} dynamic_slots={}",
+                frame,
+                this.terrainTraversalNodeCount,
+                coarseSections,
+                this.geometry.sections.size() - coarseSections,
+                triangleCount,
+                blasStorageBytes,
+                tlasStorageBytes,
+                this.instanceBuffer == null ? 0L : this.instanceBuffer.size,
+                this.terrainNodeMetadataBuffer == null ? 0L : this.terrainNodeMetadataBuffer.size,
+                this.terrainBlasAddressBuffer == null ? 0L : this.terrainBlasAddressBuffer.size,
+                this.fsr.terrainHiZWidth(), this.fsr.terrainHiZHeight(), this.fsr.terrainHiZMipLevels(),
+                this.dynamicSlotCapacity);
+        }
+
         private void writeGpuTimestamp(VkCommandBuffer commandBuffer, int queryIndex, int stageMask) {
             if (gpuTimestampsAvailable) {
                 VK10.vkCmdWriteTimestamp(commandBuffer, stageMask, gpuTimestampQueryPool, queryIndex);
@@ -3189,10 +3229,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[3];
+            double[] milliseconds = new double[4];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
+            milliseconds[3] = this.terrainTraversalEnabled
+                ? (values.get(5) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0 : 0.0;
             return milliseconds;
         }
 
