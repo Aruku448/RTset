@@ -85,6 +85,8 @@ public final class RayTracingProbe {
     private static int terrainLodCameraChunkZ;
     private static boolean terrainLodSelectionValid;
     private static long terrainLodWindowGeneration;
+    private static long terrainLodDiagnosticFrame;
+    private static boolean terrainLodFarProxyActive;
     private static RayTracingScene.SceneGeometry.CaptureSession captureSession;
     /**
      * Geometry finalization is deliberately serialized. Capture still advances on the render
@@ -1275,12 +1277,17 @@ public final class RayTracingProbe {
         compositionNeeded |= !terrainLodSelected.equals(previousSelected);
 
         int submitted = 0;
+        int nativeRadiusSkipped = 0;
+        boolean hasFarProxy = false;
         for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
             long id = entry.getKey();
             if (terrainLodBlocked.contains(id) || terrainLodPending.contains(id) || terrainLodResults.containsKey(id)) continue;
             RayTracingTerrainLod.NodeKey key = terrainLodKeyFromId(id);
             double distance = distanceToNode(key, camera);
-            if (distance < radius * 16.0) continue;
+            if (distance < radius * 16.0) {
+                nativeRadiusSkipped++;
+                continue;
+            }
             long fingerprint = terrainLodFingerprints.getOrDefault(id, 0L);
             RayTracingTerrainLodScheduler.Request request = terrainLodScheduler.request(
                 new RayTracingTerrainLodScheduler.NodeKey(id), sceneGeneration, terrainLodWindowGeneration,
@@ -1293,7 +1300,10 @@ public final class RayTracingProbe {
             terrainLodPending.add(id);
             submitted++;
         }
+        long diagnosticFrame = ++terrainLodDiagnosticFrame;
         if (!compositionNeeded) {
+            logTerrainLodState(diagnosticFrame, radius, maxLevel, gpuTraversalEnabled,
+                nativeRadiusSkipped, availableTerrainNodes, selection, terrainLodFarProxyActive, submitted);
             return;
         }
         List<RayTracingScene.SceneGeometry.SectionGeometry> nativeSections = new ArrayList<>();
@@ -1314,7 +1324,6 @@ public final class RayTracingProbe {
             }
             if (!covered) nativeSections.add(section);
         }
-        boolean hasFarProxy = false;
         if (gpuTraversalEnabled) {
             // GPU traversal receives the complete candidate set. Its parent links and Hi-Z test
             // perform the final mutually-exclusive cut; keeping the native sections resident is
@@ -1350,6 +1359,54 @@ public final class RayTracingProbe {
             : RayTracingScene.SceneGeometry.compose(nativeSections, coarseSections, smokeGeometry,
                 hasFarProxy ? Math.max(smokeGeometry.renderDistanceChunks, farRadius)
                     : smokeGeometry.renderDistanceChunks);
+        terrainLodFarProxyActive = hasFarProxy;
+        logTerrainLodState(diagnosticFrame, radius, maxLevel, gpuTraversalEnabled,
+            nativeRadiusSkipped, availableTerrainNodes, selection, hasFarProxy, submitted);
+    }
+
+    /**
+     * Reports the CPU cut separately from the Vulkan pass's final geometry counts. In GPU mode
+     * the native sections are intentionally retained as candidates, so coarse_sections alone
+     * cannot tell whether a CPU node was ready or selected.
+     */
+    private static void logTerrainLodState(
+            long frame, int radius, int maxLevel, boolean gpuTraversalEnabled,
+            int nativeRadiusSkipped, Map<Long, RayTracingTerrainLod.Node> availableNodes,
+            RayTracingTerrainLod.Selection selection, boolean hasFarProxy, int submitted) {
+        if (frame % 120L != 0L) return;
+        int readyNodes = 0;
+        int levelOneReady = 0;
+        int levelTwoReady = 0;
+        for (RayTracingTerrainLod.Node node : availableNodes.values()) {
+            if (!node.ready() || node.key().level() == 0) continue;
+            readyNodes++;
+            if (node.key().level() == 1) levelOneReady++;
+            if (node.key().level() == 2) levelTwoReady++;
+        }
+        int selectedLevelOne = 0;
+        int selectedLevelTwo = 0;
+        for (RayTracingTerrainLod.NodeKey key : selection.nodes()) {
+            if (key.level() == 1) selectedLevelOne++;
+            if (key.level() == 2) selectedLevelTwo++;
+        }
+        int activeCoarse = 0;
+        if (activeGeometry != null) {
+            for (RayTracingScene.SceneGeometry.SectionGeometry section : activeGeometry.sections) {
+                if (section.terrainNodeKey().level() > 0) activeCoarse++;
+            }
+        }
+        LOGGER.info(
+            "RTest terrain LOD: frame={} radius_chunks={} max_level={} gpu={} source_sections={} "
+                + "hierarchy_nodes={} ready_nodes={} ready_l1={} ready_l2={} selected_l1={} selected_l2={} "
+                + "native_fallbacks={} native_radius_skipped={} submitted={} pending={} blocked={} "
+                + "active_native={} active_coarse={} far_proxy={}",
+            frame, radius, maxLevel, gpuTraversalEnabled,
+            terrainLodSourceGeometry == null ? 0 : terrainLodSourceGeometry.sections.size(),
+            terrainLodHierarchyKeys.size(), readyNodes, levelOneReady, levelTwoReady,
+            selectedLevelOne, selectedLevelTwo, selection.nativeFallbacks().size(), nativeRadiusSkipped,
+            submitted, terrainLodPending.size(), terrainLodBlocked.size(),
+            activeGeometry == null ? 0 : activeGeometry.sections.size() - activeCoarse,
+            activeCoarse, hasFarProxy);
     }
 
     private static boolean isOpaqueSection(RayTracingScene.SceneGeometry.SectionGeometry section) {
@@ -1493,6 +1550,8 @@ public final class RayTracingProbe {
         terrainLodSelectionValid = false;
         terrainLodSourceGeometry = null;
         terrainLodSceneGeneration = Long.MIN_VALUE;
+        terrainLodDiagnosticFrame = 0L;
+        terrainLodFarProxyActive = false;
     }
 
     private static int cameraChunkX(Camera camera) {
