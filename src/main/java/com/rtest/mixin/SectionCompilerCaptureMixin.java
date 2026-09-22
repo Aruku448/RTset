@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.chunk.SectionCompiler;
 import net.minecraft.core.SectionPos;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
@@ -15,6 +16,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /** Copies vanilla terrain mesh data before the asynchronous compiler releases it. */
 @Mixin(SectionCompiler.class)
 public final class SectionCompilerCaptureMixin {
+    @Unique
+    private final ThreadLocal<CompiledSectionMeshCache.CompilationToken> rtest$compileToken = new ThreadLocal<>();
+
+    @Inject(method = "compile(Lnet/minecraft/core/SectionPos;Lnet/minecraft/client/renderer/chunk/RenderSectionRegion;Lcom/mojang/blaze3d/vertex/VertexSorting;Lnet/minecraft/client/renderer/SectionBufferBuilderPack;Ljava/util/List;)Lnet/minecraft/client/renderer/chunk/SectionCompiler$Results;", at = @At("HEAD"))
+    private void rtest$beginCapture(
+            SectionPos sectionPos,
+            RenderSectionRegion region,
+            VertexSorting vertexSorting,
+            SectionBufferBuilderPack builders,
+            List<?> additionalRenderers,
+            CallbackInfoReturnable<SectionCompiler.Results> callbackInfo) {
+        this.rtest$compileToken.set(CompiledSectionMeshCache.beginCompile(sectionPos));
+    }
+
     @Inject(method = "compile(Lnet/minecraft/core/SectionPos;Lnet/minecraft/client/renderer/chunk/RenderSectionRegion;Lcom/mojang/blaze3d/vertex/VertexSorting;Lnet/minecraft/client/renderer/SectionBufferBuilderPack;Ljava/util/List;)Lnet/minecraft/client/renderer/chunk/SectionCompiler$Results;", at = @At("RETURN"))
     private void rtest$captureCompiledMesh(
             SectionPos sectionPos,
@@ -23,6 +38,10 @@ public final class SectionCompilerCaptureMixin {
             SectionBufferBuilderPack builders,
             List<?> additionalRenderers,
             CallbackInfoReturnable<SectionCompiler.Results> callbackInfo) {
-        CompiledSectionMeshCache.publish(sectionPos, callbackInfo.getReturnValue());
+        CompiledSectionMeshCache.CompilationToken token = this.rtest$compileToken.get();
+        this.rtest$compileToken.remove();
+        if (token != null) {
+            CompiledSectionMeshCache.publish(token, callbackInfo.getReturnValue());
+        }
     }
 }

@@ -30,28 +30,68 @@ public final class CompiledSectionMeshCache {
     // several megabytes of primitive arrays. Bound the actual Java heap footprint as well.
     private static final long MAX_BYTES = 256L * 1024L * 1024L;
     private static final Map<Long, CompiledMesh> MESHES = new LinkedHashMap<>(256, 0.75f, true);
+    private static final Map<Long, Long> GENERATIONS = new java.util.HashMap<>();
+    private static long globalGeneration;
     private static long cachedBytes;
 
     private CompiledSectionMeshCache() {
     }
 
-    public static void publish(SectionPos sectionPos, Results results) {
-        CompiledMesh mesh = CompiledMesh.from(results);
+    /** Captures the generation that a SectionCompiler invocation is allowed to publish. */
+    public static CompilationToken beginCompile(SectionPos sectionPos) {
         long key = sectionPos.asLong();
         synchronized (CompiledSectionMeshCache.class) {
-            CompiledMesh previous = MESHES.remove(key);
-            if (previous != null) {
-                cachedBytes -= previous.byteSize();
+            return new CompilationToken(key, globalGeneration, GENERATIONS.getOrDefault(key, 0L));
+        }
+    }
+
+    /**
+     * Publishes a compiler result only if no invalidation happened since {@link #beginCompile}.
+     */
+    public static void publish(CompilationToken token, Results results) {
+        CompiledMesh mesh = CompiledMesh.from(results);
+        synchronized (CompiledSectionMeshCache.class) {
+            if (token.globalGeneration != globalGeneration
+                    || token.sectionGeneration != GENERATIONS.getOrDefault(token.sectionKey, 0L)) {
+                return;
             }
-            if (mesh != null) {
-                MESHES.put(key, mesh);
-                cachedBytes += mesh.byteSize();
-                while (MESHES.size() > MAX_ENTRIES || cachedBytes > MAX_BYTES) {
-                    var eldest = MESHES.entrySet().iterator().next();
-                    cachedBytes -= eldest.getValue().byteSize();
-                    MESHES.remove(eldest.getKey());
-                }
+            publishLocked(token.sectionKey, mesh);
+        }
+    }
+
+    /** Retained for callers that publish an already-current result directly. */
+    public static void publish(SectionPos sectionPos, Results results) {
+        CompiledMesh mesh = CompiledMesh.from(results);
+        synchronized (CompiledSectionMeshCache.class) {
+            publishLocked(sectionPos.asLong(), mesh);
+        }
+    }
+
+    private static void publishLocked(long key, CompiledMesh mesh) {
+        CompiledMesh previous = MESHES.remove(key);
+        if (previous != null) {
+            cachedBytes -= previous.byteSize();
+        }
+        if (mesh != null) {
+            MESHES.put(key, mesh);
+            cachedBytes += mesh.byteSize();
+            while (MESHES.size() > MAX_ENTRIES || cachedBytes > MAX_BYTES) {
+                var eldest = MESHES.entrySet().iterator().next();
+                cachedBytes -= eldest.getValue().byteSize();
+                MESHES.remove(eldest.getKey());
             }
+        }
+    }
+
+    public static final class CompilationToken {
+        private final long sectionKey;
+        private final long globalGeneration;
+        private final long sectionGeneration;
+
+        private CompilationToken(long sectionKey, long globalGeneration, long sectionGeneration) {
+            this.sectionKey = sectionKey;
+            this.globalGeneration = globalGeneration;
+            this.sectionGeneration = sectionGeneration;
         }
     }
 
@@ -60,19 +100,28 @@ public final class CompiledSectionMeshCache {
     }
 
     static synchronized void invalidate(BlockPos origin) {
-        remove(SectionPos.asLong(origin));
+        long key = SectionPos.asLong(origin);
+        advanceGeneration(key);
+        remove(key);
     }
 
     /** Invalidates one chunk without throwing away compiled meshes from unrelated chunks. */
     static synchronized void invalidateChunk(ChunkPos chunkPos, int minSectionY, int maxSectionY) {
         for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
-            remove(SectionPos.asLong(chunkPos.x(), sectionY, chunkPos.z()));
+            long key = SectionPos.asLong(chunkPos.x(), sectionY, chunkPos.z());
+            advanceGeneration(key);
+            remove(key);
         }
     }
 
     public static synchronized void invalidateAll() {
+        globalGeneration++;
         MESHES.clear();
         cachedBytes = 0L;
+    }
+
+    private static void advanceGeneration(long key) {
+        GENERATIONS.put(key, GENERATIONS.getOrDefault(key, 0L) + 1L);
     }
 
     private static void remove(long key) {
