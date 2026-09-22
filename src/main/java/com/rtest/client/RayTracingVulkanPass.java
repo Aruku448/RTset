@@ -109,6 +109,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
     final class RayTracingVulkanPass implements AutoCloseable {
         private static final Logger LOGGER = LogUtils.getLogger();
+        private enum TemporalResetReason {
+            GEOMETRY_PUBLICATION
+        }
+
         /**
          * Block-entity identities whose captured geometry reached the TLAS in the last dispatched
          * frame. Everything else has no RT pixels and is replayed as vanilla raster after the copy.
@@ -1329,8 +1333,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 oldPbr.close();
             }
             LOGGER.info(
-                "RTest geometry publish: oldSections={}, newSections={}, reuseInstance={}, reuseMaterial={}, reuseTopLevel={}, duration={} ms",
-                previousSectionCount, nextBlas.size(), reuseInstance, reuseMaterial, reuseTopLevel,
+                "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, temporalReset={}, resetReason={}, duration={} ms",
+                previousSectionCount, nextBlas.size(), reuseTopLevel, !reuseInstance, !reuseMaterial,
+                true, TemporalResetReason.GEOMETRY_PUBLICATION,
                 (System.nanoTime() - startNanos) / 1_000_000L);
         }
 
