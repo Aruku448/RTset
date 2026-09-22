@@ -188,6 +188,24 @@ public final class RayTracingScene {
                 return this.triangleCount;
             }
 
+            static SectionGeometry coarse(RayTracingTerrainLod.Node node) {
+                RayTracingTerrainLod.Mesh mesh = node.mesh();
+                if (mesh == null || mesh.triangleCount() == 0) {
+                    return null;
+                }
+                RayTracingTerrainLod.Bounds bounds = node.bounds();
+                int ox = (int) bounds.minX();
+                int oy = (int) bounds.minY();
+                int oz = (int) bounds.minZ();
+                float[] world = mesh.vertices();
+                for (int i = 0; i < world.length; i += 3) {
+                    world[i] -= ox;
+                    world[i + 1] -= oy;
+                    world[i + 2] -= oz;
+                }
+                return new SectionGeometry(ox, oy, oz, world, mesh.materialData());
+            }
+
             int vertexFingerprint() {
                 return this.vertexFingerprint;
             }
@@ -331,6 +349,35 @@ public final class RayTracingScene {
 
         public int triangleCount() {
             return this.triangleCount;
+        }
+
+        /** Builds an immutable render snapshot from native sections and disjoint coarse nodes. */
+        static SceneGeometry compose(List<SectionGeometry> nativeSections,
+                                     List<SectionGeometry> coarseSections,
+                                     SceneGeometry source) {
+            List<SectionGeometry> sections = new ArrayList<>(nativeSections.size() + coarseSections.size());
+            sections.addAll(nativeSections);
+            sections.addAll(coarseSections);
+            int vertexLength = 0;
+            int materialLength = 0;
+            for (SectionGeometry section : sections) {
+                vertexLength = Math.addExact(vertexLength, section.vertices.length);
+                materialLength = Math.addExact(materialLength, section.materialData.length);
+            }
+            float[] vertices = new float[vertexLength];
+            float[] materials = new float[materialLength];
+            int vo = 0;
+            int mo = 0;
+            for (SectionGeometry section : sections) {
+                System.arraycopy(section.vertices, 0, vertices, vo, section.vertices.length);
+                System.arraycopy(section.materialData, 0, materials, mo, section.materialData.length);
+                vo += section.vertices.length;
+                mo += section.materialData.length;
+            }
+            return new SceneGeometry(sections, vertices, materials, source.pbrData,
+                vertices.length / 9, source.renderDistanceChunks,
+                source.originX, source.originY, source.originZ, false,
+                NEXT_REVISION.incrementAndGet(), true, false);
         }
 
         /**
