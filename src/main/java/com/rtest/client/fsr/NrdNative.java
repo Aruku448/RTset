@@ -21,7 +21,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.SharedLibrary;
 
 /**
- * Stable Java binding for Prime's narrow NRD Core bridge.
+ * Stable Java binding for this project's narrow NRD Core bridge.
  *
  * <p>The bundled native library contains NRD's API-independent scheduler and SPIR-V only. It never
  * receives a Vulkan handle: resource ownership, command recording and synchronization remain on
@@ -77,10 +77,10 @@ public final class NrdNative {
             int abiVersion = JNI.invokeI(getAbiVersionFunction);
             if (abiVersion != ABI_VERSION) {
                 throw new IllegalStateException(
-                        "Prime NRD bridge ABI mismatch: expected " + ABI_VERSION + ", found " + abiVersion);
+                        "RTest NRD bridge ABI mismatch: expected " + ABI_VERSION + ", found " + abiVersion);
             }
         } catch (RuntimeException | Error exception) {
-            // A malformed/incompatible library must not remain dlopen'ed after Holder fails.
+            // A malformed/incompatible library must not remain dlopen'ed after initialization fails.
             this.library.close();
             throw exception;
         }
@@ -97,8 +97,8 @@ public final class NrdNative {
         try {
             return Holder.INSTANCE.createInstance(width, height, denoiserKind);
         } catch (LinkageError error) {
-            // Static native loading failures are Errors by default and would bypass Prime's
-            // RuntimeException-based vanilla fallback. Normalize them at this private boundary.
+            // Static native loading failures are Errors by default and would bypass the Java-side
+            // RuntimeException fallback. Normalize them at this private boundary.
             throw new IllegalStateException("Unable to load the bundled NRD native library", error);
         }
     }

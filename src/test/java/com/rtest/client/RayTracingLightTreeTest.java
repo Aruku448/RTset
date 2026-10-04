@@ -63,6 +63,21 @@ public final class RayTracingLightTreeTest {
         int redEmitter = redData.words()[4];
         assertClose((float)Math.PI * 0.5F,
             Float.intBitsToFloat(redData.words()[redEmitter + 11]), "tinted emitter power");
+
+        float[] darkMaterial = material(1.0F, 1.0F, 1.0F, 0.0F);
+        RayTracingScene.SceneGeometry.SectionGeometry darkSection =
+            constructor.newInstance(0, 0, 0, vertices, darkMaterial);
+        RayTracingScene.SceneGeometry.SectionGeometry offsetSection =
+            constructor.newInstance(16, 0, 0, vertices, materials);
+        RayTracingLightTree.Data offsetData = RayTracingLightTree.build(
+            List.of(darkSection, offsetSection), new float[56], 0.0, 0.0, 0.0);
+        int[] offsetWords = offsetData.words();
+        int offsetEmitter = offsetWords[4];
+        if (offsetWords[offsetEmitter + 15] != 1
+                || offsetWords[offsetWords[6]] != -1
+                || offsetWords[offsetWords[6] + 1] != 0) {
+            throw new AssertionError("section-local emitter cache lost the global triangle index");
+        }
         System.out.println("RayTracingLightTree tests passed");
     }
 

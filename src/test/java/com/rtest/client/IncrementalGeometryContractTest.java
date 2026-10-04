@@ -72,21 +72,23 @@ public final class IncrementalGeometryContractTest {
         require(merge, "merged.put(sectionOriginKey(section), section);");
         require(merge, "merged.remove(origin);");
         require(merge, "merged.put(sectionOriginKey(section), section);");
-        require(merge, "System.arraycopy(section.vertices, 0, vertices, vertexOffset, section.vertices.length);");
-        require(merge, "System.arraycopy(section.materialData, 0, materials, materialOffset, section.materialData.length);");
+        require(merge, "sectionTriangleCount(mergedSections)");
+        require(merge, "new float[0],");
+        reject(merge, "System.arraycopy(section.vertices");
+        reject(merge, "System.arraycopy(section.materialData");
         require(merge, "this.revision,");
         require(merge, "true,\n                false");
     }
 
     private static void assertGeometryPublicationResetsTemporalHistory(String source) {
         int start = source.indexOf("void updateGeometry(SceneGeometry nextGeometry");
-        int end = source.indexOf("// Player body overlays", start);
+        int end = source.indexOf("private void updateLivingEntityTextureDescriptors", start);
         if (start < 0 || end < 0) {
             throw new AssertionError("geometry publication contract is missing");
         }
         String publish = source.substring(start, end);
         require(publish, "this.geometry = nextGeometry;");
-        require(publish, "this.dynamicHistoryResetPending = true;");
+        require(publish, "this.dynamicInstances.markHistoryResetPending();");
         require(publish, "this.fsr.requestReset();");
         require(publish, "RTest geometry publish:");
     }
@@ -98,6 +100,12 @@ public final class IncrementalGeometryContractTest {
     private static void require(String source, String fragment) {
         if (!source.contains(fragment)) {
             throw new AssertionError("incremental geometry contract is missing: " + fragment);
+        }
+    }
+
+    private static void reject(String source, String fragment) {
+        if (source.contains(fragment)) {
+            throw new AssertionError("incremental geometry contains redundant scene flattening: " + fragment);
         }
     }
 }

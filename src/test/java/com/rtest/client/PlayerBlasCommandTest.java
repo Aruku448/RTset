@@ -8,8 +8,8 @@ public final class PlayerBlasCommandTest {
     public static void main(String[] args) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             for (boolean topLevel : new boolean[] {false, true}) {
-                var build = RayTracingVulkanPass.AccelerationStructure.buildInfo(stack, 123L, 456L, 768L, 144, topLevel, false).get(0);
-                var update = RayTracingVulkanPass.AccelerationStructure.buildInfo(stack, 123L, 456L, 768L, 144, topLevel, true).get(0);
+                var build = AccelerationStructure.buildInfo(stack, 123L, 456L, 768L, 144, topLevel, false).get(0);
+                var update = AccelerationStructure.buildInfo(stack, 123L, 456L, 768L, 144, topLevel, true).get(0);
                 if (build.srcAccelerationStructure() != 0 || update.srcAccelerationStructure() != 123L
                     || update.dstAccelerationStructure() != 123L) {
                     throw new AssertionError("In-place UPDATE must name the existing source AS");

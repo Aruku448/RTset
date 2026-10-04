@@ -45,6 +45,7 @@ public abstract class LevelRendererMixin {
         CallbackInfo callbackInfo) {
         final boolean cancelVanilla;
         try {
+            RayTracingProbe.setFrameCullFrustum(cameraState.cullFrustum);
             RayTracingProbe.captureParticles(this.levelRenderState.particlesRenderState);
             RayTracingProbe.prepareLevelRender();
             cancelVanilla = RayTracingProbe.shouldCancelVanillaLevelRenderer();

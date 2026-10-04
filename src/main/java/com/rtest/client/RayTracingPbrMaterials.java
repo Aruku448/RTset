@@ -193,7 +193,7 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
             int info = metadataOffsetForSlot(map.index);
             packed[info] = map.normalOffset;
             packed[info + 1] = map.specularOffset;
-            packed[info + 2] = map.normal == null ? 0 : map.normal.getWidth();
+            packed[info + 2] = map.normalWidthAndFlags;
             packed[info + 3] = map.normal == null ? 0 : map.normal.getHeight();
             packed[info + 4] = map.specular == null ? 0 : map.specular.getWidth();
             packed[info + 5] = map.specular == null ? 0 : map.specular.getHeight();
@@ -431,11 +431,24 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
         }
     }
 
+    // The complete image includes every animated frame; alpha 0/255 both decode to height 1.
+    static boolean hasFlatDecodedHeight(NativeImage image) {
+        if (image == null) return true;
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                int alpha = (image.getPixel(x, y) >>> 24) & 0xff;
+                if (alpha != 0 && alpha != 255) return false;
+            }
+        }
+        return true;
+    }
+
     private static final class PbrMap implements AutoCloseable {
         private final int index;
         private final NativeImage normal;
         private final NativeImage specular;
         private final int normalOffset;
+        private final int normalWidthAndFlags;
         private final int specularOffset;
         private final float atlasU0;
         private final float atlasU1;
@@ -449,6 +462,8 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
             this.normal = normal;
             this.specular = specular;
             this.normalOffset = normalOffset;
+            this.normalWidthAndFlags = normal == null ? 0 : (normal.getWidth()
+                | (hasFlatDecodedHeight(normal) ? 0x80000000 : 0));
             this.specularOffset = specularOffset;
             this.atlasU0 = atlasU0;
             this.atlasU1 = atlasU1;
@@ -464,7 +479,7 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
                 new int[] {
                     this.normalOffset,
                     this.specularOffset,
-                    this.normal == null ? 0 : this.normal.getWidth(),
+                    this.normalWidthAndFlags,
                     this.normal == null ? 0 : this.normal.getHeight(),
                     this.specular == null ? 0 : this.specular.getWidth(),
                     this.specular == null ? 0 : this.specular.getHeight(),

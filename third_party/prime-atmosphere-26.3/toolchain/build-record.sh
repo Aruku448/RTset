@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+git -C /tmp/prime-slang-exact-84792eb15-source submodule update --init --depth 1 --jobs 4 external/glslang external/spirv-tools
+cmake -S /tmp/prime-slang-exact-84792eb15-source -B /tmp/prime-slang-exact-84792eb15/build -G 'Unix Makefiles' \
+ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+ -DSLANG_LIB_TYPE=SHARED -DSLANG_ENABLE_SLANGC=ON \
+ -DSLANG_ENABLE_TESTS=OFF -DSLANG_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=OFF \
+ -DSLANG_ENABLE_GFX=OFF -DSLANG_ENABLE_SLANG_RHI=OFF -DSLANG_ENABLE_SLANGD=OFF \
+ -DSLANG_ENABLE_SLANGI=OFF -DSLANG_ENABLE_SLANGRT=OFF -DSLANG_ENABLE_REPLAYER=OFF \
+ -DSLANG_ENABLE_SLANG_GLSLANG=ON -DSLANG_ENABLE_SPIRV_TOOLS_MIMALLOC=OFF -DSLANG_ENABLE_DXIL=OFF -DSLANG_SLANG_LLVM_FLAVOR=DISABLE \
+ -DSLANG_ENABLE_SLANG_PROXY=OFF -DSLANG_ENABLE_CUDA=OFF -DSLANG_ENABLE_OPTIX=OFF \
+ -DSLANG_ENABLE_NVAPI=OFF -DSLANG_ENABLE_AFTERMATH=OFF -DSLANG_ENABLE_XLIB=OFF \
+ -DSLANG_EXCLUDE_DAWN=ON -DSLANG_EXCLUDE_TINT=ON \
+ -DSLANG_STANDARD_MODULE_DEVELOP_BUILD=OFF -DSLANG_ENABLE_RELEASE_DEBUG_INFO=OFF
+cmake --build /tmp/prime-slang-exact-84792eb15/build --target slangc slang-glslang --parallel 4
+cp -a /tmp/prime-slang-exact-84792eb15/build/Release/lib/libslang-glslang-2026.13.1.so /tmp/prime-slang-exact-84792eb15/lib/

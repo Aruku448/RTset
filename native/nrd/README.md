@@ -9,17 +9,16 @@ structures across the boundary.
 The checked-in release library is rebuilt only when this bridge or the pinned NRD version changes.
 From the repository root on Linux:
 
-```powershell
+```bash
 cmake -S native/nrd -B build/native/nrd -DNRD_SOURCE_DIR=/path/to/NRD -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native/nrd --parallel
 ```
 
-The build is deliberately pinned to NRD 4.17.3, SPIR-V only, with three independent
-`REBLUR_DIFFUSE_SPECULAR` instances, no NRI and no quad-intrinsics extension. Opaque, transparent
-reflection and transparent transmission histories are unrelated. Each transparent branch promotes
-the first non-delta hit to a primary-surface replacement, denoises its demodulated diffuse and
-specular lighting separately, and applies material factors plus delta-chain throughput afterwards.
-Both transparent branches use identical REBLUR settings.
+The bridge is pinned to NRD 4.17.3, SPIR-V only, with no NRI or quad-intrinsics extension. It
+can create `REBLUR_DIFFUSE_SPECULAR` instances for opaque, transparent reflection, and transparent
+transmission profiles. The Java denoiser also has branch APIs, but `RtestFsr3` currently creates
+and records only the regular opaque NRD instance; transparent branch support is not wired into the
+runtime frame graph.
 Copy the resulting `build/native/nrd/bin/libprime_nrd.so` to
 `src/main/resources/rtest/natives/linux-x86_64/libprime_nrd.so` and run the full Gradle build.
 

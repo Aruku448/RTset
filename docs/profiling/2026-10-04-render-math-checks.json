@@ -1,0 +1,20 @@
+{
+  "volume_control_variate_expectation_max_abs_error": 4.440892098500626e-16,
+  "sun_radiance_pdf_cancellation_float32_max_relative_error": 1.3708141466395318e-07,
+  "small_sun_radius_degrees": 0.05,
+  "old_sample_sin_zero_fraction": 0.09375906240937591,
+  "stable_sample_sin_zero_fraction": 9.99990000099999e-06,
+  "tir_example": {
+    "ior_ratio": 1.5,
+    "cosine": 0.5,
+    "refract_discriminant": -0.6875,
+    "schlick_weight": 0.07,
+    "tir_reflection_weight": 1.0
+  },
+  "mismatched_mis_example_sum": 0.9975184842639044,
+  "notes": [
+    "Synthetic deterministic mathematical fixtures, not rendered pixels.",
+    "Float32 sampling results depend on arithmetic/compiler lowering.",
+    "No GPU runtime or speedup percentage is measured."
+  ]
+}

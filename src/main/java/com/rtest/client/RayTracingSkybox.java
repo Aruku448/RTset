@@ -20,17 +20,23 @@ final class RayTracingSkybox implements AutoCloseable {
     private static final String[] FACES = {"right", "left", "up", "down", "back", "front"};
     private final VulkanGpuTexture texture;
     private final VulkanGpuTextureView view;
+    private final NativeBuffer importance;
+    private final SkyCdfAcceleration cdf;
     private boolean closed;
 
-    private RayTracingSkybox(VulkanGpuTexture texture, VulkanGpuTextureView view) {
+    private RayTracingSkybox(VulkanGpuTexture texture, VulkanGpuTextureView view, NativeBuffer importance, SkyCdfAcceleration cdf) {
         this.texture = texture;
         this.view = view;
+        this.importance = importance;
+        this.cdf = cdf;
     }
 
     static RayTracingSkybox create(VulkanDevice device, ResourceManager resourceManager) {
         NativeImage[] images = new NativeImage[FACES.length];
         VulkanGpuTexture texture = null;
         VulkanGpuTextureView view = null;
+        NativeBuffer importance = null;
+        SkyCdfAcceleration cdf = null;
         VulkanCommandEncoder encoder = null;
         RayTracingSkybox result = null;
         try {
@@ -66,6 +72,7 @@ final class RayTracingSkybox implements AutoCloseable {
             // createCommandEncoder() returns the device-owned Minecraft encoder. Use a private
             // encoder here because this upload is explicitly destroyed in the finally block.
             encoder = new VulkanCommandEncoder(device);
+            double[] skyWeights = new double[SkyImportanceTable.COUNT];
             for (int layer = 0; layer < images.length; layer++) {
                 NativeImage image = images[layer];
                 java.nio.ByteBuffer rgba = MemoryUtil.memAlloc(width * height * 4);
@@ -73,6 +80,7 @@ final class RayTracingSkybox implements AutoCloseable {
                     for (int y = 0; y < height; y++) {
                         for (int x = 0; x < width; x++) {
                             int pixel = image.getPixel(x, y);
+                            SkyImportanceTable.accumulate(skyWeights, layer, x, y, width, height, pixel);
                             rgba.put((byte)((pixel >> 16) & 0xff));
                             rgba.put((byte)((pixel >> 8) & 0xff));
                             rgba.put((byte)(pixel & 0xff));
@@ -97,7 +105,14 @@ final class RayTracingSkybox implements AutoCloseable {
                 throw new IllegalStateException("RTest skybox requires a Vulkan texture view");
             }
             view = vulkanView;
-            result = new RayTracingSkybox(texture, view);
+            importance = NativeBuffer.create(device, SkyImportanceTable.BYTES,
+                org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            SkyCdfGeometry cdfGeometry = new SkyCdfGeometry(skyWeights);
+            try (NativeBuffer.Mapped mapped = importance.map()) {
+                cdfGeometry.writeTables(mapped.buffer());
+            }
+            cdf = SkyCdfAcceleration.create(device, cdfGeometry);
+            result = new RayTracingSkybox(texture, view, importance, cdf);
             return result;
         } catch (IOException | RuntimeException exception) {
             throw new IllegalStateException("Failed to load RTest skybox", exception);
@@ -112,6 +127,8 @@ final class RayTracingSkybox implements AutoCloseable {
                 }
             } finally {
                 if (result == null) {
+                    if (cdf != null) cdf.close();
+                    if (importance != null) importance.close();
                     if (view != null) {
                         view.close();
                     }
@@ -132,6 +149,11 @@ final class RayTracingSkybox implements AutoCloseable {
         return view.vkImageView();
     }
 
+    long importanceBuffer() { return importance.buffer; }
+    long importanceSize() { return importance.size; }
+    long cdfHandle() { return cdf.tlas.handle; }
+    long cdfMetadataBuffer() { return cdf.metadata.buffer; }
+
     @Override
     public void close() {
         if (closed) {
@@ -141,7 +163,9 @@ final class RayTracingSkybox implements AutoCloseable {
         try {
             view.close();
         } finally {
-            texture.close();
+            try { texture.close(); } finally {
+                try { importance.close(); } finally { cdf.close(); }
+            }
         }
     }
 }

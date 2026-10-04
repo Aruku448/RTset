@@ -94,7 +94,46 @@ tasks.named('processResources') {
         include 'PRIME-LICENSE.txt', 'PRIME-LICENSE-EXCEPTIONS.txt'
         into 'META-INF/licenses/rtest'
     }
+    from('third_party/prime-atmosphere-26.3') {
+        include 'LICENSE', 'LICENSE-EXCEPTIONS', 'SKY-TRACER-NOTICE.md', 'PROVENANCE.md'
+        into 'META-INF/licenses/prime-atmosphere-26.3'
+    }
+    from('LICENSE') {
+        into 'META-INF/licenses/rtest'
+    }
 }
+
+// Distribute this archive alongside the mod JAR; a license notice alone is not source delivery.
+tasks.register('correspondingSource', Zip) {
+    archiveClassifier = 'corresponding-source'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(projectDir) {
+        include 'src/**', 'native/**', 'scripts/**', 'third_party/**', 'gradle/**'
+        include 'gradlew', 'gradlew.bat', '*.gradle', 'gradle.properties', 'LICENSE', 'README.md'
+        include '*.bat', '*.ps1', 'docs/prime-atmosphere*.md'
+        exclude '**/build/**', '**/.gradle/**', '**/__pycache__/**', '**/*.pyc'
+    }
+}
+// Explicit source-rebuild gate. Reviewed exact outputs are packaged and verified separately.
+tasks.register('compilePrimeAtmosphere', Exec) {
+    def compiler = providers.gradleProperty('primeSlangCompiler').orElse('slangc')
+    commandLine 'python3', file('scripts/compile_prime_atmosphere.py').absolutePath,
+        '--slangc', compiler.get()
+    inputs.files(fileTree('third_party/prime-atmosphere-26.3'))
+    inputs.file('scripts/compile_prime_atmosphere.py')
+    inputs.property('compiler', compiler)
+    outputs.dir(layout.buildDirectory.dir('prime-atmosphere/locked'))
+    // Always recheck the binary version: a changed compiler at the same path cannot reuse old outputs.
+    outputs.upToDateWhen { false }
+}
+def verifyPrimeAtmosphereResources = tasks.register('verifyPrimeAtmosphereResources', Exec) {
+    commandLine 'python3', file('scripts/verify_prime_atmosphere_resources.py').absolutePath
+    inputs.files(fileTree('src/main/resources/prime/atmosphere/shaders'))
+    inputs.files(fileTree('third_party/prime-atmosphere-26.3'))
+    inputs.file('scripts/verify_prime_atmosphere_resources.py')
+}
+tasks.named('processResources') { dependsOn verifyPrimeAtmosphereResources }
+
 // Model capture tests execute the same Minecraft classes used by the client.
 sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
 sourceSets.test.runtimeClasspath += sourceSets.main.runtimeClasspath
@@ -125,6 +164,10 @@ neoForge.ideSyncTask generateModMetadata
 def fluidContractTest = tasks.register('fluidContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.FluidGeometryCaptureTest'
+}
+def fluidContactTest = tasks.register('fluidContactTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.FluidContactTest'
 }
 def dynamicContractTest = tasks.register('dynamicContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -198,6 +241,14 @@ def nrdCompositeContractTest = tasks.register('nrdCompositeContractTest', JavaEx
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.NrdCompositeShaderContractTest'
 }
+def rayTracingRuntimeCleanupTest = tasks.register('rayTracingRuntimeCleanupTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingRuntimeCleanupTest'
+}
+def denoiserHistoryQualityTest = tasks.register('denoiserHistoryQualityTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DenoiserHistoryQualityTest'
+}
 def nrdMotionContractTest = tasks.register('nrdMotionContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.NrdMotionShaderContractTest'
@@ -242,10 +293,6 @@ def vanillaRenderControllerTest = tasks.register('vanillaRenderControllerTest', 
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.VanillaRenderControllerTest'
 }
-def sundialDenoiserContractTest = tasks.register('sundialDenoiserContractTest', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.rtest.client.SundialDenoiserContractTest'
-}
 def lightTreeProbeDiag = tasks.register('lightTreeProbeDiag', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.LightTreeProbeDiag'
@@ -254,13 +301,62 @@ def compiledSectionMeshCacheTest = tasks.register('compiledSectionMeshCacheTest'
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.CompiledSectionMeshCacheTest'
 }
+def resourceLifetimeMathTest = tasks.register('resourceLifetimeMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.ResourceLifetimeMathTest'
+}
+def mappedUploadMathTest = tasks.register('mappedUploadMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.MappedUploadMathTest'
+}
+def materialLifetimeMathTest = tasks.register('materialLifetimeMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.MaterialLifetimeMathTest'
+    maxHeapSize = '1g'
+}
+def atmosphereCoordinatesTest = tasks.register('atmosphereCoordinatesTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.AtmosphereCoordinatesTest'
+}
+def atmosphereAssetsTest = tasks.register('atmosphereAssetsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.atmosphere.AtmosphereAssetsTest'
+}
+def skyLutHistoryTest = tasks.register('skyLutHistoryTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.atmosphere.SkyLutHistoryTest'
+}
+def rayTracingAtmosphereShaderTest = tasks.register('rayTracingAtmosphereShaderTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingAtmosphereShaderTest'
+    args layout.buildDirectory.dir('atmosphere-shader-validation').get().asFile.absolutePath
+}
+
+def lightTreeReuseMathTest = tasks.register('lightTreeReuseMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.LightTreeReuseMathTest'
+    maxHeapSize = '1g'
+}
+def terrainBuildMathTest = tasks.register('terrainBuildMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.TerrainBuildMathTest'
+    maxHeapSize = '1g'
+}
 def rayTracingLightTreeTest = tasks.register('rayTracingLightTreeTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.RayTracingLightTreeTest'
 }
+def rayTracingMaterialBufferTest = tasks.register('rayTracingMaterialBufferTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingMaterialBufferTest'
+}
 def primeOfflineColorContractTest = tasks.register('primeOfflineColorContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.PrimeOfflineColorContractTest'
+}
+def rtCaptureSchedulingTest = tasks.register('rtCaptureSchedulingTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RtCaptureSchedulingTest'
 }
 def rtActivationContractTest = tasks.register('rtActivationContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -274,19 +370,25 @@ def incrementalGeometryContractTest = tasks.register('incrementalGeometryContrac
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.IncrementalGeometryContractTest'
 }
+def dynamicSnapshotLogThrottleTest = tasks.register('dynamicSnapshotLogThrottleTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicSnapshotLogThrottleTest'
+}
 tasks.named('test') {
-    dependsOn compiledSectionMeshCacheTest, rayTracingLightTreeTest, primeOfflineColorContractTest,
-        rtActivationContractTest, particleRtGeometryContractTest, incrementalGeometryContractTest
+    dependsOn atmosphereCoordinatesTest, atmosphereAssetsTest, skyLutHistoryTest, rayTracingAtmosphereShaderTest,
+        compiledSectionMeshCacheTest, rayTracingLightTreeTest, terrainBuildMathTest, lightTreeReuseMathTest, materialLifetimeMathTest, mappedUploadMathTest, resourceLifetimeMathTest, rayTracingMaterialBufferTest, primeOfflineColorContractTest,
+        rtActivationContractTest, rtCaptureSchedulingTest, particleRtGeometryContractTest, incrementalGeometryContractTest,
+        dynamicSnapshotLogThrottleTest
     dependsOn playerAnimationContractTest, playerBlasCommandTest, blockEntityModelContractTest,
         blockEntityRasterFallbackContractTest, entityRasterFallbackContractTest,
         itemModelGeometryAdapterTest, rayTracingShaderContractTest,
-        nativeColorManagementTest, rayTracingPbrMaterialsTest, nrdNativeContractTest, nrdNativePlatformTest, nrdCompositeContractTest, nrdMotionContractTest, sceneWindowDeltaTest,
+        nativeColorManagementTest, rayTracingPbrMaterialsTest, nrdNativeContractTest, nrdNativePlatformTest, nrdCompositeContractTest, nrdMotionContractTest, denoiserHistoryQualityTest, rayTracingRuntimeCleanupTest, sceneWindowDeltaTest,
         sceneGeometryMergeContractTest, terrainLodTest, terrainProxyStoreTest,
         terrainTraversalAbiTest, terrainTraversalShaderContractTest,
         vulkanResourceLifecycleTest, rayTracingVisibilityPolicyTest,
-        rayTracingFrameTimingContractTest, vanillaRenderControllerTest, sundialDenoiserContractTest
+        rayTracingFrameTimingContractTest, vanillaRenderControllerTest
     failOnNoDiscoveredTests = false
-    dependsOn fluidContractTest, dynamicContractTest, nativeEffectsContractTest, hdrPolicyContractTest, dynamicVulkanSliceContractTest, dynamicPlaceholderContractTest, dynamicTlasInstanceContractTest
+    dependsOn fluidContractTest, fluidContactTest, dynamicContractTest, nativeEffectsContractTest, hdrPolicyContractTest, dynamicVulkanSliceContractTest, dynamicPlaceholderContractTest, dynamicTlasInstanceContractTest
 }
 
 tasks.named('runClient') {

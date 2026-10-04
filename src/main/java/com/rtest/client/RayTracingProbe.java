@@ -4,8 +4,8 @@ import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,6 +27,7 @@ import com.rtest.mixin.GpuDeviceAccessor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -38,10 +39,22 @@ import org.slf4j.Logger;
 @EventBusSubscriber(modid = RTest.MOD_ID, value = Dist.CLIENT)
 public final class RayTracingProbe {
     private static final Logger LOGGER = LogUtils.getLogger();
+    // A selected-cut change changes active terrain geometry and can trigger TLAS/material updates.
+    // Readiness can arrive in bursts, so coalesce those changes at this interval.
+    private static final long TERRAIN_LOD_SELECTION_INTERVAL_NANOS = 1_000_000_000L;
+    private static final long TERRAIN_DIRTY_IDLE_FLUSH_NANOS = 250_000_000L;
+    private static final long TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS = 2_000_000_000L;
+    private static final long RT_RETRY_BASE_DELAY_NANOS = 1_000_000_000L;
+    private static final int MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 10_000_000;
+    private static final int MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL =
+        MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY;
+    private static final DynamicSnapshotLogThrottle DYNAMIC_SNAPSHOT_LOG_THROTTLE =
+        new DynamicSnapshotLogThrottle(5_000_000_000L);
     private static boolean completed;
     private static boolean smokeTestStarted;
     private static boolean smokeTestRequested;
     private static boolean sceneDirty;
+    private static Frustum frameCullFrustum;
     private static boolean fullCaptureRequested;
     private static boolean partialCapture;
     // The first complete snapshot is an activation transaction. Chunk streaming and block
@@ -77,38 +90,69 @@ public final class RayTracingProbe {
     private static final Set<Long> terrainLodBlocked = new LinkedHashSet<>();
     private static final Set<Long> terrainLodPending = new LinkedHashSet<>();
     private static final Set<Long> terrainLodSelected = new LinkedHashSet<>();
+    private static final Set<RayTracingTerrainLod.NodeKey> terrainLodSelectedKeys = new LinkedHashSet<>();
     private static final Map<RayTracingTerrainLodScheduler.Token, List<RayTracingTerrainLod.SectionInput>> terrainLodWorkerInputs = new ConcurrentHashMap<>();
+    private static final Map<Long, RayTracingTerrainLodScheduler.Token> terrainLodWorkerTokens = new HashMap<>();
+    private static Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion>
+        terrainLodNodeVersions = Map.of();
+    private static Map<Long, RayTracingTerrainLod.Node> terrainLodAvailableNodes = Map.of();
+    private static RayTracingTerrainLod.Selection terrainLodSelection;
+    private static boolean terrainLodSelectionDirty = true;
+    private static boolean terrainLodCompositionPending;
+    private static long terrainLodLastSelectionNanos;
     private static RayTracingScene.SceneGeometry terrainLodSourceGeometry;
-    private static long terrainLodSceneGeneration = Long.MIN_VALUE;
+    // LOD requests consume one immutable published snapshot. Pending chunk events advance
+    // sceneGeneration before their replacement geometry exists and must not cancel these builds.
+    private static long terrainLodSourceGeneration;
     private static long terrainLodConfigFingerprint = Long.MIN_VALUE;
     private static int terrainLodCameraChunkX;
     private static int terrainLodCameraChunkZ;
     private static boolean terrainLodSelectionValid;
     private static long terrainLodWindowGeneration;
     private static long terrainLodDiagnosticFrame;
+    private static long terrainLodWarmupFrames;
     private static boolean terrainLodFarProxyActive;
+    private static boolean terrainLodGpuTraversalActive;
+    private static boolean terrainLodGpuCandidateLimitExceeded;
+    private static long nextRtRetryNanos;
+    private static int rtFailureCount;
     private static RayTracingScene.SceneGeometry.CaptureSession captureSession;
     /**
      * Geometry finalization is deliberately serialized. Capture still advances on the render
-     * thread in small steps, but immutable flattening, LightTree construction and dirty merges
-     * never do.
+     * thread in small steps, while PBR packing, light-tree construction and dirty merges never do.
      */
     private static final ExecutorService GEOMETRY_MERGE_EXECUTOR = Executors.newSingleThreadExecutor(task -> {
         Thread worker = new Thread(task, "rtest-geometry-merge");
         worker.setDaemon(true);
         return worker;
     });
+    // LOD composition and its emissive-light tree can be CPU-heavy. Keep it off the Render
+    // thread and separate from capture finalization so scene merging cannot starve either queue.
+    private static final ExecutorService TERRAIN_COMPOSITION_EXECUTOR = Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "rtest-terrain-compose");
+        worker.setDaemon(true);
+        return worker;
+    });
     private static CompletableFuture<DirtyGeometryMerge> pendingGeometryMerge;
     private static CompletableFuture<FullGeometryBuild> pendingFullGeometryBuild;
+    private static CompletableFuture<TerrainGeometryComposition> pendingTerrainGeometryComposition;
+    private static long terrainLodChangeSerial;
     private static RayTracingPbrMaterials pbrMaterials;
     private static final DynamicEntityGeometry dynamicEntities = new DynamicEntityGeometry();
     private static DynamicEntityGeometry.Frame lastEntityFrame;
-    private static String lastDynamicSummary;
     private static final Set<Long> pendingDirtySections = new LinkedHashSet<>();
+    private static long firstPendingDirtyNanos;
+    private static long lastPendingDirtyNanos;
     private static final Set<Long> pendingCaptureSections = new LinkedHashSet<>();
     private static Set<Long> activeDirtySections;
     private static int capturedWindowChunkX;
     private static int capturedWindowChunkZ;
+    // Last camera window reconciled into the pending delta. The published window remains the
+    // base until a merge commits, so comparing only against capturedWindowChunkX/Z would rebuild
+    // the same large window delta on every frame while its worker is running.
+    private static int queuedWindowChunkX;
+    private static int queuedWindowChunkZ;
+    private static boolean queuedWindowValid;
     // Geometry sections omit valid-but-empty/non-renderable sections. Keep the published window
     // membership separately so those sections are not recaptured forever on every frame.
     private static final Set<Long> capturedWindowOrigins = new LinkedHashSet<>();
@@ -121,14 +165,17 @@ public final class RayTracingProbe {
     // Latched before deferred model preparation. Capture may run while vanilla still owns the
     // current frame, so model redirects must know whether this exact world pass will be cancelled.
     private static boolean vanillaWorldReplacementRequested;
-    // Keep CPU fallback capture below the frame-time spike observed at higher budgets;
+    // Keep incremental CPU fallback capture below the frame-time spike observed at higher budgets.
     private static final int SECTIONS_PER_FRAME = 2;
+    // Initial capture has no RT scene to render yet, so spend a moderate amount more frame time
+    // to shorten the blocking activation wait. Once a scene exists, incremental work uses the
+    // lower budget above to protect steady-state frame pacing.
+    private static final int INITIAL_CAPTURE_SECTIONS_PER_FRAME = 4;
     // Bound one transaction as well as one frame. New dirty events remain queued instead of
     // invalidating unrelated work already captured for this transaction.
-    // Keep the atomic scene publish small enough that dirty terrain cannot create a low-FPS hitch.
-    // Remaining sections stay queued for subsequent frames, like Caustica's bounded completion pass.
-    private static final int SECTIONS_PER_TRANSACTION = 8;
-
+    // Dirty publication updates acceleration structures and affected material ranges.
+    // Coalesce small section changes to avoid repeatedly publishing during camera streaming.
+    private static final int SECTIONS_PER_TRANSACTION = 512;
     private record DirtyGeometryMerge(
         RayTracingScene.SceneGeometry geometry,
         Set<Long> windowOrigins,
@@ -147,6 +194,17 @@ public final class RayTracingProbe {
         int windowChunkZ,
         long generation,
         ClientLevel level
+    ) {
+    }
+
+    private record TerrainGeometryComposition(
+        RayTracingScene.SceneGeometry geometry,
+        RayTracingScene.SceneGeometry sourceGeometry,
+        long changeSerial,
+        long configFingerprint,
+        boolean gpuTraversalEnabled,
+        boolean farProxyActive,
+        long durationNanos
     ) {
     }
 
@@ -232,7 +290,12 @@ public final class RayTracingProbe {
         renderFramePrepared = false;
         dynamicFramePrepared = false;
         vanillaWorldReplacementRequested = false;
+        frameCullFrustum = null;
         VanillaRenderController.INSTANCE.beginFrame();
+    }
+
+    public static void setFrameCullFrustum(Frustum frustum) {
+        frameCullFrustum = frustum;
     }
 
     public static boolean isRtFrameReady() {
@@ -250,7 +313,8 @@ public final class RayTracingProbe {
                 vulkanDevice,
                 minecraft.gameRenderer.mainRenderTarget(),
                 minecraft.getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS),
-                activeGeometry == null ? smokeGeometry : activeGeometry);
+                activeGeometry == null ? smokeGeometry : activeGeometry,
+                terrainLodGpuTraversalActive);
         } catch (RuntimeException exception) {
             // Resource reload/resize can invalidate a handle between the guard and the render seam.
             // Keeping vanilla is safer than cancelling on an unverified presentation.
@@ -358,7 +422,10 @@ public final class RayTracingProbe {
             fullCaptureCount = 0L;
             partialCaptureCount = 0L;
             capturedWindowValid = false;
+            queuedWindowValid = false;
             pendingDirtySections.clear();
+            firstPendingDirtyNanos = 0L;
+            lastPendingDirtyNanos = 0L;
             pendingCaptureSections.clear();
             capturedLevel = minecraft.level;
             capturedResourceGeneration = resourceGeneration;
@@ -384,9 +451,12 @@ public final class RayTracingProbe {
             activeDirtySections = null;
             partialCapture = false;
             pendingDirtySections.clear();
+            firstPendingDirtyNanos = 0L;
+            lastPendingDirtyNanos = 0L;
             pendingCaptureSections.clear();
             capturedWindowOrigins.clear();
             capturedWindowValid = false;
+            queuedWindowValid = false;
         }
 
         pollFullGeometryBuild(renderDistanceChunks);
@@ -394,9 +464,22 @@ public final class RayTracingProbe {
         if (!smokeTestStarted) {
             return;
         }
+        // Build/select the coarse terrain even while the first complete snapshot is frozen.
+        // RT presentation may be gated on scene size, so waiting for a successful RT frame
+        // before advancing LOD would deadlock oversized scenes on vanilla forever.
+        if (smokeGeometry != null) {
+            try {
+                updateTerrainLod(camera);
+            } catch (Throwable throwable) {
+                // LOD is an optional reduction layer. A bad coarse node must not be allowed to
+                // escape through the level-render seam and tear down an otherwise valid RT scene.
+                disableTerrainLodAfterFailure(throwable);
+            }
+        }
         // Once the frozen full snapshot is published, do not start a dirty merge or move the
         // capture window in the same frame. The before-hand seam must get one stable chance to
-        // build its BLAS/TLAS and present it. All events received meanwhile remain in the queues.
+        // build its BLAS/TLAS and present it. LOD preparation above only reads the immutable
+        // published snapshot; all capture events remain queued until activation completes.
         if (RtActivationFreeze.holdIncrementalUpdates(activationFreeze, smokeGeometry != null)) {
             return;
         }
@@ -411,7 +494,15 @@ public final class RayTracingProbe {
         }
 
         if (captureSession == null) {
-            if (smokeGeometry != null && !fullCaptureRequested && !pendingDirtySections.isEmpty()) {
+            long dirtyNow = System.nanoTime();
+            boolean dirtyBatchReady = pendingDirtySections.size() >= SECTIONS_PER_TRANSACTION
+                || firstPendingDirtyNanos == 0L
+                || dirtyNow - firstPendingDirtyNanos >= TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS
+                || dirtyNow - lastPendingDirtyNanos >= TERRAIN_DIRTY_IDLE_FLUSH_NANOS;
+            RtCaptureSchedule captureSchedule = RtCaptureSchedule.select(
+                smokeGeometry != null, fullCaptureRequested,
+                !pendingDirtySections.isEmpty(), dirtyBatchReady);
+            if (captureSchedule == RtCaptureSchedule.DIRTY) {
                 activeDirtySections = new LinkedHashSet<>();
                 for (long origin : pendingDirtySections) {
                     activeDirtySections.add(origin);
@@ -420,6 +511,10 @@ public final class RayTracingProbe {
                     }
                 }
                 pendingDirtySections.removeAll(activeDirtySections);
+                if (pendingDirtySections.isEmpty()) {
+                    firstPendingDirtyNanos = 0L;
+                    lastPendingDirtyNanos = 0L;
+                }
                 Set<Long> activeCaptureSections = new LinkedHashSet<>();
                 for (long origin : activeDirtySections) {
                     if (pendingCaptureSections.contains(origin)) {
@@ -448,11 +543,11 @@ public final class RayTracingProbe {
                 );
                 LOGGER.info("RTest queued {} dirty-section updates ({} sections to capture)",
                     activeDirtySections.size(), captureOrigins.size());
-            } else if (fullCaptureRequested || sceneDirty || smokeGeometry == null) {
+            } else if (captureSchedule == RtCaptureSchedule.FULL) {
                 captureGeneration = sceneGeneration;
                 partialCapture = false;
-                // Consume the request for this session. A later chunk event sets it again;
-                // the current snapshot is still allowed to finish and be rendered.
+                // Consume this explicit full request. Ordinary chunk/block notifications stay
+                // queued for incremental capture instead of requesting another whole-scene pass.
                 fullCaptureRequested = false;
                 activeWindowChunkX = cameraChunkX(camera);
                 activeWindowChunkZ = cameraChunkZ(camera);
@@ -474,27 +569,22 @@ public final class RayTracingProbe {
 
         if (captureSession != null) {
             try {
-            boolean complete = captureSession.step(SECTIONS_PER_FRAME);
+            int sectionBudget = smokeGeometry == null
+                ? INITIAL_CAPTURE_SECTIONS_PER_FRAME
+                : SECTIONS_PER_FRAME;
+            boolean complete = captureSession.step(sectionBudget);
             if (complete) {
                 RayTracingScene.SceneGeometry.CaptureSession finished = captureSession;
                 boolean completedPartial = partialCapture;
-                // Only a camera-window move makes this whole transaction unrelated. Independent
-                // block/chunk events remain pending for a later transaction; invalidating this
-                // completed batch on every new event causes starvation during chunk streaming.
-                boolean cameraMovedDuringCapture = completedPartial
-                    && (cameraChunkX(camera) != activeWindowChunkX
-                        || cameraChunkZ(camera) != activeWindowChunkZ);
-                if (cameraMovedDuringCapture) {
-                    sceneGeneration++;
-                    sceneDirty = true;
-                }
-                boolean stalePartialCapture = completedPartial && cameraMovedDuringCapture;
-                if (completedPartial && !stalePartialCapture
-                        && smokeGeometry != null && activeDirtySections != null) {
+                // A partial capture is coherent for its starting window even if the camera has
+                // moved meanwhile. Publish this batch, then reconcile the newer window from the
+                // committed base. Discarding each in-flight batch during movement starves both
+                // scene updates and terrain LOD builds.
+                if (completedPartial && smokeGeometry != null && activeDirtySections != null) {
                     // CaptureSession is complete and will no longer be mutated. Keep it alive on
                     // the single geometry worker until buildPartial() and replaceSections() have
                     // produced the immutable replacement. This keeps LightTree construction off
-                    // the render thread as well as the final array flattening.
+                    // the render thread as well as section-map publication.
                     Set<Long> dirtySections = Set.copyOf(activeDirtySections);
                     pendingGeometryMerge = submitDirtyGeometryMerge(
                         finished,
@@ -519,33 +609,20 @@ public final class RayTracingProbe {
                     );
                     LOGGER.info("RTest queued full scene finalization for the geometry worker");
                 } else {
-                    // A stale partial capture is not handed to the worker. No caller can use the
-                    // session after this render callback, so it is safe to retire it here.
                     finished.close();
                 }
                 captureSession = null;
                 activeDirtySections = null;
                 partialCapture = false;
                 if (completedPartial) {
-                    if (stalePartialCapture) {
-                        // Updates arriving during this session remain pending for the next frame;
-                        // do not publish the old delta or advance the published window.
-                        sceneDirty = true;
-                        LOGGER.info("RTest discarded stale dirty-section update for capture generation {} (scene generation {})",
-                            captureGeneration, sceneGeneration);
-                    } else {
-                        // The old smokeGeometry remains the render input until the worker result
-                        // is observed at the start of a later render callback.
-                        sceneDirty = true;
-                        LOGGER.info("RTest queued dirty-section CPU merge for the geometry worker");
-                    }
+                    // The old smokeGeometry remains the render input until the worker result
+                    // is observed at the start of a later render callback.
+                    sceneDirty = true;
+                    LOGGER.info("RTest queued dirty-section CPU merge for the geometry worker");
                 } else {
-                    // Chunk loads may have arrived while this snapshot was being built.
-                    // Keep the request for the next full pass, but publish this snapshot now
-                    // so RT can render instead of restarting capture every frame.
-                    boolean recaptureRequested = fullCaptureRequested;
-                    fullCaptureRequested = recaptureRequested;
-                    sceneDirty = recaptureRequested
+                    // Keep notifications and explicit invalidations while the worker finalizes.
+                    // Publication still applies the full-snapshot compatibility policy below.
+                    sceneDirty = fullCaptureRequested
                         || captureGeneration != sceneGeneration
                         || !pendingDirtySections.isEmpty();
                     // The immutable full snapshot is published by pollFullGeometryBuild once
@@ -572,17 +649,6 @@ public final class RayTracingProbe {
                 }
                 return;
             }
-        }
-
-        if (smokeGeometry == null) {
-            return;
-        }
-        try {
-            updateTerrainLod(camera);
-        } catch (Throwable throwable) {
-            // LOD is an optional reduction layer. A bad coarse node must not be allowed to
-            // escape through the level-render seam and tear down an otherwise valid RT scene.
-            disableTerrainLodAfterFailure(throwable);
         }
 
     }
@@ -617,12 +683,40 @@ public final class RayTracingProbe {
         // the GUI without introducing another AS/FSR submission at the pause boundary.
         if (minecraft.isPaused()) {
             boolean replayed = RayTracingSmokeTest.replayLastFrame(vulkanDevice, target, blockAtlas,
-                activeGeometry == null ? smokeGeometry : activeGeometry);
+                activeGeometry == null ? smokeGeometry : activeGeometry,
+                terrainLodGpuTraversalActive);
             VanillaRenderController.INSTANCE.markRtResult(replayed);
             return;
         }
         finishDeferredEntityCapture();
         RayTracingScene.SceneGeometry renderGeometry = activeGeometry == null ? smokeGeometry : activeGeometry;
+        if (renderGeometry.triangleCount() > MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY) {
+            // Never submit an unculled oversized snapshot, even if LOD was disabled after a
+            // worker/publication failure. Keep vanilla visible instead of allocating multi-GB
+            // material and BLAS tables as a fallback.
+            if (++terrainLodWarmupFrames == 1L) {
+                boolean lodEnabled = RayTracingClientConfig.INSTANCE.terrainLodEnabled.get();
+                LOGGER.warn("RTest RT presentation is waiting for terrain below the startup limit "
+                    + "(triangles={}, limit={}, lodEnabled={})",
+                    renderGeometry.triangleCount(), MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY, lodEnabled);
+                if (minecraft.player != null) {
+                    minecraft.gui.hud.setOverlayMessage(Component.literal(lodEnabled
+                        ? "RTest: preparing terrain LOD for RT"
+                        : "RTest: enable Terrain LOD to render this scene"), false);
+                }
+            } else if (terrainLodWarmupFrames % 120L == 0L) {
+                LOGGER.info("RTest waiting for terrain geometry below the RT startup limit (triangles={}, limit={}, lodEnabled={})",
+                    renderGeometry.triangleCount(), MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY,
+                    RayTracingClientConfig.INSTANCE.terrainLodEnabled.get());
+            }
+            VanillaRenderController.INSTANCE.markRtResult(false);
+            return;
+        }
+        terrainLodWarmupFrames = 0L;
+        if (System.nanoTime() < nextRtRetryNanos) {
+            VanillaRenderController.INSTANCE.markRtResult(false);
+            return;
+        }
         boolean rtPresented = RayTracingSmokeTest.run(
             vulkanDevice,
             target,
@@ -632,27 +726,31 @@ public final class RayTracingProbe {
             blockAtlas,
             minecraft.getResourceManager(),
             pbrMaterials,
-            lastEntityFrame
+            lastEntityFrame,
+            terrainLodGpuTraversalActive
         );
-        // A coarse mesh must never take the complete RT path down with it. Rebuild once from
-        // the immutable native snapshot and turn the experimental switch off for this session
-        // if publication/BLAS creation rejects the LOD geometry.
+        // Retry from native sections only when their size is already below the startup limit.
+        // Oversized RD32 scenes stay on vanilla if a coarse publication fails.
         if (!rtPresented && renderGeometry != smokeGeometry && smokeGeometry != null) {
-            disableTerrainLodAfterFailure(null);
-            rtPresented = RayTracingSmokeTest.run(
-                vulkanDevice,
-                target,
-                smokeGeometry,
-                minecraft.level,
-                camera,
-                blockAtlas,
-                minecraft.getResourceManager(),
-                pbrMaterials,
-                lastEntityFrame
-            );
+            if (smokeGeometry.triangleCount() <= MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY) {
+                rtPresented = RayTracingSmokeTest.run(
+                    vulkanDevice,
+                    target,
+                    smokeGeometry,
+                    minecraft.level,
+                    camera,
+                    blockAtlas,
+                    minecraft.getResourceManager(),
+                    pbrMaterials,
+                    lastEntityFrame,
+                    false
+                );
+            }
         }
         VanillaRenderController.INSTANCE.markRtResult(rtPresented);
         if (rtPresented) {
+            nextRtRetryNanos = 0L;
+            rtFailureCount = 0;
             if (activationFreeze) {
                 activationFreeze = false;
                 sceneDirty = fullCaptureRequested
@@ -663,9 +761,13 @@ public final class RayTracingProbe {
             LOGGER.debug("RTest presented the complete world through Vulkan RT (dynamicEntities={})",
                 lastEntityFrame == null ? 0 : lastEntityFrame.instances().size());
         } else {
-            stopSmokeTestResources();
+            rtFailureCount = Math.min(rtFailureCount + 1, 6);
+            long retryDelay = Math.min(30_000_000_000L,
+                RT_RETRY_BASE_DELAY_NANOS << (rtFailureCount - 1));
+            nextRtRetryNanos = System.nanoTime() + retryDelay;
             if (minecraft.player != null) {
-                minecraft.gui.hud.setOverlayMessage(Component.translatable("overlay.rtest.smokeTest.failed"), false);
+                minecraft.gui.hud.setOverlayMessage(Component.literal("RTest: RT failed; retrying in "
+                    + Math.max(1L, retryDelay / 1_000_000_000L) + "s"), false);
             }
         }
     }
@@ -691,7 +793,8 @@ public final class RayTracingProbe {
         if (RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.get()) {
             float partialTick = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
             DynamicEntityGeometry.Frame captured =
-                dynamicEntities.collect(minecraft.level, camera, renderDistanceChunks, partialTick);
+                dynamicEntities.collect(minecraft.level, camera, renderDistanceChunks, partialTick,
+                    frameCullFrustum);
             // A visible entity with no captured geometry means the deferred capture missed this
             // frame. Do not turn that transient miss into a frame that masks every dynamic TLAS
             // slot; a genuinely empty world frame has no admission failures and is still published.
@@ -711,8 +814,7 @@ public final class RayTracingProbe {
                 // representedEntityIds() remains available for consumers that need the actual
                 // identity set; the per-frame diagnostic only needs its allocation-free count.
                 + ", entityRt=" + lastEntityFrame.representedEntityCount();
-            if (!dynamicSummary.equals(lastDynamicSummary)) {
-                lastDynamicSummary = dynamicSummary;
+            if (DYNAMIC_SNAPSHOT_LOG_THROTTLE.shouldLog(dynamicSummary, System.nanoTime())) {
                 LOGGER.info("RTest dynamic CPU snapshot: {}", dynamicSummary);
             }
         } else if (lastEntityFrame != null) {
@@ -721,8 +823,9 @@ public final class RayTracingProbe {
             ParticleGeometryAdapter.clear();
             BlockEntityModelGeometryAdapter.clear();
             dynamicEntities.clear();
-            lastEntityFrame = dynamicEntities.collect(minecraft.level, camera, renderDistanceChunks, 0.0F);
-            lastDynamicSummary = null;
+            lastEntityFrame = dynamicEntities.collect(minecraft.level, camera, renderDistanceChunks, 0.0F,
+                frameCullFrustum);
+            DYNAMIC_SNAPSHOT_LOG_THROTTLE.reset();
         }
     }
 
@@ -792,6 +895,7 @@ public final class RayTracingProbe {
         }
         pendingDirtySections.addAll(dirty);
         pendingCaptureSections.addAll(dirty);
+        notePendingDirtyEvents();
         sceneGeneration++;
         sceneDirty = true;
     }
@@ -822,6 +926,8 @@ public final class RayTracingProbe {
             sceneDirty = true;
             fullCaptureRequested = true;
             pendingDirtySections.clear();
+            firstPendingDirtyNanos = 0L;
+            lastPendingDirtyNanos = 0L;
             pendingCaptureSections.clear();
         }
     }
@@ -871,6 +977,7 @@ public final class RayTracingProbe {
                 new ChunkPos(origin.getX() >> 4, origin.getZ() >> 4))) {
             pendingDirtySections.add(origin.asLong());
             pendingCaptureSections.add(origin.asLong());
+            notePendingDirtyEvents();
             return true;
         }
         return false;
@@ -882,8 +989,14 @@ public final class RayTracingProbe {
         }
         int currentChunkX = cameraChunkX(camera);
         int currentChunkZ = cameraChunkZ(camera);
-        boolean windowMoved = currentChunkX != capturedWindowChunkX
-            || currentChunkZ != capturedWindowChunkZ;
+        boolean windowMoved = !queuedWindowValid
+            || currentChunkX != queuedWindowChunkX
+            || currentChunkZ != queuedWindowChunkZ;
+        if (!windowMoved) {
+            // Window membership cannot have changed, so avoid rebuilding sets containing every
+            // loaded section on every frame while a merge or dirty-section batch is pending.
+            return;
+        }
         // A dirty event can arrive for a section that is being evicted while the incremental
         // session is in flight. Reconcile pending updates too, otherwise that section could be
         // captured again and accidentally reintroduced outside the current view-distance window.
@@ -893,13 +1006,17 @@ public final class RayTracingProbe {
                 level, camera, renderDistanceChunks)) {
             desiredOrigins.add(origin.asLong());
         }
+        queuedWindowChunkX = currentChunkX;
+        queuedWindowChunkZ = currentChunkZ;
+        queuedWindowValid = true;
         // Block callbacks can arrive for far-away loaded chunks. They do not belong to the
         // current RT scene and must not accumulate until the player returns there; the camera
         // delta will request the current contents when that window is entered.
         pendingDirtySections.retainAll(desiredOrigins);
         pendingCaptureSections.retainAll(desiredOrigins);
-        if (!windowMoved && pendingDirtySections.isEmpty()) {
-            return;
+        if (pendingDirtySections.isEmpty()) {
+            firstPendingDirtyNanos = 0L;
+            lastPendingDirtyNanos = 0L;
         }
         SceneWindowDelta.Delta delta = SceneWindowDelta.between(currentOrigins, desiredOrigins);
         if (delta.removed().isEmpty() && delta.added().isEmpty()) {
@@ -917,6 +1034,7 @@ public final class RayTracingProbe {
                 pendingCaptureSections.add(added);
             }
         }
+        notePendingDirtyEvents();
         sceneGeneration++;
         sceneDirty = true;
         LOGGER.info("RTest queued camera-window update {} -> {}: remove {} sections, capture {} sections",
@@ -931,6 +1049,14 @@ public final class RayTracingProbe {
             keys.add(origin.asLong());
         }
         return keys;
+    }
+
+    private static void notePendingDirtyEvents() {
+        long now = System.nanoTime();
+        if (firstPendingDirtyNanos == 0L) {
+            firstPendingDirtyNanos = now;
+        }
+        lastPendingDirtyNanos = now;
     }
 
     private static CompletableFuture<DirtyGeometryMerge> submitDirtyGeometryMerge(
@@ -969,7 +1095,7 @@ public final class RayTracingProbe {
         long generation,
         ClientLevel level
     ) {
-        // Full flattening, PBR packing and RayTracingLightTree construction are all CPU work;
+        // PBR packing and RayTracingLightTree construction are all CPU work;
         // keep them on the serialized geometry worker and publish only the immutable result.
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -1014,12 +1140,15 @@ public final class RayTracingProbe {
             return;
         }
         // One reference assignment is the only render-thread publication. Vulkan upload sees a
-        // complete immutable scene; no partially flattened arrays can escape to the frame.
+        // complete immutable section snapshot; no partially built scene can escape to the frame.
         smokeGeometry = completedBuild.geometry();
         capturedWindowOrigins.clear();
         capturedWindowOrigins.addAll(completedBuild.windowOrigins());
         capturedWindowChunkX = completedBuild.windowChunkX();
         capturedWindowChunkZ = completedBuild.windowChunkZ();
+        queuedWindowChunkX = completedBuild.windowChunkX();
+        queuedWindowChunkZ = completedBuild.windowChunkZ();
+        queuedWindowValid = true;
         capturedWindowValid = true;
         fullCaptureCount++;
         sceneDirty = completedBuild.generation() != sceneGeneration
@@ -1044,18 +1173,19 @@ public final class RayTracingProbe {
             stopSmokeTestResources();
             return;
         }
+        // New block notifications and camera-window movement are reconciled after this coherent
+        // batch. Only a world/render-distance change or a wholly new snapshot makes it unsafe.
         boolean currentSnapshot = smokeGeometry != null
             && smokeGeometry.renderDistanceChunks == renderDistanceChunks
-            && completedMerge.generation() == sceneGeneration
             && completedMerge.level() == capturedLevel
             && completedMerge.level() == Minecraft.getInstance().level
             && !fullCaptureRequested;
         if (!currentSnapshot) {
-            // Dirty notifications, world changes, window changes and full recapture requests all
-            // advance the generation. Re-queue the transaction that was captured by the worker so
-            // an invalidated result can never be published as the current world snapshot.
+            // A world, render-distance, or full-capture change makes the result unsafe. Re-queue
+            // its sections; ordinary notifications and camera movement do not invalidate it.
             pendingDirtySections.addAll(completedMerge.dirtySections());
             pendingCaptureSections.addAll(completedMerge.dirtySections());
+            notePendingDirtyEvents();
             sceneDirty = true;
             LOGGER.info("RTest discarded stale dirty-section merge (captureGeneration={}, sceneGeneration={}, fullCaptureRequested={})",
                 completedMerge.generation(), sceneGeneration, fullCaptureRequested);
@@ -1069,6 +1199,9 @@ public final class RayTracingProbe {
         capturedWindowOrigins.addAll(completedMerge.windowOrigins());
         capturedWindowChunkX = completedMerge.windowChunkX();
         capturedWindowChunkZ = completedMerge.windowChunkZ();
+        queuedWindowChunkX = completedMerge.windowChunkX();
+        queuedWindowChunkZ = completedMerge.windowChunkZ();
+        queuedWindowValid = true;
         capturedWindowValid = true;
         partialCaptureCount++;
         sceneDirty = fullCaptureRequested || !pendingDirtySections.isEmpty();
@@ -1076,10 +1209,144 @@ public final class RayTracingProbe {
             smokeGeometry.triangleCount(), partialCaptureCount, fullCaptureCount);
     }
 
+    /**
+     * Replaces only LOD parents that contain a changed native section. Clean SectionGeometry
+     * instances are retained by replaceSections(), so identity comparison is a cheap and exact
+     * change detector. This keeps a camera moving through a streamed world from restarting the
+     * entire hierarchy after every small scene publication.
+     */
+    private static void updateTerrainLodInputsIncrementally(
+            RayTracingScene.SceneGeometry previous,
+            RayTracingScene.SceneGeometry next,
+            int maxLevel,
+            RayTracingTerrainProxyStore.WorldIdentity proxyIdentity) {
+        Map<Long, RayTracingScene.SceneGeometry.SectionGeometry> previousSections =
+            terrainSectionsByOrigin(previous);
+        Map<Long, RayTracingScene.SceneGeometry.SectionGeometry> nextSections =
+            terrainSectionsByOrigin(next);
+        Set<Long> origins = new LinkedHashSet<>(previousSections.keySet());
+        origins.addAll(nextSections.keySet());
+        Set<Long> changedOrigins = new LinkedHashSet<>();
+        Map<Long, RayTracingScene.SceneGeometry.SectionGeometry> changedNext = new LinkedHashMap<>();
+        Map<Long, RayTracingTerrainLod.NodeKey> affectedNodes = new LinkedHashMap<>();
+        for (long origin : origins) {
+            RayTracingScene.SceneGeometry.SectionGeometry oldSection = previousSections.get(origin);
+            RayTracingScene.SceneGeometry.SectionGeometry newSection = nextSections.get(origin);
+            if (oldSection == newSection) continue;
+            changedOrigins.add(origin);
+            if (oldSection != null && isOpaqueSection(oldSection)) {
+                terrainLodHierarchyKeys.remove(terrainLodKey(oldSection));
+                collectAffectedTerrainParents(oldSection, maxLevel, affectedNodes);
+                invalidateTerrainProxyParents(proxyIdentity, oldSection, maxLevel);
+            }
+            if (newSection != null && isOpaqueSection(newSection)) {
+                terrainLodHierarchyKeys.add(terrainLodKey(newSection));
+                collectAffectedTerrainParents(newSection, maxLevel, affectedNodes);
+                changedNext.put(origin, newSection);
+                invalidateTerrainProxyParents(proxyIdentity, newSection, maxLevel);
+            }
+        }
+        if (changedOrigins.isEmpty()) return;
+
+        Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion> versions =
+            new HashMap<>(terrainLodNodeVersions);
+        for (Map.Entry<Long, RayTracingTerrainLod.NodeKey> affected : affectedNodes.entrySet()) {
+            long id = affected.getKey();
+            RayTracingTerrainLod.NodeKey nodeKey = affected.getValue();
+            List<RayTracingTerrainLod.SectionInput> updated = new ArrayList<>(
+                terrainLodInputs.getOrDefault(id, List.of()));
+            updated.removeIf(input -> changedOrigins.contains(
+                new BlockPos(input.originX(), input.originY(), input.originZ()).asLong()));
+            for (Map.Entry<Long, RayTracingScene.SceneGeometry.SectionGeometry> replacement
+                    : changedNext.entrySet()) {
+                RayTracingScene.SceneGeometry.SectionGeometry section = replacement.getValue();
+                if (terrainLodParentKey(section, nodeKey.level()).equals(nodeKey)) {
+                    updated.add(terrainLodInput(section));
+                }
+            }
+
+            RayTracingTerrainLodScheduler.NodeKey schedulerKey =
+                new RayTracingTerrainLodScheduler.NodeKey(id);
+            Long oldFingerprint = terrainLodFingerprints.get(id);
+            if (updated.isEmpty()) {
+                terrainLodInputs.remove(id);
+                terrainLodFingerprints.remove(id);
+                terrainLodHierarchyKeys.remove(nodeKey);
+                versions.remove(schedulerKey);
+                invalidateTerrainLodNode(id, schedulerKey);
+                continue;
+            }
+
+            long fingerprint = inputFingerprint(updated);
+            terrainLodInputs.put(id, List.copyOf(updated));
+            terrainLodFingerprints.put(id, fingerprint);
+            terrainLodHierarchyKeys.add(nodeKey);
+            if (oldFingerprint == null || oldFingerprint.longValue() != fingerprint) {
+                RayTracingTerrainLodScheduler.NodeVersion oldVersion = versions.get(schedulerKey);
+                long nodeGeneration = oldVersion == null ? 1L : oldVersion.nodeGeneration() + 1L;
+                versions.put(schedulerKey,
+                    new RayTracingTerrainLodScheduler.NodeVersion(nodeGeneration, fingerprint));
+                invalidateTerrainLodNode(id, schedulerKey);
+            }
+        }
+        terrainLodNodeVersions = Map.copyOf(versions);
+        terrainLodSelectionDirty = true;
+    }
+
+    private static Map<Long, RayTracingScene.SceneGeometry.SectionGeometry> terrainSectionsByOrigin(
+            RayTracingScene.SceneGeometry geometry) {
+        Map<Long, RayTracingScene.SceneGeometry.SectionGeometry> sections = new LinkedHashMap<>();
+        for (RayTracingScene.SceneGeometry.SectionGeometry section : geometry.sections) {
+            sections.put(new BlockPos(section.originX, section.originY, section.originZ).asLong(), section);
+        }
+        return sections;
+    }
+
+    private static RayTracingTerrainLod.SectionInput terrainLodInput(
+            RayTracingScene.SceneGeometry.SectionGeometry section) {
+        return RayTracingTerrainLod.SectionInput.viewOf(section.originX, section.originY, section.originZ,
+            section.vertices, section.materialData,
+            ((long)section.vertexFingerprint() << 32) ^ (section.materialFingerprint & 0xffffffffL));
+    }
+
+    private static RayTracingTerrainLod.NodeKey terrainLodParentKey(
+            RayTracingScene.SceneGeometry.SectionGeometry section, int level) {
+        int sx = Math.floorDiv(section.originX, RayTracingTerrainLod.SECTION_SIZE);
+        int sy = Math.floorDiv(section.originY, RayTracingTerrainLod.SECTION_SIZE);
+        int sz = Math.floorDiv(section.originZ, RayTracingTerrainLod.SECTION_SIZE);
+        return new RayTracingTerrainLod.NodeKey(level, Math.floorDiv(sx, 1 << level),
+            Math.floorDiv(sy, 1 << level), Math.floorDiv(sz, 1 << level));
+    }
+
+    private static void collectAffectedTerrainParents(
+            RayTracingScene.SceneGeometry.SectionGeometry section,
+            int maxLevel,
+            Map<Long, RayTracingTerrainLod.NodeKey> affectedNodes) {
+        for (int level = 1; level <= maxLevel; level++) {
+            RayTracingTerrainLod.NodeKey key = terrainLodParentKey(section, level);
+            affectedNodes.put(terrainLodId(key), key);
+        }
+    }
+
+    private static void invalidateTerrainLodNode(
+            long id, RayTracingTerrainLodScheduler.NodeKey schedulerKey) {
+        terrainLodResults.remove(id);
+        terrainLodBlocked.remove(id);
+        terrainLodPending.remove(id);
+        RayTracingTerrainLodScheduler.Token token = terrainLodWorkerTokens.remove(id);
+        if (token != null) terrainLodWorkerInputs.remove(token);
+        if (terrainLodScheduler != null) terrainLodScheduler.cancel(schedulerKey);
+    }
+
     private static void updateTerrainLod(Camera camera) {
         boolean enabled = RayTracingClientConfig.INSTANCE.terrainLodEnabled.get();
+        pollTerrainGeometryComposition(enabled);
+        enabled = RayTracingClientConfig.INSTANCE.terrainLodEnabled.get();
         if (!enabled) {
-            closeTerrainLodScheduler();
+            if (terrainLodScheduler != null || terrainLodSourceGeometry != null) {
+                closeTerrainLodScheduler();
+            }
+            terrainLodGpuTraversalActive = false;
             activeGeometry = smokeGeometry;
             return;
         }
@@ -1087,8 +1354,8 @@ public final class RayTracingProbe {
         int maxLevel = Math.min(RayTracingTerrainLod.MAX_HIERARCHY_LEVEL,
             RayTracingClientConfig.INSTANCE.terrainLodMaxLevel.get());
         boolean farCacheEnabled = RayTracingClientConfig.INSTANCE.terrainLodFarCacheEnabled.get();
-        int farRadius = Math.max(radius,
-            RayTracingClientConfig.INSTANCE.terrainLodFarRadiusChunks.get());
+        int farRadius = Math.min(smokeGeometry.renderDistanceChunks,
+            Math.max(radius, RayTracingClientConfig.INSTANCE.terrainLodFarRadiusChunks.get()));
         RayTracingTerrainProxyStore.WorldIdentity proxyIdentity =
             ensureTerrainProxyIdentity(capturedLevel == null ? Minecraft.getInstance().level : capturedLevel);
         if (!farCacheEnabled && proxyIdentity != null) {
@@ -1096,19 +1363,37 @@ public final class RayTracingProbe {
         }
         int budget = RayTracingClientConfig.INSTANCE.terrainLodBuildBudget.get();
         int queueLimit = RayTracingClientConfig.INSTANCE.terrainLodQueueLimit.get();
-        boolean gpuTraversalEnabled = RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
+        boolean gpuTraversalRequested = RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
         long config = 31L * radius + 37L * maxLevel + 41L * budget + 43L * queueLimit
             + 61L * farRadius + (farCacheEnabled ? 67L : 71L)
-            + (gpuTraversalEnabled ? 73L : 79L);
+            + (gpuTraversalRequested ? 73L : 79L);
         int cx = cameraChunkX(camera);
         int cz = cameraChunkZ(camera);
-        long window = (((long) cx) << 32) ^ (cz & 0xffffffffL);
         boolean configChanged = config != terrainLodConfigFingerprint;
-        // Partial Section merges intentionally preserve SceneGeometry.revision for temporal
-        // continuity, so identity—not revision—is the source snapshot boundary for LOD inputs.
+        // Partial section merges preserve the scene revision. Use that epoch to distinguish a
+        // few changed parents from a genuinely new world snapshot; invalidating every parent on
+        // each immutable merge starves LOD whenever chunks stream during movement.
         boolean sourceChanged = smokeGeometry != terrainLodSourceGeometry;
+        if (sourceChanged || configChanged) {
+            terrainLodGpuCandidateLimitExceeded = false;
+        }
+        // GPU traversal keeps every native BLAS resident so it can fall back when a coarse
+        // node is unavailable. On large captures this defeats the CPU cut and can exceed both
+        // the startup memory budget and the triangle gate. Enable it only when the complete
+        // native-plus-coarse candidate set fits those limits.
+        boolean gpuTraversalEnabled = gpuTraversalRequested
+            && smokeGeometry.triangleCount() <= MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL
+            && !terrainLodGpuCandidateLimitExceeded;
+        if (gpuTraversalRequested && !gpuTraversalEnabled && (sourceChanged || configChanged)) {
+            LOGGER.info("RTest using CPU terrain cut before RT because GPU traversal retains the full native scene "
+                + "(triangles={}, GPU traversal limit={})",
+                smokeGeometry.triangleCount(), MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL);
+        }
         boolean windowChanged = !terrainLodSelectionValid
             || cx != terrainLodCameraChunkX || cz != terrainLodCameraChunkZ;
+        if (sourceChanged || configChanged || windowChanged) {
+            terrainLodChangeSerial++;
+        }
         boolean compositionNeeded = sourceChanged || windowChanged;
         if (terrainLodScheduler == null || configChanged) {
             closeTerrainLodScheduler();
@@ -1120,23 +1405,19 @@ public final class RayTracingProbe {
                     }
                     return RayTracingTerrainLod.buildNode(key,
                         terrainLodWorkerInputs.getOrDefault(request.token(), List.of()));
-                });
+            });
             terrainLodConfigFingerprint = config;
-            terrainLodSceneGeneration = sceneGeneration;
             sourceChanged = true;
             windowChanged = true;
             compositionNeeded = true;
         }
-        if (terrainLodSceneGeneration != sceneGeneration) {
-            terrainLodSceneGeneration = sceneGeneration;
-            terrainLodScheduler.cancelAll();
-            terrainLodPending.clear();
-            terrainLodWorkerInputs.clear();
-            terrainLodResults.clear();
-            terrainLodSelected.clear();
-            compositionNeeded = true;
-        }
-        if (sourceChanged) {
+        boolean fullSourceRebuild = sourceChanged && (terrainLodSourceGeometry == null
+            || smokeGeometry.revision() != terrainLodSourceGeometry.revision() || configChanged);
+        if (fullSourceRebuild) {
+            terrainLodSourceGeneration++;
+            // LOD meshes depend on the source snapshot, not the camera. Keep this generation
+            // stable as the view crosses chunks so in-flight parent builds remain publishable.
+            terrainLodWindowGeneration = terrainLodSourceGeneration;
             terrainLodSourceGeometry = smokeGeometry;
             if (farCacheEnabled && proxyIdentity != null) {
                 // A newly captured section is authoritative for every parent that contains it.
@@ -1152,8 +1433,15 @@ public final class RayTracingProbe {
             terrainLodBlocked.clear();
             terrainLodPending.clear();
             terrainLodSelected.clear();
+            terrainLodSelectedKeys.clear();
             terrainLodWorkerInputs.clear();
+            terrainLodWorkerTokens.clear();
             terrainLodHierarchyKeys.clear();
+            terrainLodSelectionDirty = true;
+            terrainLodCompositionPending = false;
+            terrainLodSelection = null;
+            terrainLodAvailableNodes = Map.of();
+            terrainLodLastSelectionNanos = 0L;
             terrainLodScheduler.cancelAll();
             for (RayTracingScene.SceneGeometry.SectionGeometry section : smokeGeometry.sections) {
                 if (!isOpaqueSection(section)) {
@@ -1164,117 +1452,142 @@ public final class RayTracingProbe {
                 int sz = Math.floorDiv(section.originZ, RayTracingTerrainLod.SECTION_SIZE);
                 RayTracingTerrainLod.NodeKey leaf = new RayTracingTerrainLod.NodeKey(0, sx, sy, sz);
                 terrainLodHierarchyKeys.add(leaf);
+                // A section participates in each parent level. Share one immutable view over
+                // the already-owned section arrays instead of cloning multi-megabyte arrays
+                // once per level.
+                RayTracingTerrainLod.SectionInput input = RayTracingTerrainLod.SectionInput.viewOf(
+                    section.originX, section.originY, section.originZ,
+                    section.vertices, section.materialData,
+                    ((long)section.vertexFingerprint() << 32)
+                        ^ (section.materialFingerprint & 0xffffffffL));
                 for (int level = 1; level <= maxLevel; level++) {
                     RayTracingTerrainLod.NodeKey key = new RayTracingTerrainLod.NodeKey(level,
                         Math.floorDiv(sx, 1 << level), Math.floorDiv(sy, 1 << level),
                         Math.floorDiv(sz, 1 << level));
                     terrainLodHierarchyKeys.add(key);
                     long id = terrainLodId(key);
-                    terrainLodInputs.computeIfAbsent(id, ignored -> new ArrayList<>()).add(
-                        new RayTracingTerrainLod.SectionInput(section.originX, section.originY,
-                            section.originZ, section.vertices, section.materialData));
+                    terrainLodInputs.computeIfAbsent(id, ignored -> new ArrayList<>()).add(input);
                 }
             }
             for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
                 terrainLodFingerprints.put(entry.getKey(), inputFingerprint(entry.getValue()));
             }
+            Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion> versions =
+                new HashMap<>();
+            for (Map.Entry<Long, Long> entry : terrainLodFingerprints.entrySet()) {
+                versions.put(new RayTracingTerrainLodScheduler.NodeKey(entry.getKey()),
+                    new RayTracingTerrainLodScheduler.NodeVersion(1L, entry.getValue()));
+            }
+            terrainLodNodeVersions = Map.copyOf(versions);
+        } else if (sourceChanged) {
+            updateTerrainLodInputsIncrementally(terrainLodSourceGeometry, smokeGeometry,
+                maxLevel, farCacheEnabled ? proxyIdentity : null);
+            terrainLodSourceGeometry = smokeGeometry;
         }
         if (windowChanged) {
             terrainLodCameraChunkX = cx;
             terrainLodCameraChunkZ = cz;
-            terrainLodWindowGeneration = window;
             terrainLodSelectionValid = true;
-            terrainLodPending.clear();
-            terrainLodSelected.clear();
-            terrainLodWorkerInputs.clear();
-            terrainLodScheduler.cancelAll();
-        }
-        Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion> versions = new HashMap<>();
-        for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
-            if (terrainLodBlocked.contains(entry.getKey())) continue;
-            versions.put(new RayTracingTerrainLodScheduler.NodeKey(entry.getKey()),
-                new RayTracingTerrainLodScheduler.NodeVersion(1L,
-                    terrainLodFingerprints.getOrDefault(entry.getKey(), 0L)));
+            // Node meshes are view independent. Re-evaluate the cut for the new camera, but
+            // preserve pending and ready nodes so rapid movement cannot cancel all LOD work.
+            terrainLodSelectionDirty = true;
         }
         for (RayTracingTerrainLodScheduler.Result<RayTracingTerrainLod.Node> result :
-                terrainLodScheduler.poll(budget, sceneGeneration, terrainLodWindowGeneration, versions)) {
+                terrainLodScheduler.poll(budget, terrainLodSourceGeneration,
+                    terrainLodWindowGeneration, terrainLodNodeVersions)) {
             long id = result.request().nodeKey().nodeId();
             terrainLodPending.remove(id);
             terrainLodWorkerInputs.remove(result.request().token());
+            terrainLodWorkerTokens.remove(id, result.request().token());
             RayTracingTerrainLod.NodeKey key = terrainLodNodeKey(id);
             if (key != null && key.equals(result.value().key())) {
                 terrainLodResults.put(id, result.value());
+                terrainLodChangeSerial++;
                 if (farCacheEnabled && proxyIdentity != null && result.value().ready()) {
                     terrainProxyStore.load(proxyIdentity, key, sceneGeneration,
                         terrainLodFingerprints.getOrDefault(id, 0L),
                         RayTracingTerrainProxyStore.OpaqueNodeMesh.from(result.value().mesh()));
                 }
-                compositionNeeded = true;
+                terrainLodSelectionDirty = true;
+                terrainLodCompositionPending = true;
             }
         }
         for (RayTracingTerrainLodScheduler.Failure failure : terrainLodScheduler.pollFailures(4)) {
             long failedId = failure.request().nodeKey().nodeId();
             terrainLodPending.remove(failedId);
             terrainLodWorkerInputs.remove(failure.request().token());
+            terrainLodWorkerTokens.remove(failedId, failure.request().token());
             terrainLodBlocked.add(failedId);
             LOGGER.warn("RTest terrain LOD worker failed for request {}", failure.request(), failure.cause());
         }
 
-        // Add only immutable proxies that came from a previously observed native section. A
-        // proxy overlapping the current ClientLevel snapshot is deliberately ignored: native
-        // capture remains authoritative there, including transparent/fluid sections.
-        Map<Long, RayTracingTerrainLod.Node> availableTerrainNodes = new HashMap<>(terrainLodResults);
-        Set<RayTracingTerrainLod.NodeKey> hierarchyKeys = new LinkedHashSet<>(terrainLodHierarchyKeys);
-        if (farCacheEnabled && proxyIdentity != null) {
-            for (RayTracingTerrainProxyStore.NodeSnapshot snapshot
-                    : terrainProxyStore.snapshot(proxyIdentity).nodes()) {
-                RayTracingTerrainLod.NodeKey key = snapshot.id().nodeKey();
-                if (key.level() <= 0 || key.level() > maxLevel
-                        || distanceToNode(key, camera) > farRadius * 16.0
-                        || overlapsCurrentNativeGeometry(key, smokeGeometry)) {
-                    continue;
-                }
-                long id = terrainLodId(key);
-                if (terrainLodResults.containsKey(id)) continue;
-                RayTracingTerrainLod.Node node = RayTracingTerrainLod.Node.fromMesh(
-                    key, snapshot.mesh().vertices(), snapshot.mesh().materialData());
-                if (node.ready()) {
-                    availableTerrainNodes.put(id, node);
-                    hierarchyKeys.add(key);
+        long selectionNow = System.nanoTime();
+        boolean selectionUpdateDue = terrainLodSelectionDirty
+            && (sourceChanged || windowChanged || terrainLodSelection == null
+                || selectionNow - terrainLodLastSelectionNanos >= TERRAIN_LOD_SELECTION_INTERVAL_NANOS);
+        if (selectionUpdateDue) {
+            // Add only immutable proxies that came from a previously observed native section. A
+            // proxy overlapping the current ClientLevel snapshot is deliberately ignored: native
+            // capture remains authoritative there, including transparent/fluid sections.
+            Map<Long, RayTracingTerrainLod.Node> availableTerrainNodes = new HashMap<>(terrainLodResults);
+            if (farCacheEnabled && proxyIdentity != null) {
+                for (RayTracingTerrainProxyStore.NodeSnapshot snapshot
+                        : terrainProxyStore.snapshot(proxyIdentity).nodes()) {
+                    RayTracingTerrainLod.NodeKey key = snapshot.id().nodeKey();
+                    if (key.level() <= 0 || key.level() > maxLevel
+                            || distanceToNode(key, camera) > farRadius * 16.0
+                            || overlapsCurrentNativeGeometry(key, smokeGeometry)) {
+                        continue;
+                    }
+                    long id = terrainLodId(key);
+                    if (terrainLodResults.containsKey(id)) continue;
+                    RayTracingTerrainLod.Node node = RayTracingTerrainLod.Node.fromMesh(
+                        key, snapshot.mesh().vertices(), snapshot.mesh().materialData());
+                    if (node.ready()) {
+                        availableTerrainNodes.put(id, node);
+                    }
                 }
             }
-        }
 
-        // Keep the selection a real mutually-exclusive cut through the hierarchy. A ready level-2
-        // node can replace its level-1/level-0 descendants; if it is missing, the hierarchy
-        // descends to the nearest ready child and ultimately leaves the native section visible.
-        Set<Long> previousSelected = new LinkedHashSet<>(terrainLodSelected);
-        Set<RayTracingTerrainLod.NodeKey> previousKeys = new LinkedHashSet<>();
-        for (long id : previousSelected) {
-            RayTracingTerrainLod.NodeKey key = terrainLodNodeKey(id);
-            if (key != null) previousKeys.add(key);
+            // Unready LOD keys and native leaves are implicit fallbacks. They never need nodes in
+            // the selector: retaining only ready coarse nodes preserves the selected cut while
+            // avoiding one selection step per native section on RD32 worlds.
+            Set<Long> previousSelected = new HashSet<>(terrainLodSelected);
+            List<RayTracingTerrainLod.Node> hierarchyNodes = new ArrayList<>(availableTerrainNodes.size());
+            for (RayTracingTerrainLod.Node node : availableTerrainNodes.values()) {
+                if (node.key().level() > 0 && node.ready()) hierarchyNodes.add(node);
+            }
+            RayTracingTerrainLod.Hierarchy hierarchy = RayTracingTerrainLod.fromNodes(hierarchyNodes);
+            double enterDistance = radius * 16.0;
+            double exitDistance = Math.max(0.0, (radius - 1) * 16.0);
+            terrainLodSelection = hierarchy.select(
+                new RayTracingTerrainLod.View(camera.position().x, camera.position().y, camera.position().z,
+                    1.0, Math.PI * 0.5),
+                new RayTracingTerrainLod.Hysteresis(enterDistance, exitDistance,
+                    Double.MAX_VALUE, Double.MAX_VALUE),
+                terrainLodSelectedKeys);
+            terrainLodAvailableNodes = Map.copyOf(availableTerrainNodes);
+            terrainLodSelected.clear();
+            terrainLodSelectedKeys.clear();
+            for (RayTracingTerrainLod.NodeKey key : terrainLodSelection.nodes()) {
+                if (key.level() > 0) {
+                    terrainLodSelected.add(terrainLodId(key));
+                    terrainLodSelectedKeys.add(key);
+                }
+            }
+            boolean selectedSetChanged = !terrainLodSelected.equals(previousSelected);
+            if (selectedSetChanged) terrainLodChangeSerial++;
+            compositionNeeded |= terrainLodCompositionPending
+                // The GPU shader can choose visibility within the candidate set, but the
+                // candidate set itself is the selected CPU cut. Recompose when that cut moves
+                // so a newly selected parent cannot coexist with its old child proxies.
+                || selectedSetChanged;
+            terrainLodSelectionDirty = false;
+            terrainLodLastSelectionNanos = selectionNow;
         }
-        List<RayTracingTerrainLod.Node> hierarchyNodes = new ArrayList<>();
-        for (RayTracingTerrainLod.NodeKey key : hierarchyKeys) {
-            RayTracingTerrainLod.Node node = key.level() == 0
-                ? new RayTracingTerrainLod.Node(key, null)
-                : availableTerrainNodes.get(terrainLodId(key));
-            hierarchyNodes.add(node == null ? new RayTracingTerrainLod.Node(key, null) : node);
-        }
-        RayTracingTerrainLod.Hierarchy hierarchy = RayTracingTerrainLod.fromNodes(hierarchyNodes);
-        double enterDistance = radius * 16.0;
-        double exitDistance = Math.max(0.0, (radius - 1) * 16.0);
-        RayTracingTerrainLod.Selection selection = hierarchy.select(
-            new RayTracingTerrainLod.View(camera.position().x, camera.position().y, camera.position().z,
-                1.0, Math.PI * 0.5),
-            new RayTracingTerrainLod.Hysteresis(enterDistance, exitDistance,
-                Double.MAX_VALUE, Double.MAX_VALUE),
-            previousKeys);
-        terrainLodSelected.clear();
-        for (RayTracingTerrainLod.NodeKey key : selection.nodes()) {
-            if (key.level() > 0) terrainLodSelected.add(terrainLodId(key));
-        }
-        compositionNeeded |= !terrainLodSelected.equals(previousSelected);
+        Map<Long, RayTracingTerrainLod.Node> availableTerrainNodes = terrainLodAvailableNodes;
+        RayTracingTerrainLod.Selection selection = terrainLodSelection;
+        Set<RayTracingTerrainLod.NodeKey> selectedTerrainKeys = terrainLodSelectedKeys;
 
         int submitted = 0;
         int nativeRadiusSkipped = 0;
@@ -1289,19 +1602,28 @@ public final class RayTracingProbe {
                 continue;
             }
             long fingerprint = terrainLodFingerprints.getOrDefault(id, 0L);
+            RayTracingTerrainLodScheduler.NodeVersion nodeVersion = terrainLodNodeVersions.get(
+                new RayTracingTerrainLodScheduler.NodeKey(id));
+            if (nodeVersion == null) continue;
             RayTracingTerrainLodScheduler.Request request = terrainLodScheduler.request(
-                new RayTracingTerrainLodScheduler.NodeKey(id), sceneGeneration, terrainLodWindowGeneration,
-                1L, fingerprint, key.level(), distance);
+                new RayTracingTerrainLodScheduler.NodeKey(id), terrainLodSourceGeneration,
+                terrainLodWindowGeneration,
+                nodeVersion.nodeGeneration(), fingerprint, key.level(), distance);
             terrainLodWorkerInputs.put(request.token(), List.copyOf(entry.getValue()));
             if (submitted >= budget || !terrainLodScheduler.submit(request)) {
                 terrainLodWorkerInputs.remove(request.token());
                 break;
             }
             terrainLodPending.add(id);
+            terrainLodWorkerTokens.put(id, request.token());
             submitted++;
         }
+        gpuTraversalEnabled &= terrainLodPending.isEmpty();
+        if (gpuTraversalEnabled != terrainLodGpuTraversalActive) {
+            compositionNeeded = true;
+        }
         long diagnosticFrame = ++terrainLodDiagnosticFrame;
-        if (!compositionNeeded) {
+        if (!compositionNeeded || pendingTerrainGeometryComposition != null) {
             logTerrainLodState(diagnosticFrame, radius, maxLevel, gpuTraversalEnabled,
                 nativeRadiusSkipped, availableTerrainNodes, selection, terrainLodFarProxyActive, submitted);
             return;
@@ -1315,33 +1637,74 @@ public final class RayTracingProbe {
             }
             RayTracingTerrainLod.NodeKey leaf = terrainLodKey(section);
             boolean covered = false;
-            for (long selectedId : terrainLodSelected) {
-                RayTracingTerrainLod.NodeKey selected = terrainLodNodeKey(selectedId);
-                if (selected != null && containsSection(selected, leaf)) {
+            RayTracingTerrainLod.NodeKey ancestor = leaf;
+            for (int level = 1; level <= maxLevel; level++) {
+                ancestor = ancestor.parent();
+                if (ancestor != null && selectedTerrainKeys.contains(ancestor)) {
                     covered = true;
                     break;
                 }
             }
             if (!covered) nativeSections.add(section);
         }
+        List<RayTracingScene.SceneGeometry.SectionGeometry> cpuNativeSections = List.copyOf(nativeSections);
         if (gpuTraversalEnabled) {
-            // GPU traversal receives the complete candidate set. Its parent links and Hi-Z test
-            // perform the final mutually-exclusive cut; keeping the native sections resident is
-            // what makes a missing/occluded coarse node safe on the very first GPU frame.
-            nativeSections = new ArrayList<>(smokeGeometry.sections);
             coarseSections.clear();
-            for (Map.Entry<Long, RayTracingTerrainLod.Node> entry : availableTerrainNodes.entrySet()) {
-                RayTracingTerrainLod.NodeKey key = terrainLodNodeKey(entry.getKey());
-                if (key == null || key.level() == 0
-                        || distanceToNode(key, camera) > farRadius * 16.0) continue;
+            Set<RayTracingTerrainLod.NodeKey> gpuCoarseKeys = new HashSet<>();
+            // Feed the shader the same mutually-exclusive cut selected by the CPU hierarchy
+            // walker. Passing every ready node made the GPU candidate set contain parents and
+            // descendants at the same time; after native compaction that sparse set could no
+            // longer describe a complete octree cut, so multiple LOD layers were visible in
+            // the same ray. GPU traversal still performs frustum/Hi-Z selection over this cut,
+            // while the CPU cut guarantees that a ray cannot hit overlapping LOD proxies.
+            for (RayTracingTerrainLod.NodeKey key : selectedTerrainKeys) {
+                if (key.level() == 0 || distanceToNode(key, camera) > farRadius * 16.0) continue;
+                long nodeId = terrainLodId(key);
+                RayTracingTerrainLod.Node node = availableTerrainNodes.get(nodeId);
+                if (node == null) continue;
                 RayTracingScene.SceneGeometry.SectionGeometry coarse =
-                    RayTracingScene.SceneGeometry.SectionGeometry.coarse(entry.getValue());
+                    RayTracingScene.SceneGeometry.SectionGeometry.coarse(node);
                 if (coarse != null) {
                     coarseSections.add(coarse);
-                    hasFarProxy |= !terrainLodResults.containsKey(entry.getKey());
+                    gpuCoarseKeys.add(key);
+                    hasFarProxy |= !terrainLodResults.containsKey(nodeId);
                 }
             }
-        } else {
+            // Keep the close native ring for detail. Far native leaves covered by a ready
+            // coarse proxy only inflate the TLAS: masking them still pays for their AS boxes
+            // and for a full TLAS UPDATE. If a proxy is absent, retain the leaf as fallback.
+            nativeSections = new ArrayList<>();
+            double nativeRadiusBlocks = radius * 16.0;
+            long candidateTriangleCount = 0L;
+            for (RayTracingScene.SceneGeometry.SectionGeometry section : smokeGeometry.sections) {
+                if (!isOpaqueSection(section)) {
+                    nativeSections.add(section);
+                    candidateTriangleCount += section.triangleCount();
+                    continue;
+                }
+                RayTracingTerrainLod.NodeKey leaf = terrainLodKey(section);
+                if (RayTracingTerrainLod.keepGpuNativeLeaf(
+                        leaf, gpuCoarseKeys, distanceToNode(leaf, camera), nativeRadiusBlocks)) {
+                    nativeSections.add(section);
+                    candidateTriangleCount += section.triangleCount();
+                }
+            }
+            for (RayTracingScene.SceneGeometry.SectionGeometry coarse : coarseSections) {
+                candidateTriangleCount += coarse.triangleCount();
+            }
+            if (candidateTriangleCount > MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL) {
+                // The compacted candidate set is the budget that matters. Disable GPU traversal
+                // only when the instances that would actually enter the TLAS still exceed it.
+                gpuTraversalEnabled = false;
+                terrainLodGpuCandidateLimitExceeded = true;
+                nativeSections = new ArrayList<>(cpuNativeSections);
+                coarseSections.clear();
+            } else {
+                terrainLodGpuCandidateLimitExceeded = false;
+            }
+        }
+        if (!gpuTraversalEnabled) {
+            hasFarProxy = false;
             for (long selectedId : terrainLodSelected) {
                 RayTracingTerrainLod.Node node = availableTerrainNodes.get(selectedId);
                 if (node != null) {
@@ -1354,12 +1717,32 @@ public final class RayTracingProbe {
                 }
             }
         }
-        activeGeometry = coarseSections.isEmpty() && nativeSections.size() == smokeGeometry.sections.size()
-            ? smokeGeometry
-            : RayTracingScene.SceneGeometry.compose(nativeSections, coarseSections, smokeGeometry,
-                hasFarProxy ? Math.max(smokeGeometry.renderDistanceChunks, farRadius)
-                    : smokeGeometry.renderDistanceChunks);
-        terrainLodFarProxyActive = hasFarProxy;
+        if (coarseSections.isEmpty() && nativeSections.size() == smokeGeometry.sections.size()) {
+            activeGeometry = smokeGeometry;
+            terrainLodGpuTraversalActive = gpuTraversalEnabled;
+            terrainLodFarProxyActive = false;
+            terrainLodCompositionPending = false;
+        } else {
+            List<RayTracingScene.SceneGeometry.SectionGeometry> nativeSnapshot = List.copyOf(nativeSections);
+            List<RayTracingScene.SceneGeometry.SectionGeometry> coarseSnapshot = List.copyOf(coarseSections);
+            RayTracingScene.SceneGeometry source = smokeGeometry;
+            RayTracingScene.SceneGeometry previousActive = activeGeometry == null ? source : activeGeometry;
+            int composedRenderDistance = hasFarProxy
+                ? Math.max(source.renderDistanceChunks, farRadius) : source.renderDistanceChunks;
+            long compositionSerial = terrainLodChangeSerial;
+            long compositionConfig = config;
+            boolean compositionGpuTraversalEnabled = gpuTraversalEnabled;
+            boolean compositionFarProxyActive = hasFarProxy;
+            terrainLodCompositionPending = true;
+            pendingTerrainGeometryComposition = CompletableFuture.supplyAsync(() -> {
+                long compositionStart = System.nanoTime();
+                RayTracingScene.SceneGeometry geometry = RayTracingScene.SceneGeometry.compose(
+                    nativeSnapshot, coarseSnapshot, source, composedRenderDistance, previousActive);
+                return new TerrainGeometryComposition(geometry, source, compositionSerial,
+                    compositionConfig, compositionGpuTraversalEnabled, compositionFarProxyActive,
+                    System.nanoTime() - compositionStart);
+            }, TERRAIN_COMPOSITION_EXECUTOR);
+        }
         logTerrainLodState(diagnosticFrame, radius, maxLevel, gpuTraversalEnabled,
             nativeRadiusSkipped, availableTerrainNodes, selection, hasFarProxy, submitted);
     }
@@ -1395,6 +1778,19 @@ public final class RayTracingProbe {
                 if (section.terrainNodeKey().level() > 0) activeCoarse++;
             }
         }
+        int nativeFallbacks = 0;
+        for (RayTracingTerrainLod.NodeKey key : terrainLodHierarchyKeys) {
+            if (key.level() != 0) continue;
+            boolean covered = false;
+            for (RayTracingTerrainLod.NodeKey ancestor = key.parent(); ancestor != null;
+                    ancestor = ancestor.parent()) {
+                if (terrainLodSelectedKeys.contains(ancestor)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) nativeFallbacks++;
+        }
         LOGGER.info(
             "RTest terrain LOD: frame={} radius_chunks={} max_level={} gpu={} source_sections={} "
                 + "hierarchy_nodes={} ready_nodes={} ready_l1={} ready_l2={} selected_l1={} selected_l2={} "
@@ -1403,7 +1799,7 @@ public final class RayTracingProbe {
             frame, radius, maxLevel, gpuTraversalEnabled,
             terrainLodSourceGeometry == null ? 0 : terrainLodSourceGeometry.sections.size(),
             terrainLodHierarchyKeys.size(), readyNodes, levelOneReady, levelTwoReady,
-            selectedLevelOne, selectedLevelTwo, selection.nativeFallbacks().size(), nativeRadiusSkipped,
+            selectedLevelOne, selectedLevelTwo, nativeFallbacks, nativeRadiusSkipped,
             submitted, terrainLodPending.size(), terrainLodBlocked.size(),
             activeGeometry == null ? 0 : activeGeometry.sections.size() - activeCoarse,
             activeCoarse, hasFarProxy);
@@ -1416,8 +1812,7 @@ public final class RayTracingProbe {
     private static long inputFingerprint(List<RayTracingTerrainLod.SectionInput> inputs) {
         long hash = 1;
         for (RayTracingTerrainLod.SectionInput input : inputs) {
-            hash = 31 * hash + Arrays.hashCode(input.vertices());
-            hash = 31 * hash + Arrays.hashCode(input.materialData());
+            hash = 31 * hash + input.contentFingerprint();
         }
         return hash;
     }
@@ -1504,15 +1899,6 @@ public final class RayTracingProbe {
         return terrainLodKeyFromId(id);
     }
 
-    private static boolean containsSection(RayTracingTerrainLod.NodeKey coarse,
-                                           RayTracingTerrainLod.NodeKey leaf) {
-        if (coarse.level() <= leaf.level()) return false;
-        int scale = 1 << (coarse.level() - leaf.level());
-        return Math.floorDiv(leaf.x(), scale) == coarse.x()
-            && Math.floorDiv(leaf.y(), scale) == coarse.y()
-            && Math.floorDiv(leaf.z(), scale) == coarse.z();
-    }
-
     private static void disableTerrainLodAfterFailure(Throwable failure) {
         if (failure == null) {
             LOGGER.error("RTest disabled terrain LOD after a coarse geometry publication failure; retrying with native terrain");
@@ -1531,6 +1917,39 @@ public final class RayTracingProbe {
         }
     }
 
+    private static void pollTerrainGeometryComposition(boolean enabled) {
+        CompletableFuture<TerrainGeometryComposition> future = pendingTerrainGeometryComposition;
+        if (future == null || !future.isDone()) return;
+        pendingTerrainGeometryComposition = null;
+        TerrainGeometryComposition result;
+        try {
+            result = future.join();
+        } catch (CompletionException failure) {
+            disableTerrainLodAfterFailure(failure.getCause());
+            return;
+        }
+        if (!enabled) {
+            terrainLodCompositionPending = false;
+            return;
+        }
+        if (result.sourceGeometry() != smokeGeometry
+                || result.configFingerprint() != terrainLodConfigFingerprint
+                || result.changeSerial() != terrainLodChangeSerial) {
+            // Inputs changed while the worker was composing. Keep the current published scene
+            // and request a fresh snapshot from the latest selection on this render tick.
+            terrainLodCompositionPending = true;
+            return;
+        }
+        activeGeometry = result.geometry();
+        terrainLodGpuTraversalActive = result.gpuTraversalEnabled();
+        terrainLodFarProxyActive = result.farProxyActive();
+        terrainLodCompositionPending = false;
+        LOGGER.info("RTest terrain composition published: sections={}, triangles={}, gpuTraversal={}, "
+                + "farProxy={}, workerDuration={} ms",
+            result.geometry().sections.size(), result.geometry().triangleCount(),
+            result.gpuTraversalEnabled(), result.farProxyActive(), result.durationNanos() / 1_000_000L);
+    }
+
     private static void closeTerrainLodScheduler() {
         if (terrainLodScheduler != null) {
             terrainLodScheduler.close();
@@ -1542,16 +1961,28 @@ public final class RayTracingProbe {
         terrainLodFingerprints.clear();
         terrainLodBlocked.clear();
         terrainLodSelected.clear();
+        terrainLodSelectedKeys.clear();
         terrainLodWorkerInputs.clear();
+        terrainLodWorkerTokens.clear();
         terrainLodHierarchyKeys.clear();
+        terrainLodNodeVersions = Map.of();
+        terrainLodAvailableNodes = Map.of();
+        terrainLodSelection = null;
+        terrainLodSelectionDirty = true;
+        terrainLodCompositionPending = false;
+        terrainLodChangeSerial++;
+        terrainLodLastSelectionNanos = 0L;
         terrainLodKeysById.clear();
         terrainLodIdsByKey.clear();
         nextTerrainLodId = 1L;
         terrainLodSelectionValid = false;
         terrainLodSourceGeometry = null;
-        terrainLodSceneGeneration = Long.MIN_VALUE;
+        terrainLodSourceGeneration = 0L;
         terrainLodDiagnosticFrame = 0L;
+        terrainLodWarmupFrames = 0L;
         terrainLodFarProxyActive = false;
+        terrainLodGpuTraversalActive = false;
+        terrainLodGpuCandidateLimitExceeded = false;
     }
 
     private static int cameraChunkX(Camera camera) {
@@ -1569,6 +2000,8 @@ public final class RayTracingProbe {
         sceneDirty = false;
         fullCaptureRequested = false;
         partialCapture = false;
+        nextRtRetryNanos = 0L;
+        rtFailureCount = 0;
         sceneGeneration++;
         closeTerrainLodScheduler();
         if (terrainProxyIdentity != null) {
@@ -1578,12 +2011,15 @@ public final class RayTracingProbe {
         activeGeometry = null;
         smokeGeometry = null;
         pendingDirtySections.clear();
+        firstPendingDirtyNanos = 0L;
+        lastPendingDirtyNanos = 0L;
         pendingCaptureSections.clear();
         activeDirtySections = null;
         capturedWindowOrigins.clear();
         capturedWindowValid = false;
+        queuedWindowValid = false;
         lastEntityFrame = null;
-        lastDynamicSummary = null;
+        DYNAMIC_SNAPSHOT_LOG_THROTTLE.reset();
         capturedLevel = null;
         RayTracingScene.SceneGeometry.CaptureSession session = captureSession;
         captureSession = null;
@@ -1591,6 +2027,8 @@ public final class RayTracingProbe {
         pendingGeometryMerge = null;
         CompletableFuture<FullGeometryBuild> fullBuild = pendingFullGeometryBuild;
         pendingFullGeometryBuild = null;
+        CompletableFuture<TerrainGeometryComposition> terrainComposition = pendingTerrainGeometryComposition;
+        pendingTerrainGeometryComposition = null;
         RayTracingPbrMaterials materials = pbrMaterials;
         pbrMaterials = null;
         try {
@@ -1601,6 +2039,7 @@ public final class RayTracingProbe {
             // futures before closing NativeImages so shutdown cannot race the geometry worker.
             awaitGeometryFuture(dirtyMerge);
             awaitGeometryFuture(fullBuild);
+            awaitGeometryFuture(terrainComposition);
         } finally {
             ItemModelGeometryAdapter.setPbrSampler(null);
             BlockEntityModelGeometryAdapter.clear();

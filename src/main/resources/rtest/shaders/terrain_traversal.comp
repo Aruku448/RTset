@@ -8,7 +8,8 @@ const uint INVALID_INDEX = 0xffffffffu;
 const uint NODE_READY = 1u;
 const uint NODE_RENDERABLE = 2u;
 const uint NODE_HAS_BLAS = 4u;
-const uint TERRAIN_INSTANCE_MASK = 0xffu;
+const uint TERRAIN_INSTANCE_MASK = 0x3fu;
+const uint UNTRACED_INSTANCE_MASK = 0x80u;
 const uint FACING_CULL_DISABLE = 1u;
 const float DEPTH_EPSILON = 1.0e-4;
 const uint MAX_PARENT_DEPTH = 64u;
@@ -146,7 +147,10 @@ bool nodeVisible(NodeMetadata node, ScreenRect rect) {
 }
 
 bool completeChildren(NodeMetadata node) {
-    if (node.hierarchy.y == INVALID_INDEX || node.hierarchy.z == 0u) return false;
+    // A sparse child list is a conservative parent fallback. Candidate compaction may remove
+    // distant leaves; descending through the remaining children would mask the parent and leave
+    // the removed octants unrendered.
+    if (node.hierarchy.y == INVALID_INDEX || node.hierarchy.z != 0xffu) return false;
     for (uint childBit = 0u; childBit < 8u; childBit++) {
         if ((node.hierarchy.z & (1u << childBit)) == 0u) continue;
         uint childIndex = node.hierarchy.y + childBit;
@@ -158,10 +162,10 @@ bool completeChildren(NodeMetadata node) {
     return true;
 }
 
-bool shouldDescend(uint nodeIndex, NodeMetadata node, ScreenRect rect) {
+bool shouldDescend(NodeMetadata node, ScreenRect rect, bool visible) {
     float screenSize = max(rect.xy.z - rect.xy.x, rect.xy.w - rect.xy.y)
                      * max(params.viewport.x, params.viewport.y);
-    return nodeVisible(node, rect) && completeChildren(node)
+    return visible && completeChildren(node)
         && screenSize > node.boundsMinAndLodError.w;
 }
 
@@ -171,7 +175,7 @@ bool pathAllows(uint nodeIndex) {
         if (ancestor >= params.config.x) return false;
         NodeMetadata parent = nodes[ancestor];
         ScreenRect parentRect = projectBounds(parent);
-        if (!shouldDescend(ancestor, parent, parentRect)) return false;
+        if (!shouldDescend(parent, parentRect, nodeVisible(parent, parentRect))) return false;
         ancestor = parent.hierarchy.x;
     }
     return ancestor == INVALID_INDEX;
@@ -200,14 +204,14 @@ void main() {
     if (slot >= params.config.y) return;
     uint outputBase = slot * 16u;
     writeIdentity(outputBase);
-    instanceWords[outputBase + 12u] = 0u;
+    instanceWords[outputBase + 12u] = UNTRACED_INSTANCE_MASK << 24u;
     instanceWords[outputBase + 13u] = FACING_CULL_DISABLE << 24u;
     instanceWords[outputBase + 14u] = params.dummyBlasAddress.x;
     instanceWords[outputBase + 15u] = params.dummyBlasAddress.y;
 
     ScreenRect rect = projectBounds(node);
     bool currentVisible = nodeVisible(node, rect);
-    bool descend = shouldDescend(nodeIndex, node, rect);
+    bool descend = shouldDescend(node, rect, currentVisible);
     bool selected = currentVisible
         && (node.draw.w & (NODE_RENDERABLE | NODE_HAS_BLAS)) == (NODE_RENDERABLE | NODE_HAS_BLAS)
         && node.draw.z > 0u && !descend && pathAllows(nodeIndex);

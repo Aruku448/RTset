@@ -43,8 +43,9 @@ public final class RayTracingTerrainTraversalAbiTest {
                 || instances.getLong(childOffset + 56) != 0x1122334455667788L) {
             throw new AssertionError("64-byte TLAS record layout is invalid");
         }
-        if ((instances.getInt(48) >>> 24) != 0 || instances.getLong(56) != 0x99L) {
-            throw new AssertionError("inactive slot was not safely masked");
+        if ((instances.getInt(48) >>> 24) != RayTracingTerrainTraversalAbi.UNTRACED_INSTANCE_MASK
+                || instances.getLong(56) != 0x99L) {
+            throw new AssertionError("unused slot must remain active while staying invisible to ray masks");
         }
 
         float[] identity = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };

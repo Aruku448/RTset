@@ -10,10 +10,12 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.phys.AABB;
 
 /** Publishes numeric snapshots from native entity, held-item, and whitelisted chest-model draws. */
 public final class DynamicEntityGeometry {
@@ -133,7 +135,8 @@ public final class DynamicEntityGeometry {
      * submitted by the capture mixin so RT can keep it for secondary/reflection rays; visibility
      * masks, rather than omission, keep it out of the RT primary ray.
      */
-    public Frame collect(ClientLevel level, Camera camera, int renderDistanceChunks, float partialTick) {
+    public Frame collect(ClientLevel level, Camera camera, int renderDistanceChunks, float partialTick,
+                         Frustum cullFrustum) {
         var nativePlayers = PlayerModelGeometryAdapter.drain();
         var nativePlayerItems = ItemModelGeometryAdapter.drainPlayerItems();
         var nativeItems = ItemModelGeometryAdapter.drain();
@@ -146,7 +149,8 @@ public final class DynamicEntityGeometry {
             // cancel LevelRenderer and then erase these entities with the RT display copy.
             int fallback = 0;
             for (Entity entity : level.entitiesForRendering()) {
-                if (!entity.isRemoved() && !entity.isPassenger() && !entity.isInvisible()) {
+                if (!entity.isRemoved() && !entity.isPassenger() && !entity.isInvisible()
+                        && isInCameraFrustum(entity, cullFrustum)) {
                     fallback++;
                 }
             }
@@ -164,6 +168,8 @@ public final class DynamicEntityGeometry {
         java.util.Map<Long, Identifier> blockEntityTextures = new java.util.HashMap<>();
         java.util.Map<Integer, Identifier> livingTextureSlots = LivingEntityGeometryAdapter.drainTextureSlots();
         java.util.Map<Long, ItemModelGeometryAdapter.Mesh> itemMeshes = new java.util.HashMap<>();
+        Map<String, Integer> failureReasons = registry.frame() % 120L == 0L
+            ? new java.util.TreeMap<>() : null;
         int fallback = 0;
         int slotOverflowFallbacks = 0;
         double radius = Math.max(32.0, (renderDistanceChunks + 2) * 16.0);
@@ -177,7 +183,7 @@ public final class DynamicEntityGeometry {
             if (entity instanceof AbstractClientPlayer) {
                 var captured = nativePlayers.get(entity.getId());
                 if (captured == null || captured.mesh().triangleCount() == 0) {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "player-mesh-missing", entity, cullFrustum);
                     continue;
                 }
                 var mesh = captured.mesh();
@@ -187,7 +193,7 @@ public final class DynamicEntityGeometry {
                 }
                 mesh = PlayerModelGeometryAdapter.append(mesh, nativePlayerItems.get(entity.getId()));
                 if (mesh.triangleCount() > DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "player-mesh-over-capacity", entity, cullFrustum);
                     continue;
                 }
                 boolean localFirstPerson = entity == Minecraft.getInstance().player
@@ -200,7 +206,7 @@ public final class DynamicEntityGeometry {
                     DynamicInstanceRegistry.FLAG_OPAQUE
                         | (localFirstPerson ? DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY : 0), false);
                 if (!registered) {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "instance-capacity", entity, cullFrustum);
                     slotOverflowFallbacks++;
                     continue;
                 }
@@ -220,7 +226,7 @@ public final class DynamicEntityGeometry {
                     captured = ItemModelGeometryAdapter.lastValid(entity.getId());
                 }
                 if (captured != null && captured.triangleCount() > DYNAMIC_ITEM_TRIANGLE_CAPACITY) {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "item-mesh-over-capacity", entity, cullFrustum);
                     continue;
                 }
                 if (captured != null && captured.triangleCount() > 0) {
@@ -230,11 +236,11 @@ public final class DynamicEntityGeometry {
                         pending.add(item);
                         itemMeshes.put((long)entity.getId(), captured);
                     } else {
-                        fallback++;
+                        fallback += recordEntityFallback(failureReasons, "item-instance-capacity", entity, cullFrustum);
                         slotOverflowFallbacks++;
                     }
                 } else {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "item-mesh-missing", entity, cullFrustum);
                 }
                 // Never publish an item instance without captured geometry. The placeholder BLAS
                 // is a diagnostics resource, not a valid far-distance or culling fallback.
@@ -244,7 +250,7 @@ public final class DynamicEntityGeometry {
                 // entities that do not extend LivingEntity.
                 var captured = nativeLiving.get(entity.getId());
                 if (captured != null && captured.mesh().triangleCount() > DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "entity-mesh-over-capacity", entity, cullFrustum);
                     continue;
                 }
                 if (captured != null && captured.mesh().triangleCount() > 0) {
@@ -256,11 +262,11 @@ public final class DynamicEntityGeometry {
                         livingMeshes.put((long)entity.getId(), captured.mesh());
                         livingTextures.put((long)entity.getId(), captured.texture());
                     } else {
-                        fallback++;
+                        fallback += recordEntityFallback(failureReasons, "entity-instance-capacity", entity, cullFrustum);
                         slotOverflowFallbacks++;
                     }
                 } else {
-                    fallback++;
+                    fallback += recordEntityFallback(failureReasons, "entity-mesh-missing", entity, cullFrustum);
                 }
             }
         }
@@ -273,10 +279,12 @@ public final class DynamicEntityGeometry {
             ItemModelGeometryAdapter.Mesh mesh = firstPerson.mesh();
             if (mesh == null || mesh.triangleCount() == 0) {
                 fallback++;
+                recordFallback(failureReasons, "first-person-item-mesh-missing");
                 continue;
             }
             if (mesh.triangleCount() > DYNAMIC_ITEM_TRIANGLE_CAPACITY) {
                 fallback++;
+                recordFallback(failureReasons, "first-person-item-over-capacity");
                 continue;
             }
             boolean registered = registry.upsert(id, DynamicInstanceRegistry.Family.FIRST_PERSON_ITEM,
@@ -293,6 +301,7 @@ public final class DynamicEntityGeometry {
                 itemMeshes.put(id, mesh);
             } else {
                 fallback++;
+                recordFallback(failureReasons, "first-person-item-instance-capacity");
                 slotOverflowFallbacks++;
             }
         }
@@ -304,10 +313,12 @@ public final class DynamicEntityGeometry {
             if (captured.mesh().triangleCount() == 0
                 || captured.topology() == BlockEntityModelGeometryAdapter.UNSUPPORTED_TOPOLOGY) {
                 fallback++;
+                recordFallback(failureReasons, "block-entity-model-unsupported");
                 continue;
             }
             if (captured.mesh().triangleCount() > DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
                 fallback++;
+                recordFallback(failureReasons, "block-entity-model-over-capacity");
                 continue;
             }
             // Animated baked/custom models may keep the same owner type while their triangle
@@ -326,6 +337,7 @@ public final class DynamicEntityGeometry {
                 blockEntityTextures.put(id, captured.texture());
             } else {
                 fallback++;
+                recordFallback(failureReasons, "block-entity-instance-capacity");
                 slotOverflowFallbacks++;
             }
         }
@@ -344,10 +356,14 @@ public final class DynamicEntityGeometry {
                 livingMeshes.put(PARTICLE_ID, nativeParticles.mesh());
             } else {
                 fallback++;
+                recordFallback(failureReasons, "particle-instance-capacity");
                 slotOverflowFallbacks++;
             }
         }
         DynamicInstanceRegistry.Frame dynamicFrame = registry.finish();
+        if (failureReasons != null && fallback > 0) {
+            LOGGER.info("RTest dynamic fallback detail: {}", failureReasons);
+        }
         if (slotOverflowFallbacks > 0 && dynamicFrame.frame() % 120L == 0L) {
             LOGGER.warn("RTest dynamic TLAS capacity {} exceeded by {} instance(s); keeping them vanilla raster",
                 DYNAMIC_SLOT_CAPACITY, slotOverflowFallbacks);
@@ -387,4 +403,31 @@ public final class DynamicEntityGeometry {
     }
 
     private record Pending(long identity, Family family, float width, float height, long topology) { }
+
+    private static int fallbackInCurrentFrustum(Entity entity, Frustum cullFrustum) {
+        return isInCameraFrustum(entity, cullFrustum) ? 1 : 0;
+    }
+
+    private static int recordEntityFallback(Map<String, Integer> reasons, String reason,
+                                            Entity entity, Frustum cullFrustum) {
+        int visible = fallbackInCurrentFrustum(entity, cullFrustum);
+        if (visible > 0 && reasons != null) {
+            reasons.merge(reason + "[" + entity.getType() + "]", visible, Integer::sum);
+        }
+        return visible;
+    }
+
+    private static void recordFallback(Map<String, Integer> reasons, String reason) {
+        if (reasons != null) reasons.merge(reason, 1, Integer::sum);
+    }
+
+    private static boolean isInCameraFrustum(Entity entity, Frustum cullFrustum) {
+        return isInCameraFrustum(entity.getBoundingBox(), cullFrustum);
+    }
+
+    static boolean isInCameraFrustum(AABB bounds, Frustum cullFrustum) {
+        // Missing state is treated conservatively. Once the actual camera frustum is known, an
+        // entity culled by vanilla cannot force the complete LevelRenderer back on for this view.
+        return cullFrustum == null || cullFrustum.isVisible(bounds);
+    }
 }

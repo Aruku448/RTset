@@ -2,6 +2,7 @@ package com.rtest.client;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
 
@@ -13,10 +14,12 @@ public final class DynamicTlasInstanceWriter {
      * Ray cull masks implement the primary/secondary TLAS split without duplicating BLAS/TLAS
      * resources. The high bit is reserved for the first-person player body.
      */
-    public static final int PRIMARY_RAY_MASK = 0x7f;
-    public static final int SECONDARY_RAY_MASK = 0xfe;
-    public static final int ALL_RAY_MASK = 0xff;
-    public static final int FIRST_PERSON_BODY_MASK = 0x80;
+    public static final int PRIMARY_RAY_MASK = 0x3f;
+    public static final int SECONDARY_RAY_MASK = 0x7e;
+    public static final int ALL_RAY_MASK = 0x3f;
+    /** Nonzero mask kept outside every shader ray mask so UPDATE never toggles inactive slots. */
+    public static final int UNTRACED_INSTANCE_MASK = 0x80;
+    public static final int FIRST_PERSON_BODY_MASK = 0x40;
     public static final int FIRST_PERSON_ITEM_MASK = 0x01;
     public static final int MOTION_METADATA_BYTES_PER_SLOT = 7 * 16;
     private static final int MOTION_METADATA_PREVIOUS_TRANSFORM_OFFSET = 3 * 16;
@@ -26,8 +29,8 @@ public final class DynamicTlasInstanceWriter {
     private DynamicTlasInstanceWriter() { }
 
     /**
-     * Writes one fixed-capacity dynamic instance array. Empty slots use mask zero and a valid
-     * dummy BLAS address, so no uninitialized device address can reach TLAS build.
+     * Writes one fixed-capacity dynamic instance array. Empty slots use a nonzero, untraced mask
+     * and a valid dummy BLAS address; every instance remains active for Vulkan TLAS UPDATE rules.
      */
     public static void write(ByteBuffer destination, int slotCount, DynamicInstanceRegistry.Frame frame,
                              Map<Long, Long> blasAddresses, Map<Long, Integer> materialBases,
@@ -38,16 +41,41 @@ public final class DynamicTlasInstanceWriter {
     public static void write(ByteBuffer destination, int slotCount, DynamicInstanceRegistry.Frame frame,
                              Map<Long, Long> blasAddresses, Map<Long, Integer> materialBases,
                              long dummyBlasAddress, float originX, float originY, float originZ) {
+        if (slotCount < 1) {
+            throw new IllegalArgumentException("Dynamic instance capacity must be positive");
+        }
+        DynamicInstanceRegistry.Instance[] instancesBySlot = new DynamicInstanceRegistry.Instance[slotCount];
+        indexInstancesBySlot(frame, slotCount, instancesBySlot);
+        write(destination, slotCount, instancesBySlot, blasAddresses, materialBases,
+            dummyBlasAddress, originX, originY, originZ);
+    }
+
+    static void indexInstancesBySlot(DynamicInstanceRegistry.Frame frame, int slotCount,
+                                     DynamicInstanceRegistry.Instance[] instancesBySlot) {
+        if (slotCount < 1 || instancesBySlot.length < slotCount) {
+            throw new IllegalArgumentException("Dynamic instance index is smaller than its capacity");
+        }
+        Arrays.fill(instancesBySlot, 0, slotCount, null);
+        for (DynamicInstanceRegistry.Instance instance : frame.instances()) {
+            int slot = instance.slot();
+            if (slot >= 0 && slot < slotCount) {
+                instancesBySlot[slot] = instance;
+            }
+        }
+    }
+
+    static void write(ByteBuffer destination, int slotCount,
+                      DynamicInstanceRegistry.Instance[] instancesBySlot,
+                      Map<Long, Long> blasAddresses, Map<Long, Integer> materialBases,
+                      long dummyBlasAddress, float originX, float originY, float originZ) {
         destination.order(ByteOrder.nativeOrder());
-        if (slotCount < 1 || destination.remaining() < (long)slotCount * INSTANCE_SIZE) {
+        if (slotCount < 1 || instancesBySlot.length < slotCount
+            || destination.remaining() < (long)slotCount * INSTANCE_SIZE) {
             throw new IllegalArgumentException("TLAS instance buffer is smaller than its capacity");
         }
         for (int slot = 0; slot < slotCount; slot++) {
             int offset = destination.position() + slot * INSTANCE_SIZE;
-            final int slotIndex = slot;
-            DynamicInstanceRegistry.Instance instance = frame.instances().stream()
-                .filter(value -> value.slot() == slotIndex)
-                .findFirst().orElse(null);
+            DynamicInstanceRegistry.Instance instance = instancesBySlot[slot];
             long address = instance == null ? dummyBlasAddress : blasAddresses.getOrDefault(instance.identity(), dummyBlasAddress);
             int material = instance == null ? 0 : materialBases.getOrDefault(instance.identity(), 0);
             writeTransform(destination, offset, instance == null
@@ -61,7 +89,7 @@ public final class DynamicTlasInstanceWriter {
             int mask = instance != null && instance.active() && blasAddresses.containsKey(instance.identity())
                 ? (firstPersonBody ? FIRST_PERSON_BODY_MASK
                     : instance.family() == DynamicInstanceRegistry.Family.FIRST_PERSON_ITEM
-                        ? FIRST_PERSON_ITEM_MASK : ALL_RAY_MASK) : 0;
+                        ? FIRST_PERSON_ITEM_MASK : ALL_RAY_MASK) : UNTRACED_INSTANCE_MASK;
             destination.putInt(offset + 48, (material & 0x00ffffff) | (mask << 24));
             // VkAccelerationStructureInstanceKHR packs SBT offset in bits 0..23 and flags in 24..31.
             destination.putInt(offset + 52, FACING_CULL_DISABLE << 24);
@@ -84,16 +112,27 @@ public final class DynamicTlasInstanceWriter {
                                            DynamicInstanceRegistry.Frame frame,
                                            Set<Long> historyResetIdentities,
                                            float originX, float originY, float originZ) {
+        if (slotCount < 1) {
+            throw new IllegalArgumentException("Dynamic instance capacity must be positive");
+        }
+        DynamicInstanceRegistry.Instance[] instancesBySlot = new DynamicInstanceRegistry.Instance[slotCount];
+        indexInstancesBySlot(frame, slotCount, instancesBySlot);
+        writeMotionMetadata(destination, slotCount, instancesBySlot, historyResetIdentities,
+            originX, originY, originZ);
+    }
+
+    static void writeMotionMetadata(ByteBuffer destination, int slotCount,
+                                    DynamicInstanceRegistry.Instance[] instancesBySlot,
+                                    Set<Long> historyResetIdentities,
+                                    float originX, float originY, float originZ) {
         destination.order(ByteOrder.nativeOrder());
-        if (slotCount < 1 || destination.remaining() < (long)slotCount * MOTION_METADATA_BYTES_PER_SLOT) {
+        if (slotCount < 1 || instancesBySlot.length < slotCount
+            || destination.remaining() < (long)slotCount * MOTION_METADATA_BYTES_PER_SLOT) {
             throw new IllegalArgumentException("Dynamic motion metadata buffer is smaller than its capacity");
         }
         for (int slot = 0; slot < slotCount; slot++) {
             int offset = destination.position() + slot * MOTION_METADATA_BYTES_PER_SLOT;
-            final int slotIndex = slot;
-            DynamicInstanceRegistry.Instance instance = frame.instances().stream()
-                .filter(value -> value.slot() == slotIndex)
-                .findFirst().orElse(null);
+            DynamicInstanceRegistry.Instance instance = instancesBySlot[slot];
             boolean active = instance != null && instance.active();
             DynamicInstanceRegistry.Transform current = active
                 ? instance.currentTransform() : DynamicInstanceRegistry.Transform.identity();

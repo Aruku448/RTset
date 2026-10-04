@@ -4,7 +4,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // RTest's ray generator writes linear radiance and hit distances into the two NRD images when
 // signal splitting is enabled. This pass is the only producer of NRD's public YCoCg/material/
-// guide contract. When NRD is disabled the ray generator keeps the old YCoCg contract for Sundial.
+// guide contract. When NRD is disabled the ray generator skips unconsumed guide writes.
 layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D nrdMotion;
 layout(set = 0, binding = 1, r32f) uniform writeonly image2D nrdViewZ;
 layout(set = 0, binding = 2, rgba32f) uniform readonly image2D primaryPosition;
@@ -172,10 +172,10 @@ void main() {
     vec4 rawDiffuse = imageLoad(noisyDiffuse, pixel);
     vec4 rawSpecular = imageLoad(noisySpecular, pixel);
     imageStore(noisyDiffuse, pixel, vec4(
-        linearToYCoCg(sanitize(rawDiffuse.rgb) / max(diffuseFactor, vec3(0.02))),
+        linearToYCoCg(sanitize(rawDiffuse.rgb / max(diffuseFactor, vec3(0.02)))),
         normalizedHitDistance(rawDiffuse.a, currentViewZ, 1.0)));
     imageStore(noisySpecular, pixel, vec4(
-        linearToYCoCg(sanitize(rawSpecular.rgb) / max(specularFactor, vec3(0.02))),
+        linearToYCoCg(sanitize(rawSpecular.rgb / max(specularFactor, vec3(0.02)))),
         normalizedHitDistance(rawSpecular.a, currentViewZ, roughness)));
     imageStore(normalRoughness, pixel, packNormalRoughness(normal, roughness));
     imageStore(material, pixel, vec4(hit ? diffuseFactor : vec3(1.0), hit ? roughness : -1.0));

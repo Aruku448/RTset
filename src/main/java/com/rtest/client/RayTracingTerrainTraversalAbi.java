@@ -33,8 +33,10 @@ public final class RayTracingTerrainTraversalAbi {
     public static final int INSTANCE_SBT_OFFSET_MASK = 0x00ff_ffff;
     public static final int INSTANCE_FACING_CULL_DISABLE = 1;
 
-    /** Terrain is visible to both the primary (0x7f) and secondary (0xfe) ray masks. */
-    public static final int TERRAIN_INSTANCE_MASK = 0xff;
+    /** Terrain is visible to both the primary (0x3f) and secondary (0x7e) ray masks. */
+    public static final int TERRAIN_INSTANCE_MASK = DynamicTlasInstanceWriter.ALL_RAY_MASK;
+    /** Nonzero but excluded from every ray type; used for stable unused/cut instances. */
+    public static final int UNTRACED_INSTANCE_MASK = DynamicTlasInstanceWriter.UNTRACED_INSTANCE_MASK;
 
     private static final float DEPTH_EPSILON = 1.0e-4F;
     private static final int MAX_PARENT_DEPTH = 64;
@@ -209,7 +211,7 @@ public final class RayTracingTerrainTraversalAbi {
 
     /**
      * Writes a fixed-capacity array of Vulkan instance records. Slots not selected use a valid
-     * dummy address and mask zero. The buffer position advances by {@code capacity * 64} bytes.
+     * dummy address and nonzero untraced mask so their active state stays valid for TLAS UPDATE.
      */
     public static void writeTlasInstances(ByteBuffer destination, int capacity,
                                           List<InstanceInput> inputs, long dummyBlasAddress) {
@@ -244,7 +246,8 @@ public final class RayTracingTerrainTraversalAbi {
             destination.putLong(offset + INSTANCE_ADDRESS_OFFSET,
                     active ? input.blasAddress() : dummyBlasAddress);
             destination.putInt(offset + INSTANCE_CUSTOM_INDEX_OFFSET,
-                    (active ? node.materialBase() : 0) | (active ? instanceMask << 24 : 0));
+                    (active ? node.materialBase() : 0)
+                        | ((active ? instanceMask : UNTRACED_INSTANCE_MASK) << 24));
             destination.position(offset + TLAS_INSTANCE_BYTES);
         }
     }

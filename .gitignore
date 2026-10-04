@@ -23,3 +23,7 @@ logs/
 Thumbs.db
 hs_err_pid*
 *.hprof
+
+# Python script caches
+__pycache__/
+*.py[cod]

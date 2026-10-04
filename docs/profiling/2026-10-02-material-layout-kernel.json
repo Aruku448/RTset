@@ -1,0 +1,23 @@
+{
+  "scope": "synthetic production material Layout.update; not GPU upload, live publication, or FPS",
+  "java": 25,
+  "heap": "1g",
+  "warmup": 5,
+  "runs": 9,
+  "input": {"old_sections": 4000, "next_sections": 6000, "holes": 2000},
+  "paired_baseline_ms": {"median": 7.936, "min": 6.725, "max": 10.317},
+  "paired_optimized_ms": {"median": 5.273, "min": 3.353, "max": 15.773},
+  "paired_median_ratio": 1.50503,
+  "address_hash_both": 309704064,
+  "high_water_triangles_both": 64000,
+  "other_optimized_run_median_ms": 3.946,
+  "notes": [
+    "Input preconstructed outside measured update; GC/JIT/scheduling variance remains.",
+    "Baseline JAR placed first in runtime classpath; no workspace source rollback.",
+    "Cross-snapshot hole persistence and interval coalescence intentionally repair prior allocation behavior."
+  ],
+  "logs": [
+    "/tmp/rtest-material-math-comparison-baseline.log",
+    "/tmp/rtest-material-math-comparison-optimized.log"
+  ]
+}

@@ -43,6 +43,9 @@ public final class BlockEntityRasterFallbackContractTest {
             "src/main/java/com/rtest/client/RayTracingProbe.java"));
         String dynamic = Files.readString(Path.of(
             "src/main/java/com/rtest/client/DynamicEntityGeometry.java"));
+        String dynamicInstances = Files.readString(Path.of(
+            "src/main/java/com/rtest/client/RayTracingDynamicInstances.java"));
+        String pass = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingVulkanPass.java"));
         if (mixins.contains("BlockEntityStateCaptureMixin")) {
             throw new AssertionError("Native block-entity fallback mixin must remain disabled");
         }
@@ -50,8 +53,8 @@ public final class BlockEntityRasterFallbackContractTest {
             || !dynamic.contains("representedBlockEntityIds()")) {
             throw new AssertionError("Block entities must be owned by the RT dynamic TLAS");
         }
-        if (!Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingVulkanPass.java"))
-            .contains("representedBlockEntities = Set.copyOf(represented)")) {
+        if (!dynamicInstances.contains("this.representedBlockEntities = Set.copyOf(represented)")
+            || !pass.contains("representedBlockEntities = this.dynamicInstances.representedBlockEntities()")) {
             throw new AssertionError("RT pass no longer publishes which block entities reached the TLAS");
         }
     }

@@ -28,10 +28,13 @@ import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.level.block.RenderShape;
@@ -111,6 +114,9 @@ public final class RayTracingScene {
             final float[] materialData;
             final int triangleCount;
             final int vertexFingerprint;
+            final int materialFingerprint;
+            final boolean opaqueTerrain;
+            final int[] emissiveTriangles;
             // Native sections are level 0; coarse sections retain the exact hierarchy key so
             // GPU traversal never has to infer level from an origin that may be 32/64 aligned.
             final RayTracingTerrainLod.NodeKey terrainNodeKey;
@@ -125,6 +131,12 @@ public final class RayTracingScene {
 
             private SectionGeometry(int originX, int originY, int originZ, float[] vertices,
                                     float[] materialData, RayTracingTerrainLod.NodeKey terrainNodeKey) {
+                this(originX, originY, originZ, vertices, materialData, terrainNodeKey, true);
+            }
+
+            private SectionGeometry(int originX, int originY, int originZ, float[] vertices,
+                                    float[] materialData, RayTracingTerrainLod.NodeKey terrainNodeKey,
+                                    boolean copyArrays) {
                 if (vertices.length == 0 || vertices.length % 9 != 0) {
                     throw new IllegalArgumentException("Section vertices must contain complete triangles");
                 }
@@ -135,27 +147,59 @@ public final class RayTracingScene {
                 this.originY = originY;
                 this.originZ = originZ;
                 this.terrainNodeKey = java.util.Objects.requireNonNull(terrainNodeKey, "terrainNodeKey");
-                // SectionGeometry is published to the merge executor. Copy both arrays so a
-                // compiled-section cache or capture accumulator can never mutate a worker input.
-                float[] copiedVertices = vertices.clone();
-                float[] copiedMaterialData = materialData.clone();
+                // Compiled-cache arrays are copied at this boundary; fresh capture/build arrays
+                // can be transferred directly to avoid two additional full-section copies.
+                float[] copiedVertices = copyArrays ? vertices.clone() : vertices;
+                float[] copiedMaterialData = copyArrays ? materialData.clone() : materialData;
                 // LightTree derives emitter normals from the vertex cross product, while hit
                 // shading uses materialData's geometric normal. Normalize their winding at the
                 // immutable section boundary as a final guard for compiled meshes and custom
                 // BakedQuads that bypass addOrientedTriangle(). Preserve the UV association when
                 // exchanging the second and third vertices.
-                alignTriangleWinding(copiedVertices, copiedMaterialData);
+                SectionTraits traits = alignTriangleWinding(copiedVertices, copiedMaterialData);
+                this.opaqueTerrain = traits.opaqueTerrain();
+                this.emissiveTriangles = traits.emissiveTriangles();
                 this.vertices = copiedVertices;
                 this.materialData = copiedMaterialData;
                 this.triangleCount = vertices.length / 9;
                 this.vertexFingerprint = java.util.Arrays.hashCode(this.vertices);
+                this.materialFingerprint = java.util.Arrays.hashCode(this.materialData);
             }
 
-            private static void alignTriangleWinding(float[] vertices, float[] materialData) {
+            /** Takes ownership of arrays that were just allocated by one capture/build step. */
+            private static SectionGeometry takeOwnership(int originX, int originY, int originZ,
+                                                         float[] vertices, float[] materialData,
+                                                         RayTracingTerrainLod.NodeKey nodeKey) {
+                return new SectionGeometry(originX, originY, originZ, vertices, materialData,
+                    nodeKey, false);
+            }
+
+            private static SectionGeometry takeOwnership(int originX, int originY, int originZ,
+                                                         float[] vertices, float[] materialData) {
+                return takeOwnership(originX, originY, originZ, vertices, materialData,
+                    new RayTracingTerrainLod.NodeKey(0,
+                        Math.floorDiv(originX, RayTracingTerrainLod.SECTION_SIZE),
+                        Math.floorDiv(originY, RayTracingTerrainLod.SECTION_SIZE),
+                        Math.floorDiv(originZ, RayTracingTerrainLod.SECTION_SIZE)));
+            }
+
+            private static SectionTraits alignTriangleWinding(float[] vertices, float[] materialData) {
                 int triangleCount = vertices.length / 9;
+                boolean opaque = true;
+                IntAccumulator emissive = new IntAccumulator();
                 for (int triangle = 0; triangle < triangleCount; triangle++) {
                     int vertexOffset = triangle * 9;
                     int materialOffset = triangle * FLOATS_PER_TRIANGLE_MATERIAL;
+                    opaque &= materialData[materialOffset + 3] >= 0.999F
+                        && materialData[materialOffset + 22] <= 1.0e-6F
+                        && Math.abs(materialData[materialOffset + 24]) <= 1.0e-6F
+                        && Math.abs(materialData[materialOffset + 25]) <= 1.0e-6F
+                        && Math.abs(materialData[materialOffset + 26]) <= 1.0e-6F
+                        && Math.abs(materialData[materialOffset + 27] - 1.0F) <= 1.0e-4F;
+                    float emission = materialData[materialOffset + 22];
+                    if (emission > 0.0F && Float.isFinite(emission)) {
+                        emissive.add(triangle);
+                    }
                     float normalX = materialData[materialOffset + 4];
                     float normalY = materialData[materialOffset + 5];
                     float normalZ = materialData[materialOffset + 6];
@@ -195,6 +239,7 @@ public final class RayTracingScene {
                         materialData[second] = swapped;
                     }
                 }
+                return new SectionTraits(triangleCount > 0 && opaque, emissive.toArray());
             }
 
             public int triangleCount() {
@@ -216,7 +261,7 @@ public final class RayTracingScene {
                     world[i + 1] -= oy;
                     world[i + 2] -= oz;
                 }
-                return new SectionGeometry(ox, oy, oz, world, mesh.materialData(), node.key());
+                return takeOwnership(ox, oy, oz, world, mesh.materialData(), node.key());
             }
 
             int vertexFingerprint() {
@@ -229,18 +274,26 @@ public final class RayTracingScene {
 
             /** Coarse LOD may replace only the same opaque static terrain that feeds its mesh. */
             boolean isOpaqueTerrain() {
-                for (int offset = 0; offset < this.materialData.length;
-                     offset += FLOATS_PER_TRIANGLE_MATERIAL) {
-                    if (!(this.materialData[offset + 3] >= 0.999F
-                            && this.materialData[offset + 22] <= 1.0e-6F
-                            && Math.abs(this.materialData[offset + 24]) <= 1.0e-6F
-                            && Math.abs(this.materialData[offset + 25]) <= 1.0e-6F
-                            && Math.abs(this.materialData[offset + 26]) <= 1.0e-6F
-                            && Math.abs(this.materialData[offset + 27] - 1.0F) <= 1.0e-4F)) {
-                        return false;
-                    }
+                return this.opaqueTerrain;
+            }
+        }
+
+        private record SectionTraits(boolean opaqueTerrain, int[] emissiveTriangles) {
+        }
+
+        private static final class IntAccumulator {
+            private int[] values = new int[4];
+            private int size;
+
+            void add(int value) {
+                if (size == values.length) {
+                    values = java.util.Arrays.copyOf(values, Math.multiplyExact(values.length, 2));
                 }
-                return this.materialData.length != 0;
+                values[size++] = value;
+            }
+
+            int[] toArray() {
+                return size == 0 ? new int[0] : java.util.Arrays.copyOf(values, size);
             }
         }
 
@@ -254,7 +307,10 @@ public final class RayTracingScene {
         final double originX;
         final double originY;
         final double originZ;
+        final RayTracingMaterialBuffer.Layout materialLayout;
         final RayTracingLightTree.Data lightTree;
+        private final long lightTreeBuildNanos;
+        private final boolean lightTreeReused;
 
         private SceneGeometry(
             List<SectionGeometry> sections,
@@ -323,9 +379,8 @@ public final class RayTracingScene {
         }
 
         /**
-         * Creates a scene from arrays owned by the caller. Full captures and merged snapshots
-         * already allocate fresh arrays and close their mutable capture session immediately;
-         * copying them again here doubled the large scene payload on every dirty update.
+         * Creates a scene from immutable sections owned by the caller. GPU buffers are written
+         * directly from each section so no scene-wide vertex/material duplicate is retained.
          */
         private SceneGeometry(
             List<SectionGeometry> sections,
@@ -342,11 +397,66 @@ public final class RayTracingScene {
             boolean buildLightTree,
             boolean copyArrays
         ) {
-            if ((!allowEmpty && vertices.length == 0) || vertices.length % 9 != 0) {
-                throw new IllegalArgumentException("Scene vertices must contain complete triangles");
-            }
-            if (materialData.length != triangleCount * FLOATS_PER_TRIANGLE_MATERIAL) {
-                throw new IllegalArgumentException("Scene material data does not match the triangle count");
+            this(sections, vertices, materialData, pbrData, triangleCount, renderDistanceChunks,
+                originX, originY, originZ, allowEmpty, resetRevision, buildLightTree, copyArrays, null);
+        }
+
+        private SceneGeometry(
+            List<SectionGeometry> sections,
+            float[] vertices,
+            float[] materialData,
+            int[] pbrData,
+            int triangleCount,
+            int renderDistanceChunks,
+            double originX,
+            double originY,
+            double originZ,
+            boolean allowEmpty,
+            long resetRevision,
+            boolean buildLightTree,
+            boolean copyArrays,
+            RayTracingMaterialBuffer.Layout materialLayout
+        ) {
+            this(sections, vertices, materialData, pbrData, triangleCount, renderDistanceChunks,
+                originX, originY, originZ, allowEmpty, resetRevision, buildLightTree, copyArrays,
+                materialLayout, null);
+        }
+
+        private SceneGeometry(
+            List<SectionGeometry> sections,
+            float[] vertices,
+            float[] materialData,
+            int[] pbrData,
+            int triangleCount,
+            int renderDistanceChunks,
+            double originX,
+            double originY,
+            double originZ,
+            boolean allowEmpty,
+            long resetRevision,
+            boolean buildLightTree,
+            boolean copyArrays,
+            RayTracingMaterialBuffer.Layout materialLayout,
+            SceneGeometry previousLightScene
+        ) {
+            boolean hasFlattenedPayload = vertices.length != 0 || materialData.length != 0;
+            if (hasFlattenedPayload) {
+                if (vertices.length % 9 != 0
+                        || materialData.length != triangleCount * FLOATS_PER_TRIANGLE_MATERIAL
+                        || vertices.length / 9 != triangleCount) {
+                    throw new IllegalArgumentException("Flattened scene arrays do not match the triangle count");
+                }
+            } else {
+                int sectionTriangles = sectionTriangleCount(sections);
+                if (!allowEmpty && sections.isEmpty()) {
+                    throw new IllegalArgumentException("Scene must contain section-backed geometry");
+                }
+                if (buildLightTree && sectionTriangles != triangleCount) {
+                    throw new IllegalArgumentException("Section geometry does not match the triangle count");
+                }
+                if (!buildLightTree && triangleCount != 0 && sectionTriangles != triangleCount) {
+                    throw new IllegalArgumentException("Partial section geometry has an invalid triangle count");
+                }
             }
             if (renderDistanceChunks < 2) {
                 throw new IllegalArgumentException("Render distance must contain at least two chunks");
@@ -355,8 +465,10 @@ public final class RayTracingScene {
             // merge worker. List.copyOf alone is insufficient because the array elements are
             // mutable Java arrays.
             this.sections = List.copyOf(sections);
-            this.vertices = copyArrays ? vertices.clone() : vertices;
-            this.materialData = copyArrays ? materialData.clone() : materialData;
+            // Static GPU upload and light sampling walk immutable section arrays directly.
+            // Retaining a second flattened copy doubled RD32's multi-gigabyte CPU payload.
+            this.vertices = new float[0];
+            this.materialData = new float[0];
             this.pbrData = copyArrays ? pbrData.clone() : pbrData;
             this.triangleCount = triangleCount;
             this.renderDistanceChunks = renderDistanceChunks;
@@ -364,19 +476,26 @@ public final class RayTracingScene {
             this.originX = originX;
             this.originY = originY;
             this.originZ = originZ;
-            // Prime builds its emissive-light hierarchy from the same immutable scene snapshot
-            // that feeds the TLAS. Keep the RT variant scene-wide because its geometry table is
-            // already flattened across sections.
+            this.materialLayout = materialLayout == null
+                ? RayTracingMaterialBuffer.Layout.compact(this.sections) : materialLayout;
+            // Prime builds its emissive-light hierarchy from the same immutable section snapshot
+            // that feeds the TLAS. Stable material spans keep light-tree material indices aligned
+            // with the instanceCustomIndex values even when a section is removed or replaced.
             if (buildLightTree) {
-                this.lightTree = RayTracingLightTree.build(this.sections, this.materialData,
-                    originX, originY, originZ);
+                long lightTreeStart = System.nanoTime();
+                this.lightTree = RayTracingLightTree.buildOrReuse(previousLightScene,
+                    this.sections, originX, originY, originZ, this.materialLayout);
+                this.lightTreeBuildNanos = System.nanoTime() - lightTreeStart;
+                this.lightTreeReused = previousLightScene != null && this.lightTree == previousLightScene.lightTree;
             } else {
                 // Partial deltas are consumed only for their sections/materials by
                 // replaceSections(); constructing a second emitter tree here would be pure
                 // duplicate work. The merged immutable scene builds the one tree that reaches
                 // Vulkan.
                 this.lightTree = RayTracingLightTree.Data.create(List.of(),
-                    new int[this.materialData.length / FLOATS_PER_TRIANGLE_MATERIAL]);
+                    new int[0]);
+                this.lightTreeBuildNanos = 0;
+                this.lightTreeReused = false;
             }
         }
 
@@ -400,32 +519,26 @@ public final class RayTracingScene {
                                      List<SectionGeometry> coarseSections,
                                      SceneGeometry source,
                                      int renderDistanceChunks) {
+            return compose(nativeSections, coarseSections, source, renderDistanceChunks, source);
+        }
+
+        /** Composes terrain while retaining material spans from the currently published scene. */
+        static SceneGeometry compose(List<SectionGeometry> nativeSections,
+                                     List<SectionGeometry> coarseSections,
+                                     SceneGeometry source,
+                                     int renderDistanceChunks,
+                                     SceneGeometry previousActive) {
             if (renderDistanceChunks < source.renderDistanceChunks) {
                 throw new IllegalArgumentException("composed render distance cannot shrink the source horizon");
             }
             List<SectionGeometry> sections = new ArrayList<>(nativeSections.size() + coarseSections.size());
             sections.addAll(nativeSections);
             sections.addAll(coarseSections);
-            int vertexLength = 0;
-            int materialLength = 0;
-            for (SectionGeometry section : sections) {
-                vertexLength = Math.addExact(vertexLength, section.vertices.length);
-                materialLength = Math.addExact(materialLength, section.materialData.length);
-            }
-            float[] vertices = new float[vertexLength];
-            float[] materials = new float[materialLength];
-            int vo = 0;
-            int mo = 0;
-            for (SectionGeometry section : sections) {
-                System.arraycopy(section.vertices, 0, vertices, vo, section.vertices.length);
-                System.arraycopy(section.materialData, 0, materials, mo, section.materialData.length);
-                vo += section.vertices.length;
-                mo += section.materialData.length;
-            }
-            return new SceneGeometry(sections, vertices, materials, source.pbrData,
-                vertices.length / 9, renderDistanceChunks,
+            return new SceneGeometry(sections, new float[0], new float[0], source.pbrData,
+                sectionTriangleCount(sections), renderDistanceChunks,
                 source.originX, source.originY, source.originZ, false,
-                NEXT_REVISION.incrementAndGet(), true, false);
+                NEXT_REVISION.incrementAndGet(), true, false,
+                previousActive.materialLayout.update(sections), previousActive);
         }
 
         /**
@@ -481,38 +594,19 @@ public final class RayTracingScene {
             }
 
             List<SectionGeometry> mergedSections = new ArrayList<>(merged.values());
-            float[] vertices;
-            float[] materials;
             if (mergedSections.isEmpty()) {
-                FloatAccumulator fallbackVertices = new FloatAccumulator();
-                FloatAccumulator fallbackMaterials = new FloatAccumulator();
-                addFallbackGeometry(mergedSections, fallbackVertices, fallbackMaterials, cameraPosition);
-                vertices = fallbackVertices.toArray();
-                materials = fallbackMaterials.toArray();
-            } else {
-                int vertexLength = 0;
-                int materialLength = 0;
-                for (SectionGeometry section : mergedSections) {
-                    vertexLength = Math.addExact(vertexLength, section.vertices.length);
-                    materialLength = Math.addExact(materialLength, section.materialData.length);
-                }
-                vertices = new float[vertexLength];
-                materials = new float[materialLength];
-                int vertexOffset = 0;
-                int materialOffset = 0;
-                for (SectionGeometry section : mergedSections) {
-                    System.arraycopy(section.vertices, 0, vertices, vertexOffset, section.vertices.length);
-                    System.arraycopy(section.materialData, 0, materials, materialOffset, section.materialData.length);
-                    vertexOffset += section.vertices.length;
-                    materialOffset += section.materialData.length;
-                }
+                addFallbackGeometry(mergedSections, cameraPosition);
             }
+            int mergedTriangleCount = sectionTriangleCount(mergedSections);
+            long layoutStart = System.nanoTime();
+            RayTracingMaterialBuffer.Layout nextLayout = this.materialLayout.update(mergedSections);
+            long layoutNanos = System.nanoTime() - layoutStart;
             SceneGeometry result = new SceneGeometry(
                 mergedSections,
-                vertices,
-                materials,
+                new float[0],
+                new float[0],
                 replacements.pbrData.length == 0 ? this.pbrData : replacements.pbrData,
-                vertices.length / 9,
+                mergedTriangleCount,
                 this.renderDistanceChunks,
                 this.originX,
                 this.originY,
@@ -520,13 +614,25 @@ public final class RayTracingScene {
                 false,
                 this.revision,
                 true,
-                false
+                false,
+                nextLayout,
+                this
             );
             LOGGER.info(
-                "RTest geometry CPU merge: dirty={}, oldSections={}, replacementSections={}, newSections={}, duration={} ms",
+                "RTest geometry CPU merge: dirty={}, oldSections={}, replacementSections={}, newSections={}, duration={} ms, layout={} ms, lightTree={} ms, emitters={}, lightTreeReused={}",
                 dirtySectionOrigins.size(), previousSectionCount, replacements.sections.size(),
-                mergedSections.size(), (System.nanoTime() - startNanos) / 1_000_000L);
+                mergedSections.size(), (System.nanoTime() - startNanos) / 1_000_000L,
+                layoutNanos / 1_000_000L, result.lightTreeBuildNanos / 1_000_000L,
+                result.lightTree.emitterCount(), result.lightTreeReused);
             return result;
+        }
+
+        private static int sectionTriangleCount(List<SectionGeometry> sections) {
+            int triangleCount = 0;
+            for (SectionGeometry section : sections) {
+                triangleCount = Math.addExact(triangleCount, section.triangleCount());
+            }
+            return triangleCount;
         }
 
         private static long sectionOriginKey(SectionGeometry section) {
@@ -548,19 +654,6 @@ public final class RayTracingScene {
                         Math.max(16, Math.multiplyExact(this.values.length, 2)));
                 }
                 this.values[this.size++] = value;
-            }
-
-            void addAll(float[] source) {
-                int required = Math.addExact(this.size, source.length);
-                if (required > this.values.length) {
-                    int capacity = this.values.length;
-                    while (capacity < required) {
-                        capacity = Math.max(required, Math.multiplyExact(capacity, 2));
-                    }
-                    this.values = java.util.Arrays.copyOf(this.values, capacity);
-                }
-                System.arraycopy(source, 0, this.values, this.size, source.length);
-                this.size = required;
             }
 
             float[] toArray() {
@@ -587,8 +680,6 @@ public final class RayTracingScene {
             private final List<BlockPos> sectionOrigins;
             private final List<BlockPos> windowOrigins;
             private final List<SectionGeometry> sections = new ArrayList<>();
-            private final FloatAccumulator allVertices = new FloatAccumulator();
-            private final FloatAccumulator allMaterialData = new FloatAccumulator();
             private final RayTracingPbrMaterials pbrMaterials;
             private final boolean ownsPbrMaterials;
             private int cursor;
@@ -682,9 +773,12 @@ public final class RayTracingScene {
                 int end = Math.min(this.sectionOrigins.size(), this.cursor + sectionBudget);
                 while (this.cursor < end) {
                     BlockPos origin = this.sectionOrigins.get(this.cursor++);
+                    LevelChunkSection capturedSection = section(this.level, origin);
                     CompiledSectionMeshCache.CompiledMesh compiled = CompiledSectionMeshCache.get(origin);
                     boolean fluidEnabled = RayTracingClientConfig.INSTANCE.fluidRtEnabled.get();
-                    boolean containsFluid = fluidEnabled && containsFluid(this.level, origin);
+                    boolean containsFluid = fluidEnabled
+                        && capturedSection != null
+                        && capturedSection.hasFluid();
                     boolean pbrNeedsSpriteCapture = RayTracingClientConfig.INSTANCE.pbrTerrainCpuCaptureEnabled.get();
                     // Vanilla's compiled mesh has only a render-layer bit; it cannot carry the
                     // block/biome tint and IOR needed by colored glass. Rewalk glass sections so
@@ -692,23 +786,31 @@ public final class RayTracingScene {
                     // translucent fallback used by CompiledSectionMeshCache.
                     // These checks cannot change the source selection while sprite-aware PBR
                     // capture is enabled, so skip the extra section scans in that mode.
-                    boolean hasGlass = !pbrNeedsSpriteCapture && containsGlass(this.level, origin);
+                    boolean hasGlass = !pbrNeedsSpriteCapture
+                        && capturedSection != null
+                        && containsGlass(capturedSection);
                     boolean containsEmitter;
                     if (pbrNeedsSpriteCapture) {
                         containsEmitter = false;
                     } else {
-                        containsEmitter = containsEmissiveBlock(this.level, origin);
+                        containsEmitter = capturedSection != null
+                            && containsEmissiveBlock(capturedSection);
                     }
                     // MeshData contains UVs but no sprite/material identity. Once PBR is enabled,
                     // using it would silently discard companion maps for ordinary terrain. Keep
                     // the sprite-aware CPU path as the correctness default; the opt-out is an
                     // explicit performance trade-off for users who accept neutral PBR defaults.
+                    // Compiled MeshData has no block identity for vegetation lighting.
+                    boolean containsVegetation = !pbrNeedsSpriteCapture && capturedSection != null
+                        && capturedSection.maybeHas(state -> RayTracingVegetation.kind(
+                            BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath(),
+                            state.is(BlockTags.LEAVES)) != 0);
                     CompiledSectionMeshCache.CompiledMesh source = pbrNeedsSpriteCapture
-                        || containsFluid || hasGlass || containsEmitter
+                        || containsFluid || hasGlass || containsEmitter || containsVegetation
                         ? null : compiled;
                     SectionGeometry section = captureSection(
                         this.level, this.modelSet, this.fluidModelSet, this.blockColors,
-                        this.pbrMaterials, origin, source, fluidEnabled);
+                        this.pbrMaterials, origin, capturedSection, source, fluidEnabled);
                     if (containsFluid) {
                         this.fluidSections++;
                     }
@@ -719,8 +821,6 @@ public final class RayTracingScene {
                     }
                     if (section != null) {
                         this.sections.add(section);
-                        this.allVertices.addAll(section.vertices);
-                        this.allMaterialData.addAll(section.materialData);
                     }
                 }
                 return this.isComplete();
@@ -768,12 +868,10 @@ public final class RayTracingScene {
                     throw new IllegalStateException("Scene capture session is closed");
                 }
                 if (allowFallback && this.sections.isEmpty()) {
-                    addFallbackGeometry(this.sections, this.allVertices, this.allMaterialData, this.cameraPosition);
+                    addFallbackGeometry(this.sections, this.cameraPosition);
                 }
-                // A partial capture is only a section delta consumed by replaceSections().
-                // Flattening the delta and packing the complete PBR table here created a second
-                // full-scene allocation before the merge worker even started its one required
-                // flattening pass.
+                // A partial capture is only a section delta consumed by replaceSections(); it
+                // never needs scene-wide arrays or the static PBR table.
                 if (!allowFallback) {
                     return new SceneGeometry(
                         this.sections,
@@ -803,10 +901,10 @@ public final class RayTracingScene {
                 var origin = this.cameraPosition;
                 return new SceneGeometry(
                     this.sections,
-                    this.allVertices.toArray(),
-                    this.allMaterialData.toArray(),
+                    new float[0],
+                    new float[0],
                     pbrData,
-                    this.allVertices.size() / 9,
+                    sectionTriangleCount(this.sections),
                     this.renderDistanceChunks,
                     origin.x,
                     origin.y,
@@ -823,8 +921,6 @@ public final class RayTracingScene {
                 if (!this.closed) {
                     this.closed = true;
                     this.sections.clear();
-                    this.allVertices.clear();
-                    this.allMaterialData.clear();
                     if (this.ownsPbrMaterials) {
                         this.pbrMaterials.close();
                     }
@@ -850,19 +946,12 @@ public final class RayTracingScene {
             }
         }
 
-        private static boolean containsFluid(ClientLevel level, BlockPos sectionOrigin) {
-            LevelChunkSection section = section(level, sectionOrigin);
-            return section != null && section.hasFluid();
+        private static boolean containsEmissiveBlock(LevelChunkSection section) {
+            return section.maybeHas(state -> state.getLightEmission() > 0);
         }
 
-        private static boolean containsEmissiveBlock(ClientLevel level, BlockPos sectionOrigin) {
-            LevelChunkSection section = section(level, sectionOrigin);
-            return section != null && section.maybeHas(state -> state.getLightEmission() > 0);
-        }
-
-        private static boolean containsGlass(ClientLevel level, BlockPos sectionOrigin) {
-            LevelChunkSection section = section(level, sectionOrigin);
-            return section != null && section.maybeHas(state -> {
+        private static boolean containsGlass(LevelChunkSection section) {
+            return section.maybeHas(state -> {
                 var key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
                 return key != null && key.getPath().contains("glass");
             });
@@ -889,6 +978,7 @@ public final class RayTracingScene {
             BlockColors blockColors,
             RayTracingPbrMaterials pbrMaterials,
             BlockPos sectionOrigin,
+            LevelChunkSection capturedSection,
             CompiledSectionMeshCache.CompiledMesh compiled,
             boolean fluidRtEnabled
         ) {
@@ -897,19 +987,28 @@ public final class RayTracingScene {
                     sectionOrigin.getX(), sectionOrigin.getY(), sectionOrigin.getZ(),
                     compiled.vertices, compiled.materialData);
             }
+            if (capturedSection == null) {
+                return null;
+            }
             FloatAccumulator sectionVertices = new FloatAccumulator();
             FloatAccumulator sectionMaterialData = new FloatAccumulator();
             List<BlockStateModelPart> parts = new ArrayList<>();
-            // One mutable position and one reusable RandomSource per Section instead of 4096
-            // BlockPos and 4096 RandomSource instances. Both are strictly call-local, so no
-            // capture state is shared across sections or threads.
+            // Reuse mutable block and neighbor positions plus one RandomSource per Section,
+            // avoiding millions of short-lived BlockPos allocations in the face-culling loop.
             BlockPos.MutableBlockPos position = new BlockPos.MutableBlockPos();
+            BlockPos.MutableBlockPos neighborPosition = new BlockPos.MutableBlockPos();
             RandomSource random = RandomSource.create();
-            for (int x = sectionOrigin.getX(); x < sectionOrigin.getX() + 16; x++) {
-                for (int y = sectionOrigin.getY(); y < sectionOrigin.getY() + 16; y++) {
-                    for (int z = sectionOrigin.getZ(); z < sectionOrigin.getZ() + 16; z++) {
+            for (int localX = 0; localX < 16; localX++) {
+                int x = sectionOrigin.getX() + localX;
+                for (int localY = 0; localY < 16; localY++) {
+                    int y = sectionOrigin.getY() + localY;
+                    for (int localZ = 0; localZ < 16; localZ++) {
+                        int z = sectionOrigin.getZ() + localZ;
                         position.set(x, y, z);
-                        BlockState state = level.getBlockState(position);
+                        // This section is already resolved once for fluid/material admission.
+                        // Read its palette directly instead of routing all 4096 positions through
+                        // ClientLevel's chunk lookup on every capture.
+                        BlockState state = capturedSection.getBlockState(localX, localY, localZ);
                         FluidState fluidState = state.getFluidState();
                         if (fluidRtEnabled && !fluidState.isEmpty()) {
                             addFluidGeometry(sectionVertices, sectionMaterialData, sectionOrigin, level, fluidModelSet, position, state, fluidState);
@@ -924,8 +1023,9 @@ public final class RayTracingScene {
                         model.collectParts(level, position, state, random, parts);
                         for (BlockStateModelPart part : parts) {
                             for (Direction direction : Direction.values()) {
-                                BlockPos neighborPos = position.relative(direction);
-                                BlockState neighbor = level.getBlockState(neighborPos);
+                                neighborPosition.set(x + direction.getStepX(),
+                                    y + direction.getStepY(), z + direction.getStepZ());
+                                BlockState neighbor = level.getBlockState(neighborPosition);
                                 // Match vanilla face culling instead of only testing
                                 // isSolidRender(). Two adjacent glass blocks do not satisfy that
                                 // test, so their shared internal faces used to reach the path
@@ -945,17 +1045,16 @@ public final class RayTracingScene {
             if (sectionVertices.size() == 0) {
                 return null;
             }
-            return new SectionGeometry(
+            return SectionGeometry.takeOwnership(
                 sectionOrigin.getX(), sectionOrigin.getY(), sectionOrigin.getZ(),
                 toFloatArray(sectionVertices), toFloatArray(sectionMaterialData));
         }
 
-        private static void addFallbackGeometry(
-            List<SectionGeometry> sections,
-            FloatAccumulator allVertices,
-            FloatAccumulator allMaterialData,
-            Vec3 cameraPosition
-        ) {
+        private static void addFallbackGeometry(List<SectionGeometry> sections, Vec3 cameraPosition) {
+            sections.add(fallbackGeometry(cameraPosition));
+        }
+
+        private static SectionGeometry fallbackGeometry(Vec3 cameraPosition) {
             BlockPos fallbackOrigin = new BlockPos(
                 (int)Math.floor(cameraPosition.x / 16.0) * 16,
                 (int)Math.floor(cameraPosition.y / 16.0) * 16,
@@ -966,11 +1065,9 @@ public final class RayTracingScene {
             fallbackVertices.add(1.0F); fallbackVertices.add(-1.0F); fallbackVertices.add(4.0F);
             fallbackVertices.add(0.0F); fallbackVertices.add(1.0F); fallbackVertices.add(4.0F);
             addMaterial(fallbackMaterials, 0x808080, 0.0F, 0.0F, -1.0F);
-            sections.add(new SectionGeometry(
+            return SectionGeometry.takeOwnership(
                 fallbackOrigin.getX(), fallbackOrigin.getY(), fallbackOrigin.getZ(),
-                toFloatArray(fallbackVertices), toFloatArray(fallbackMaterials)));
-            allVertices.addAll(toFloatArray(fallbackVertices));
-            allMaterialData.addAll(toFloatArray(fallbackMaterials));
+                toFloatArray(fallbackVertices), toFloatArray(fallbackMaterials));
         }
 
         /** Origins that are cheap to capture: loaded sections containing at least one block. */
@@ -1075,7 +1172,20 @@ public final class RayTracingScene {
             TextureAtlasSprite still = model.stillMaterial().sprite();
             TextureAtlasSprite flowing = model.flowingMaterial().sprite();
 
-            if (!fluid.isSame(aboveFluid.getType()) && !aboveState.isSolidRender()) {
+            boolean renderBottom = !fluid.isSame(belowFluid.getType())
+                && !fluidFaceOccludedByNeighbor(Direction.DOWN, height,
+                    belowState.getFaceOcclusionShape(Direction.UP));
+            float bottomOffset = renderBottom ? 0.001F : 0.0F;
+            if (!fluid.isSame(aboveFluid.getType())
+                    && !fluidFaceOccludedByNeighbor(Direction.UP,
+                        Math.min(Math.min(northWest, southWest), Math.min(southEast, northEast)),
+                        aboveState.getFaceOcclusionShape(Direction.DOWN))) {
+                // Match vanilla's inset; a full-height corner must not coincide with the
+                // underside of a neighboring glass/slab face and swallow that interface.
+                northWest -= 0.001F;
+                northEast -= 0.001F;
+                southWest -= 0.001F;
+                southEast -= 0.001F;
                 addFluidQuad(
                     vertices,
                     materialData,
@@ -1093,16 +1203,16 @@ public final class RayTracingScene {
                 );
             }
 
-            if (!fluid.isSame(belowFluid.getType()) && !belowState.isSolidRender()) {
+            if (renderBottom) {
                 addFluidQuad(
                     vertices,
                     materialData,
                     sectionOrigin,
                     blockPos,
-                    new FluidVertex(0.0F, 0.0F, 0.0F, still.getU0(), still.getV0()),
-                    new FluidVertex(1.0F, 0.0F, 0.0F, still.getU1(), still.getV0()),
-                    new FluidVertex(1.0F, 0.0F, 1.0F, still.getU1(), still.getV1()),
-                    new FluidVertex(0.0F, 0.0F, 1.0F, still.getU0(), still.getV1()),
+                    new FluidVertex(0.0F, bottomOffset, 0.0F, still.getU0(), still.getV0()),
+                    new FluidVertex(1.0F, bottomOffset, 0.0F, still.getU1(), still.getV0()),
+                    new FluidVertex(1.0F, bottomOffset, 1.0F, still.getU1(), still.getV1()),
+                    new FluidVertex(0.0F, bottomOffset, 1.0F, still.getU0(), still.getV1()),
                     tint,
                     0.0F,
                     -1.0F,
@@ -1117,44 +1227,52 @@ public final class RayTracingScene {
                 if (!FluidRenderer.shouldRenderFace(fluidState, blockState, direction, neighborState)) {
                     continue;
                 }
-                float h0;
-                float h1;
+                float h0 = switch (direction) {
+                    case NORTH -> northWest;
+                    case SOUTH -> southEast;
+                    case WEST -> southWest;
+                    case EAST -> northEast;
+                    default -> throw new AssertionError(direction);
+                };
+                float h1 = switch (direction) {
+                    case NORTH -> northEast;
+                    case SOUTH -> southWest;
+                    case WEST -> northWest;
+                    case EAST -> southEast;
+                    default -> throw new AssertionError(direction);
+                };
+                if (fluidFaceOccludedByNeighbor(direction, Math.max(h0, h1),
+                        neighborState.getFaceOcclusionShape(direction.getOpposite()))) {
+                    continue;
+                }
                 FluidVertex v0;
                 FluidVertex v1;
                 FluidVertex v2;
                 FluidVertex v3;
                 switch (direction) {
                     case NORTH -> {
-                        h0 = northWest;
-                        h1 = northEast;
                         v0 = new FluidVertex(0.0F, h0, 0.001F, flowing.getU(0.0F), flowing.getV((1.0F - h0) * 0.5F));
                         v1 = new FluidVertex(1.0F, h1, 0.001F, flowing.getU(0.5F), flowing.getV((1.0F - h1) * 0.5F));
-                        v2 = new FluidVertex(1.0F, 0.0F, 0.001F, flowing.getU(0.5F), flowing.getV(0.5F));
-                        v3 = new FluidVertex(0.0F, 0.0F, 0.001F, flowing.getU(0.0F), flowing.getV(0.5F));
+                        v2 = new FluidVertex(1.0F, bottomOffset, 0.001F, flowing.getU(0.5F), flowing.getV(0.5F));
+                        v3 = new FluidVertex(0.0F, bottomOffset, 0.001F, flowing.getU(0.0F), flowing.getV(0.5F));
                     }
                     case SOUTH -> {
-                        h0 = southEast;
-                        h1 = southWest;
                         v0 = new FluidVertex(1.0F, h0, 0.999F, flowing.getU(0.0F), flowing.getV((1.0F - h0) * 0.5F));
                         v1 = new FluidVertex(0.0F, h1, 0.999F, flowing.getU(0.5F), flowing.getV((1.0F - h1) * 0.5F));
-                        v2 = new FluidVertex(0.0F, 0.0F, 0.999F, flowing.getU(0.5F), flowing.getV(0.5F));
-                        v3 = new FluidVertex(1.0F, 0.0F, 0.999F, flowing.getU(0.0F), flowing.getV(0.5F));
+                        v2 = new FluidVertex(0.0F, bottomOffset, 0.999F, flowing.getU(0.5F), flowing.getV(0.5F));
+                        v3 = new FluidVertex(1.0F, bottomOffset, 0.999F, flowing.getU(0.0F), flowing.getV(0.5F));
                     }
                     case WEST -> {
-                        h0 = southWest;
-                        h1 = northWest;
                         v0 = new FluidVertex(0.001F, h0, 1.0F, flowing.getU(0.0F), flowing.getV((1.0F - h0) * 0.5F));
                         v1 = new FluidVertex(0.001F, h1, 0.0F, flowing.getU(0.5F), flowing.getV((1.0F - h1) * 0.5F));
-                        v2 = new FluidVertex(0.001F, 0.0F, 0.0F, flowing.getU(0.5F), flowing.getV(0.5F));
-                        v3 = new FluidVertex(0.001F, 0.0F, 1.0F, flowing.getU(0.0F), flowing.getV(0.5F));
+                        v2 = new FluidVertex(0.001F, bottomOffset, 0.0F, flowing.getU(0.5F), flowing.getV(0.5F));
+                        v3 = new FluidVertex(0.001F, bottomOffset, 1.0F, flowing.getU(0.0F), flowing.getV(0.5F));
                     }
                     case EAST -> {
-                        h0 = northEast;
-                        h1 = southEast;
                         v0 = new FluidVertex(0.999F, h0, 0.0F, flowing.getU(0.0F), flowing.getV((1.0F - h0) * 0.5F));
                         v1 = new FluidVertex(0.999F, h1, 1.0F, flowing.getU(0.5F), flowing.getV((1.0F - h1) * 0.5F));
-                        v2 = new FluidVertex(0.999F, 0.0F, 1.0F, flowing.getU(0.5F), flowing.getV(0.5F));
-                        v3 = new FluidVertex(0.999F, 0.0F, 0.0F, flowing.getU(0.0F), flowing.getV(0.5F));
+                        v2 = new FluidVertex(0.999F, bottomOffset, 1.0F, flowing.getU(0.5F), flowing.getV(0.5F));
+                        v3 = new FluidVertex(0.999F, bottomOffset, 0.0F, flowing.getU(0.0F), flowing.getV(0.5F));
                     }
                     default -> throw new AssertionError(direction);
                 }
@@ -1163,12 +1281,24 @@ public final class RayTracingScene {
             }
         }
 
+        private static boolean fluidFaceOccludedByNeighbor(Direction direction, float height, VoxelShape occluder) {
+            // Match FluidRenderer's separate neighbor-shape step. shouldRenderFace only
+            // checks the fluid identity/overlay policy and the fluid cell's own occlusion.
+            if (occluder == Shapes.empty()) {
+                return false;
+            }
+            if (occluder == Shapes.block()) {
+                return direction != Direction.UP || height == 1.0F;
+            }
+            return Shapes.blockOccludes(Shapes.box(0.0, 0.0, 0.0, 1.0, height, 1.0), occluder, direction);
+        }
+
         private static MaterialProperties fluidMaterialProperties(Fluid fluid) {
             var key = BuiltInRegistries.FLUID.getKey(fluid);
             String name = key == null ? "" : key.getPath();
             FluidGeometryCapture.Surface surface = FluidGeometryCapture.surface(name);
             return new MaterialProperties(
-                surface.roughness(), surface.metallic(), surface.emission(), surface.reflectivity(),
+                surface.roughness(), surface.metallic(), surface.emission(), surface.reflectivity(), 0.0F,
                 new OpticalProperties(surface.ior(), surface.absorptionR(), surface.absorptionG(),
                     surface.absorptionB(), surface.opacity(), 0.0F));
         }
@@ -1431,7 +1561,7 @@ public final class RayTracingScene {
             addVertex(vertices, sectionOrigin, blockPos, p2);
         }
 
-        private record MaterialProperties(float roughness, float metallic, float emission, float reflectivity, OpticalProperties optical) {
+        private record MaterialProperties(float roughness, float metallic, float emission, float reflectivity, float vegetationKind, OpticalProperties optical) {
         }
 
         private record OpticalProperties(float ior, float absorptionR, float absorptionG, float absorptionB,
@@ -1463,12 +1593,13 @@ public final class RayTracingScene {
             float emission = RayTracingEmission.fromMinecraftLevel(blockLightLevel)
                 * RayTracingClientConfig.INSTANCE.emissionScale.get().floatValue();
             float reflectivity = metal ? 0.72F : 0.04F;
-            return new MaterialProperties(roughness, metallic, emission, reflectivity, opticalProperties(name, translucent));
+            return new MaterialProperties(roughness, metallic, emission, reflectivity, RayTracingVegetation.kind(name, state.is(BlockTags.LEAVES)), opticalProperties(name, translucent));
         }
 
         private static OpticalProperties opticalProperties(String name, boolean transmissive) {
             if (name.contains("water")) {
-                return new OpticalProperties(1.333F, 0.015F, 0.045F, 0.09F, 1.0F, 0.0F);
+                // RGB absorption: water removes red fastest and preserves blue longest.
+                return new OpticalProperties(1.333F, 0.09F, 0.045F, 0.015F, 1.0F, 0.0F);
             }
             if (name.contains("glass")) {
                 float absorption = name.contains("stained_glass") ? 0.08F : 0.015F;
@@ -1499,9 +1630,11 @@ public final class RayTracingScene {
                 quad.packedUV(uv2Index)
             );
             // Keep the geometric face normal in the material; GPU PBR sampling applies the normal map per hit.
-            float normalX = direction.getStepX();
-            float normalY = direction.getStepY();
-            float normalZ = direction.getStepZ();
+            Vector3fc geometricNormal = RayTracingTangent.geometricNormal(
+                quad, uv0Index, uv1Index, uv2Index);
+            float normalX = geometricNormal.x();
+            float normalY = geometricNormal.y();
+            float normalZ = geometricNormal.z();
             RayTracingTangent.Frame tangent = RayTracingTangent.fromBakedQuad(
                 quad, uv0Index, uv1Index, uv2Index, normalX, normalY, normalZ);
             float roughness = pbr.hasSpecular() ? pbr.roughness() : properties.roughness();
@@ -1516,7 +1649,8 @@ public final class RayTracingScene {
             materialData.add(normalX);
             materialData.add(normalY);
             materialData.add(normalZ);
-            materialData.add(0.0F);
+            // Reserved normal.w: 0 ordinary, 1 thin grass/fern, 2 leaves.
+            materialData.add(properties.vegetationKind());
             addUv(materialData, quad.packedUV(uv0Index));
             addUv(materialData, quad.packedUV(uv1Index));
             addUv(materialData, quad.packedUV(uv2Index));

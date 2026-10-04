@@ -1,7 +1,10 @@
 # RTest terrain traversal ABI
 
-`RayTracingTerrainTraversalAbi` and `rtest/shaders/terrain_traversal.comp` are an isolated,
-renderer-independent traversal seam. They do not modify `RayTracingVulkanPass`.
+`RayTracingTerrainTraversalAbi` and `rtest/shaders/terrain_traversal.comp` implement the optional
+GPU terrain node/Hi-Z traversal path used by `RayTracingVulkanPass`. The path is experimental and
+disabled by default (`terrainLodGpuTraversalEnabled=false`); CPU terrain LOD remains a separate
+selection path. Check `RayTracingClientConfig` and `RayTracingProbe` for activation and fallback
+behavior. ABI details below describe the GPU traversal interface, not the default renderer path.
 
 ## Node SSBO
 

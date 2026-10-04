@@ -8,6 +8,12 @@ import java.util.Set;
 /** Contract test for the 64-byte Vulkan TLAS instance ABI. */
 public final class DynamicTlasInstanceWriterTest {
     public static void main(String[] args) {
+        int untracedMask = DynamicTlasInstanceWriter.UNTRACED_INSTANCE_MASK;
+        if (untracedMask == 0
+                || (untracedMask & DynamicTlasInstanceWriter.PRIMARY_RAY_MASK) != 0
+                || (untracedMask & DynamicTlasInstanceWriter.SECONDARY_RAY_MASK) != 0) {
+            throw new AssertionError("reserved TLAS slot mask must stay active and invisible to all ray types");
+        }
         var registry = new DynamicInstanceRegistry();
         registry.beginFrame();
         registry.upsert(7L, DynamicInstanceRegistry.Family.ENTITY,
@@ -20,18 +26,30 @@ public final class DynamicTlasInstanceWriterTest {
         if (bytes.getFloat(12) != 3 || bytes.getFloat(28) != 4 || bytes.getFloat(44) != 5) {
             throw new AssertionError("dynamic transform was not encoded");
         }
-        if ((bytes.getInt(48) & 0x00ffffff) != 9 || ((bytes.getInt(48) >>> 24) & 0xff) != 0xff
+        if ((bytes.getInt(48) & 0x00ffffff) != 9
+            || ((bytes.getInt(48) >>> 24) & 0xff) != DynamicTlasInstanceWriter.ALL_RAY_MASK
             || bytes.getLong(56) != 0x1234L) {
             throw new AssertionError("active instance ABI fields are invalid");
         }
-        if (((bytes.getInt(112) >>> 24) & 0xff) != 0 || bytes.getLong(120) != 0x9999L) {
+        if (((bytes.getInt(112) >>> 24) & 0xff) != DynamicTlasInstanceWriter.UNTRACED_INSTANCE_MASK
+            || bytes.getLong(120) != 0x9999L) {
             throw new AssertionError("inactive slot was not masked with dummy BLAS");
         }
         if (bytes.getInt(52) != (DynamicTlasInstanceWriter.FACING_CULL_DISABLE << 24)) {
             throw new AssertionError("Instance flags corrupted the SBT offset");
         }
+        DynamicInstanceRegistry.Instance[] instancesBySlot = new DynamicInstanceRegistry.Instance[2];
+        DynamicTlasInstanceWriter.indexInstancesBySlot(frame, 2, instancesBySlot);
+        ByteBuffer indexedBytes = ByteBuffer.allocate(128).order(ByteOrder.nativeOrder());
+        DynamicTlasInstanceWriter.write(indexedBytes, 2, instancesBySlot,
+            Map.of(7L, 0x1234L), Map.of(7L, 9), 0x9999L, 0, 0, 0);
+        if (!java.util.Arrays.equals(bytes.array(), indexedBytes.array())) {
+            throw new AssertionError("Indexed TLAS writes differ from the public frame writer");
+        }
         DynamicTlasInstanceWriter.write(bytes, 2, frame, Map.of(), Map.of(), 0x9999L);
-        if ((bytes.getInt(48) >>> 24) != 0) throw new AssertionError("Missing player BLAS must not expose a dummy Section");
+        if ((bytes.getInt(48) >>> 24) != DynamicTlasInstanceWriter.UNTRACED_INSTANCE_MASK) {
+            throw new AssertionError("Missing player BLAS must stay active but invisible to trace masks");
+        }
 
         var firstPersonRegistry = new DynamicInstanceRegistry();
         firstPersonRegistry.beginFrame();
@@ -69,6 +87,21 @@ public final class DynamicTlasInstanceWriterTest {
             || metadata.getInt(slotOffset + 100) != 1
             || metadata.getInt(slotOffset + 104) != 0) {
             throw new AssertionError("Dynamic motion metadata flags are invalid");
+        }
+        byte[] firstMetadata = metadata.array().clone();
+        DynamicInstanceRegistry.Instance[] metadataInstancesBySlot = new DynamicInstanceRegistry.Instance[2];
+        DynamicTlasInstanceWriter.indexInstancesBySlot(movedFrame, 2, metadataInstancesBySlot);
+        ByteBuffer indexedMetadata = ByteBuffer.allocate(2 * DynamicTlasInstanceWriter.MOTION_METADATA_BYTES_PER_SLOT)
+            .order(ByteOrder.nativeOrder());
+        DynamicTlasInstanceWriter.writeMotionMetadata(indexedMetadata, 2,
+            metadataInstancesBySlot, Set.of(), 1, 2, 3);
+        if (!java.util.Arrays.equals(firstMetadata, indexedMetadata.array())) {
+            throw new AssertionError("Indexed motion metadata differs from the public frame writer");
+        }
+        DynamicTlasInstanceWriter.writeMotionMetadata(indexedMetadata, 2,
+            metadataInstancesBySlot, Set.of(), 1, 2, 3);
+        if (!java.util.Arrays.equals(firstMetadata, indexedMetadata.array())) {
+            throw new AssertionError("Stable motion metadata did not serialize deterministically");
         }
         DynamicTlasInstanceWriter.writeMotionMetadata(metadata, 2, movedFrame, Set.of(7L), 1, 2, 3);
         if ((metadata.getInt(slotOffset + 96) & DynamicInstanceRegistry.FLAG_HISTORY_RESET) == 0

@@ -1,8 +1,21 @@
 package com.rtest.client;
 
+import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.world.phys.AABB;
+import org.joml.Matrix4f;
+
 /** Contract tests for dynamic slot and transform history semantics. */
 public final class DynamicInstanceRegistryTest {
     public static void main(String[] args) {
+        Frustum testFrustum = new Frustum(new Matrix4f(), new Matrix4f());
+        testFrustum.prepare(0.0, 0.0, 0.0);
+        require(DynamicEntityGeometry.isInCameraFrustum(new AABB(-0.25, -0.25, -0.25,
+                0.25, 0.25, 0.25), testFrustum),
+            "an onscreen entity bounding box was treated as a safe raster fallback");
+        require(!DynamicEntityGeometry.isInCameraFrustum(new AABB(100.0, 100.0, 100.0,
+                101.0, 101.0, 101.0), testFrustum),
+            "an offscreen entity should not force the vanilla world renderer to remain enabled");
+
         var registry = new DynamicInstanceRegistry(1);
         var key = new DynamicInstanceRegistry.GeometryKey(10L, 20L);
         var first = DynamicInstanceRegistry.Transform.translation(1.0F, 2.0F, 3.0F);

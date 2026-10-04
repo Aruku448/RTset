@@ -8,13 +8,25 @@ public final class RayTracingClientConfig {
     public static final RayTracingClientConfig INSTANCE;
 
     public final ModConfigSpec.DoubleValue sunIntensity;
+    public final ModConfigSpec.DoubleValue sunAngularRadiusDegrees;
+    public final ModConfigSpec.IntValue sunShadowSamples;
     public final ModConfigSpec.DoubleValue sunColorTemperature;
     public final ModConfigSpec.DoubleValue ambientColorTemperature;
     public final ModConfigSpec.DoubleValue shadowStrength;
+    public final ModConfigSpec.BooleanValue skyboxTextureEnabled;
+    public final ModConfigSpec.BooleanValue skyImportanceSamplingEnabled;
+    public final ModConfigSpec.BooleanValue skyCdfHardwareEnabled;
+    public final ModConfigSpec.DoubleValue skyboxTextureOpacity;
+    public final ModConfigSpec.BooleanValue skyboxDaylightOpacityEnabled;
+    public final ModConfigSpec.BooleanValue moonEnabled;
+    public final ModConfigSpec.DoubleValue moonIntensity;
+    public final ModConfigSpec.BooleanValue primeAtmosphereEnabled;
     public final ModConfigSpec.BooleanValue volumetricLightingEnabled;
     public final ModConfigSpec.DoubleValue volumetricLightingStrength;
     public final ModConfigSpec.DoubleValue volumetricFogDensity;
+    public final ModConfigSpec.IntValue atmosphereAltitudeOffsetMeters;
     public final ModConfigSpec.IntValue volumetricLightingQuality;
+    public final ModConfigSpec.IntValue volumetricShadowSamples;
     public final ModConfigSpec.DoubleValue sunAngleOffset;
     public final ModConfigSpec.DoubleValue sunAzimuthOffset;
     public final ModConfigSpec.IntValue giBounces;
@@ -68,16 +80,19 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue nrdConvergenceBase;
     public final ModConfigSpec.DoubleValue nrdConvergencePercent;
     public final ModConfigSpec.DoubleValue nrdDenoisingRange;
-    public final ModConfigSpec.BooleanValue sundialDenoiserEnabled;
-    public final ModConfigSpec.DoubleValue sundialDenoiserStrength;
-    public final ModConfigSpec.IntValue sundialDenoiserHistory;
     public final ModConfigSpec.IntValue debugView;
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
         sunIntensity = builder
-            .comment("Direct sunlight multiplier used by the Vulkan RT pass.")
-            .defineInRange("sunIntensity", 1.0D, 0.0D, 2.0D);
+            .comment("Solar source intensity used consistently by direct sunlight, the physical sky and solar atmospheric scattering. Values above 2 allow bright daylight under fixed display exposure.")
+            .defineInRange("sunIntensity", 1.0D, 0.0D, 16.0D);
+        sunAngularRadiusDegrees = builder
+            .comment("Solar angular radius in degrees. Larger disks produce wider geometric penumbrae; disk-integrated energy stays fixed. Real Sun is about 0.27 degrees.")
+            .defineInRange("sunAngularRadiusDegrees", 0.27D, 0.05D, 5.0D);
+        sunShadowSamples = builder
+            .comment("Primary-surface solar disk samples per frame, from 1 to 16. Higher counts reduce penumbra noise even without NRD; secondary surfaces retain one sample.")
+            .defineInRange("sunShadowSamples", 4, 1, 16);
         sunColorTemperature = builder
             .comment("Sunlight color temperature in Kelvin.")
             .defineInRange("sunColorTemperature", 6500.0D, 1000.0D, 20000.0D);
@@ -87,18 +102,48 @@ public final class RayTracingClientConfig {
         shadowStrength = builder
             .comment("How strongly Shadow Rays darken direct sunlight.")
             .defineInRange("shadowStrength", 1.0D, 0.0D, 1.0D);
+        skyboxTextureEnabled = builder
+            .comment("Retain the PNG skybox, blended over physical sky when Prime atmosphere is enabled.")
+            .define("skyboxTextureEnabled", true);
+        skyImportanceSamplingEnabled = builder
+            .comment("Use directional luminance importance sampling for PNG sky lighting. Disable for cosine-only A/B profiling.")
+            .define("skyImportanceSamplingEnabled", true);
+        skyCdfHardwareEnabled = builder
+            .comment("Invert the sky CDF with one RT hardware traversal. False uses the alias table with the same distribution.")
+            .define("skyCdfHardwareEnabled", true);
+        skyboxDaylightOpacityEnabled = builder
+            .comment("Use separate artist-authored morning and afternoon skybox opacity curves, interpolated smoothly between control points. Night brightness 0 = 15%, peak brightness 15 = 90%; morning brightness 2 dips to 8%. Manual opacity is used only when disabled.")
+            .define("skyboxDaylightOpacityEnabled", true);
+        skyboxTextureOpacity = builder
+            .comment("Manual PNG opacity when the daylight opacity curve is disabled: 0 = physical sky, 1 = PNG. Without physical sky the original PNG fallback is unchanged. Sun disk and direct sunlight remain independent.")
+            .defineInRange("skyboxTextureOpacity", 0.25D, 0.0D, 1.0D);
+        moonEnabled = builder
+            .comment("Show and illuminate with the Minecraft moon and eight phases, including colored transparent shadows and finite-segment lunar scattering.")
+            .define("moonEnabled", true);
+        moonIntensity = builder
+            .comment("Full-moon disk-integrated irradiance: artistic night lighting, not lux. Scales visible disk, surface NEE and lunar volume together; phase/new-moon and shadowing remain active.")
+            .defineInRange("moonIntensity", 0.06D, 0.0D, 1.0D);
+        primeAtmosphereEnabled = builder
+            .comment("Experimental Prime 26.3 physical sky and four-wave finite-segment aerial. Local-emitter volume uses the same medium and remains a separate NRD diffuse signal; GPU image validation is pending.")
+            .define("primeAtmosphereEnabled", false);
         volumetricLightingEnabled = builder
-            .comment("Enable Prime-inspired single-scattering aerial perspective and sun shafts.")
+            .comment("Enable finite-segment aerial perspective and sun shafts. With Prime atmosphere enabled, uses the pinned four-wave medium and multiple-scattering LUT.")
             .define("volumetricLightingEnabled", true);
         volumetricLightingStrength = builder
             .comment("Strength of the aerial perspective and single-scattering sun volume.")
             .defineInRange("volumetricLightingStrength", 1.0D, 0.0D, 2.0D);
         volumetricFogDensity = builder
-            .comment("Visible world-fog density multiplier; 0 disables distance extinction while preserving the lighting toggle.")
-            .defineInRange("volumetricFogDensity", 1.0D, 0.0D, 2.0D);
+            .comment("Legacy RGB fog density. With Prime atmosphere enabled, this sets physical aerosol density from 0 to 16 times the pinned baseline and rebuilds the medium and complete static LUT; zero retains gas and Rayleigh scattering. Dense settings also attenuate direct light strongly.")
+            .defineInRange("volumetricFogDensity", 1.0D, 0.0D, 16.0D);
+        atmosphereAltitudeOffsetMeters = builder
+            .comment("Physical atmosphere altitude offset in metres. Changes the eye-radius and dynamic sky LUT without rebuilding the static medium.")
+            .defineInRange("atmosphereAltitudeOffsetMeters", 300, 0, 10_000);
         volumetricLightingQuality = builder
             .comment("Atmosphere integration quality: 1=performance, 2=balanced, 3=quality.")
             .defineInRange("volumetricLightingQuality", 2, 1, 3);
+        volumetricShadowSamples = builder
+            .comment("Physical atmosphere RGB shadow budget per sun/moon: 0=all integration steps, 1-16=stratified nonnegative direct scattering (surface segments only; sky uses all steps). Fewer samples reduce ray cost but increase volume noise; medium/transmittance/multiple scattering keep full quality.")
+            .defineInRange("volumetricShadowSamples", 0, 0, 16);
         sunAngleOffset = builder
             .comment("Additional sun rotation in degrees applied to the Minecraft sun angle.")
             .defineInRange("sunAngleOffset", 0.0D, -180.0D, 180.0D);
@@ -135,7 +180,7 @@ public final class RayTracingClientConfig {
             .define("pbrTerrainCpuCaptureEnabled", true);
         terrainLodEnabled = builder
             .comment("Enable MVP terrain LOD; only opaque static terrain is supported. Transparent, fluid, emissive, and dynamic entity geometry is never degraded.")
-            .define("terrainLodEnabled", false);
+            .define("terrainLodEnabled", true);
         terrainLodNativeRadiusChunks = builder
             .comment("Native-detail radius around the camera for terrain LOD, in chunks.")
             .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
@@ -211,11 +256,11 @@ public final class RayTracingClientConfig {
             .comment("REBLUR minimum hit-distance weight; larger values suppress shadow sensitivity.")
             .defineInRange("nrdMinHitDistanceWeight", 0.10D, 0.0001D, 0.2D);
         nrdMinBlurRadius = builder
-            .comment("REBLUR minimum spatial blur radius after convergence.")
-            .defineInRange("nrdMinBlurRadius", 1.0D, 0.0D, 16.0D);
+            .comment("REBLUR minimum spatial blur radius after convergence; small by default to retain contact detail.")
+            .defineInRange("nrdMinBlurRadius", 0.5D, 0.0D, 16.0D);
         nrdMaxBlurRadius = builder
-            .comment("REBLUR base spatial blur radius before convergence reduces it.")
-            .defineInRange("nrdMaxBlurRadius", 12.0D, 1.0D, 96.0D);
+            .comment("REBLUR base spatial blur radius before convergence reduces it; detail-first default.")
+            .defineInRange("nrdMaxBlurRadius", 8.0D, 1.0D, 96.0D);
         nrdLobeAngleFraction = builder
             .comment("REBLUR normal rejection sensitivity as a fraction of the lobe angle.")
             .defineInRange("nrdLobeAngleFraction", 0.15D, 0.001D, 1.0D);
@@ -250,8 +295,8 @@ public final class RayTracingClientConfig {
             .comment("Use the specular pre-pass only for motion estimation, not visible filtering.")
             .define("nrdSpecularPrepassMotionOnly", true);
         nrdHistoryFixPixelStride = builder
-            .comment("Base stride of NRD's 5x5 history reconstruction kernel.")
-            .defineInRange("nrdHistoryFixPixelStride", 14, 1, 64);
+            .comment("Base stride of NRD's 5x5 history reconstruction kernel; keep repair local to reduce smearing.")
+            .defineInRange("nrdHistoryFixPixelStride", 4, 1, 64);
         nrdConvergenceScale = builder
             .comment("REBLUR convergence scale; larger values reduce blur faster after accumulation.")
             .defineInRange("nrdConvergenceScale", 1.0D, 0.1D, 4.0D);
@@ -264,21 +309,13 @@ public final class RayTracingClientConfig {
         nrdDenoisingRange = builder
             .comment("Maximum view-space distance considered valid by NRD; sky uses a larger sentinel.")
             .defineInRange("nrdDenoisingRange", 60000.0D, 256.0D, 60000.0D);
-        sundialDenoiserEnabled = builder
-            .comment("Enable the independent temporal-spatial denoiser modeled after Sundial's GI filter. Disabled by default.")
-            .define("sundialDenoiserEnabled", false);
-        sundialDenoiserStrength = builder
-            .comment("Blend between raw RT radiance (0.0) and the temporal-spatial result (1.0).")
-            .defineInRange("sundialDenoiserStrength", 0.75D, 0.0D, 1.0D);
-        sundialDenoiserHistory = builder
-            .comment("Maximum accumulated frames for the temporal-spatial denoiser.")
-            .defineInRange("sundialDenoiserHistory", 48, 8, 128);
         debugView = builder
             .comment("RT diagnostic view: 0=off, 1=direct diffuse AOV, 2=area-light NEE only, "
                 + "3=emission AOV, 4=indirect diffuse AOV, 5=light-tree emitter count, "
                 + "6=staged light-tree probe, 7=sampled-emitter geometry (R=far, G=front-facing), "
-                + "8=area-light NEE without the MIS weight.")
-            .defineInRange("debugView", 0, 0, 9);
+                + "8=area-light NEE without the MIS weight, 9=emitter blocker, "
+                + "10=air scattering L x100, 11=air shadow deficit x100.")
+            .defineInRange("debugView", 0, 0, 11);
         emissionScale = builder
             .comment("Radiance scale applied to block-light emission, for both the directly visible"
                 + " glow and the light-tree area-light NEE. Minecraft light level 15 maps to 1.0 at"

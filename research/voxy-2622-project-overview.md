@@ -1,5 +1,7 @@
 # Voxy `2622` 项目概览
 
+> **文档性质：参考资料/阶段性快照。** 不作为当前实现规范、能力清单或待办计划。涉及 RTest 的描述可能已过时或不完整；请以源码与 `docs/HANDOFF.md` 为准，使用前逐项复核。
+
 调查日期：2026-09-22。以下针对分支 `2622` 当时的提交 [`91c96528bc458be0646ddda2564aa90baaf639e2`](https://github.com/MCRcortex/voxy/tree/91c96528bc458be0646ddda2564aa90baaf639e2)，不是对后续版本的承诺。
 
 ## 用途与定位
@@ -24,4 +26,4 @@ Voxy 是 Fabric 平台的 Minecraft 远景 LOD 渲染模组。仓库 README 仅�
 
 仓库在这个提交把版本标为 `0.2.17-alpha`；README 没有详细安装或 API 文档，源码中仍有若干 TODO。因此适合当作实际运行的远景 LOD 实现来研究，但不能把内部类视为稳定的公共接口。源码授权元数据为 `All-Rights-Reserved`，复用代码前应另行确认授权。[gradle.properties](https://github.com/MCRcortex/voxy/blob/91c96528bc458be0646ddda2564aa90baaf639e2/gradle.properties) · [README](https://github.com/MCRcortex/voxy/blob/91c96528bc458be0646ddda2564aa90baaf639e2/README.md) · [fabric.mod.json](https://github.com/MCRcortex/voxy/blob/91c96528bc458be0646ddda2564aa90baaf639e2/src/main/resources/fabric.mod.json)
 
-与当前 RT 项目的具体技术对照另见 [现有笔记](voxy-lod-rtest-comparison.md)。
+本文只概述固定提交的 Voxy 源码，不再维护与 RTest 当前实现的对照；RTest 现状以主开发文档和源码为准。

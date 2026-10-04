@@ -43,10 +43,10 @@ import org.lwjgl.vulkan.VkWriteDescriptorSet;
 /**
  * Vulkan realization of NRD Core's API-independent dispatch descriptions.
  *
- * <p>NRD never owns or sees a Vulkan handle. Prime creates every image, pipeline, descriptor and
- * constant buffer, records all dispatches on the existing Minecraft command buffer and retires
- * frame bindings at the real queue completion point. This boundary is intentionally generic so a
- * later wavefront path scheduler can replace raygen without changing denoiser ownership.
+ * <p>NRD never owns or sees a Vulkan handle. RTest creates every image, pipeline, descriptor and
+ * constant buffer, records dispatches on the Minecraft command buffer and retires frame bindings
+ * at queue completion. This boundary keeps denoiser resource ownership separate from the RT
+ * pipeline implementation.
  */
 public final class NrdDenoiser implements Destroyable {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -54,7 +54,7 @@ public final class NrdDenoiser implements Destroyable {
     private static final int IMAGE_USAGE = VK12.VK_IMAGE_USAGE_STORAGE_BIT | VK12.VK_IMAGE_USAGE_SAMPLED_BIT;
     private static final int MOTION_BINDING_COUNT = 11;
     private static final int MOTION_PUSH_SIZE = 192;
-    private static final int COMPOSITE_BINDING_COUNT = 9;
+    private static final int COMPOSITE_BINDING_COUNT = 10;
     private static final int COMPOSITE_PUSH_SIZE = 16;
     private final RtestVulkanContext context;
     private final int width;
@@ -131,7 +131,7 @@ public final class NrdDenoiser implements Destroyable {
                 width,
                 height,
                 NrdNative.DenoiserKind.DIFFUSE_SPECULAR,
-                "Prime NRD opaque",
+                "RTest NRD opaque",
                 output,
                 motionSource);
     }
@@ -151,7 +151,7 @@ public final class NrdDenoiser implements Destroyable {
                 width,
                 height,
                 branch.nativeKind,
-                "Prime NRD transparent " + branch.debugName,
+                "RTest NRD transparent " + branch.debugName,
                 null,
                 null);
     }
@@ -362,10 +362,10 @@ public final class NrdDenoiser implements Destroyable {
     }
 
     /**
-     * Makes every image written by RayGen writable. The split AOVs are produced unconditionally,
-     * even when both denoisers are disabled, so they must not be omitted from this barrier as a
-     * configuration-dependent optimization. NRD histories and transient resources are prepared
-     * lazily when NRD is actually scheduled.
+     * Makes every guide image written by an enabled RayGen denoiser mode writable.
+     * The owner also calls this once in OFF mode to initialize the statically bound
+     * descriptors' layouts. NRD histories and transient resources are prepared lazily
+     * when NRD is actually scheduled.
      */
     public void prepareForRayTrace(VkCommandBuffer commandBuffer) {
         this.requireOpen();
@@ -549,7 +549,7 @@ public final class NrdDenoiser implements Destroyable {
             }
             computeToComputeBarrier(commandBuffer);
             if (compositeOutput) {
-                this.composite.record(commandBuffer, this.width, this.height, compositeStrength);
+                this.composite.record(commandBuffer, this.width, this.height, compositeStrength, denoisingRange);
             }
             return new FrameToken(
                     this, bindings, camera, sceneResetRevision, atlasView, atlasSampler,
@@ -787,7 +787,7 @@ public final class NrdDenoiser implements Destroyable {
                 || description.resourcesBaseRegisterIndex() != 0
                 || !description.samplers().equals(List.of(0, 1))
                 || !"main".equals(description.shaderEntryPoint())) {
-            throw new IllegalStateException("Bundled NRD library does not match Prime's Vulkan ABI contract");
+            throw new IllegalStateException("Bundled NRD library does not match the RTest Vulkan ABI contract");
         }
     }
 
@@ -1058,6 +1058,9 @@ public final class NrdDenoiser implements Destroyable {
         private final RtestVulkanImage transparentThroughput;
         private final RtestVulkanImage[] permanentPool;
         private final RtestVulkanImage[] transientPool;
+        // Image identity and ownership do not change during this Images lifetime.
+        private final RtestVulkanImage[] rayTraceImages;
+        private final RtestVulkanImage[] ownedImages;
         private boolean destroyed;
 
         private Images(
@@ -1103,6 +1106,13 @@ public final class NrdDenoiser implements Destroyable {
             this.transparentThroughput = transparentThroughput;
             this.permanentPool = permanentPool;
             this.transientPool = transientPool;
+            this.rayTraceImages = new RtestVulkanImage[] {
+                this.noisyDiffuse, this.noisySpecular, this.normalRoughness,
+                this.viewZ, this.motion, this.material,
+                this.primaryPosition, this.specularMaterial,
+                this.directDiffuse, this.indirectDiffuse, this.emission
+            };
+            this.ownedImages = this.collectOwnedImages();
         }
 
         private static Images create(
@@ -1238,7 +1248,7 @@ public final class NrdDenoiser implements Destroyable {
                         textureWidth,
                         textureHeight,
                         vkFormat(texture.format()),
-                        "Prime NRD " + poolName + " " + index);
+                        "RTest NRD " + poolName + " " + index);
             }
             return pool;
         }
@@ -1256,18 +1266,16 @@ public final class NrdDenoiser implements Destroyable {
         }
 
         private RtestVulkanImage[] rayTraceImages() {
-            // RayGen writes all of these images on every dispatch. Keep the split AOVs in the
-            // barrier even when no denoiser is scheduled; otherwise storage writes target an
-            // undefined image layout and a later toggle can consume stale contents.
-            return new RtestVulkanImage[] {
-                this.noisyDiffuse, this.noisySpecular, this.normalRoughness,
-                this.viewZ, this.motion, this.material,
-                this.primaryPosition, this.specularMaterial,
-                this.directDiffuse, this.indirectDiffuse, this.emission
-            };
+            // The owner initializes every statically bound guide once, then uses these barriers
+            // only when a denoiser is enabled. Callers must not modify the cached private list.
+            return this.rayTraceImages;
         }
 
         private RtestVulkanImage[] allImages() {
+            return this.ownedImages;
+        }
+
+        private RtestVulkanImage[] collectOwnedImages() {
             ArrayList<RtestVulkanImage> unique = new ArrayList<>();
             Set<RtestVulkanImage> seen = Collections.newSetFromMap(new IdentityHashMap<>());
             RtestVulkanImage[] fixed = new RtestVulkanImage[] {
@@ -1372,10 +1380,10 @@ public final class NrdDenoiser implements Destroyable {
                 LongBuffer layoutPointer = stack.mallocLong(1);
                 RtestVulkanContext.check(
                         VK12.vkCreatePipelineLayout(context.vkDevice(), layoutInfo, null, layoutPointer),
-                        "create Prime NRD pipeline layout " + pipelineIndex);
+                        "create RTest NRD pipeline layout " + pipelineIndex);
                 pipelineLayout = layoutPointer.get(0);
                 long shaderModule = createShaderModule(
-                        context, stack, pipelineDescription.spirv(), "Prime NRD shader " + pipelineIndex);
+                        context, stack, pipelineDescription.spirv(), "RTest NRD shader " + pipelineIndex);
                 try {
                     VkPipelineShaderStageCreateInfo stage = VkPipelineShaderStageCreateInfo.calloc(stack)
                             .sType$Default()
@@ -1391,7 +1399,7 @@ public final class NrdDenoiser implements Destroyable {
                     RtestVulkanContext.check(
                             VK12.vkCreateComputePipelines(
                                     context.vkDevice(), 0L, createInfo, null, pipelinePointer),
-                            "create Prime NRD compute pipeline " + pipelineDescription.identifier());
+                            "create RTest NRD compute pipeline " + pipelineDescription.identifier());
                     pipeline = pipelinePointer.get(0);
                 } finally {
                     VK12.vkDestroyShaderModule(context.vkDevice(), shaderModule, null);
@@ -1478,7 +1486,7 @@ public final class NrdDenoiser implements Destroyable {
         LongBuffer pointer = stack.mallocLong(1);
         RtestVulkanContext.check(
                 VK12.vkCreateDescriptorSetLayout(context.vkDevice(), createInfo, null, pointer),
-                "create Prime NRD resource descriptor set layout");
+                "create RTest NRD resource descriptor set layout");
         return pointer.get(0);
     }
 
@@ -1495,7 +1503,7 @@ public final class NrdDenoiser implements Destroyable {
         int bindingIndex = 0;
         long[] immutableSamplers = new long[] {nearestSampler, linearSampler};
         if (description.samplers().size() != immutableSamplers.length) {
-            throw new IllegalStateException("Prime expects NRD's nearest and linear samplers");
+            throw new IllegalStateException("RTest NRD bridge did not provide the expected nearest and linear samplers");
         }
         for (int samplerIndex = 0; samplerIndex < description.samplers().size(); samplerIndex++) {
             bindings.get(bindingIndex++)
@@ -1521,7 +1529,7 @@ public final class NrdDenoiser implements Destroyable {
         LongBuffer pointer = stack.mallocLong(1);
         RtestVulkanContext.check(
                 VK12.vkCreateDescriptorSetLayout(context.vkDevice(), createInfo, null, pointer),
-                "create Prime NRD constants descriptor set layout");
+                "create RTest NRD constants descriptor set layout");
         return pointer.get(0);
     }
 
@@ -1607,7 +1615,7 @@ public final class NrdDenoiser implements Destroyable {
                 LongBuffer poolPointer = stack.mallocLong(1);
                 RtestVulkanContext.check(
                         VK12.vkCreateDescriptorPool(owner.context.vkDevice(), poolInfo, null, poolPointer),
-                        "create Prime NRD frame descriptor pool");
+                        "create RTest NRD frame descriptor pool");
                 descriptorPool = poolPointer.get(0);
                 long stride = RtestVulkanContext.alignUp(
                         Math.max(description.constantBufferMaxDataSize(), 1),
@@ -1616,7 +1624,7 @@ public final class NrdDenoiser implements Destroyable {
                         Math.multiplyExact(stride, sets),
                         VK12.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                         true,
-                        "Prime NRD frame constants");
+                        "RTest NRD frame constants");
                 return new FrameBindings(owner, descriptorPool, constantBuffer);
             } catch (RuntimeException | Error exception) {
                 try {
@@ -1646,7 +1654,7 @@ public final class NrdDenoiser implements Destroyable {
             }
             RtestVulkanContext.check(
                     VK12.vkResetDescriptorPool(denoiser.context.vkDevice(), this.descriptorPool, 0),
-                    "reset Prime NRD descriptor pool");
+                    "reset RTest NRD descriptor pool");
             this.resourceDescriptorSets = new long[dispatches.size()];
             this.constantsDescriptorSets = new long[dispatches.size()];
             if (dispatches.isEmpty()) {
@@ -1667,7 +1675,7 @@ public final class NrdDenoiser implements Destroyable {
                 LongBuffer sets = stack.mallocLong(Math.multiplyExact(dispatches.size(), 2));
                 RtestVulkanContext.check(
                         VK12.vkAllocateDescriptorSets(denoiser.context.vkDevice(), allocateInfo, sets),
-                        "allocate Prime NRD frame descriptor sets");
+                        "allocate RTest NRD frame descriptor sets");
                 for (int dispatchIndex = 0; dispatchIndex < dispatches.size(); dispatchIndex++) {
                     this.resourceDescriptorSets[dispatchIndex] = sets.get();
                     this.constantsDescriptorSets[dispatchIndex] = sets.get();
@@ -2083,7 +2091,8 @@ public final class NrdDenoiser implements Destroyable {
                     images.specularMaterial,
                     images.emission,
                     images.directDiffuse,
-                    images.indirectDiffuse
+                    images.noisyDiffuse,
+                    images.noisySpecular
                 };
                 VkDescriptorImageInfo.Buffer infos = VkDescriptorImageInfo.calloc(BINDING_COUNT, stack);
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(BINDING_COUNT, stack);
@@ -2107,13 +2116,15 @@ public final class NrdDenoiser implements Destroyable {
             }
         }
 
-        private void record(VkCommandBuffer commandBuffer, int width, int height, float strength) {
+        private void record(VkCommandBuffer commandBuffer, int width, int height,
+                            float strength, float denoisingRange) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VK12.vkCmdBindPipeline(commandBuffer, VK12.VK_PIPELINE_BIND_POINT_COMPUTE, this.pipeline);
                 VK12.vkCmdBindDescriptorSets(commandBuffer, VK12.VK_PIPELINE_BIND_POINT_COMPUTE,
                         this.pipelineLayout, 0, stack.longs(this.descriptorSet), null);
                 ByteBuffer pushConstants = stack.malloc(COMPOSITE_PUSH_SIZE).order(ByteOrder.nativeOrder());
                 pushConstants.putFloat(Math.max(0.0f, Math.min(1.0f, strength)));
+                pushConstants.putFloat(denoisingRange);
                 pushConstants.flip();
                 VK12.vkCmdPushConstants(
                         commandBuffer, this.pipelineLayout, COMPUTE_STAGE, 0, pushConstants);

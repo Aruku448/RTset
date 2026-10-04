@@ -1,0 +1,39 @@
+{
+  "all_merges": {
+    "n": 104,
+    "median_ms": {
+      "total": 51.5,
+      "layout": 1.0,
+      "lightTree": 50.0
+    }
+  },
+  "dirty_le_3": {
+    "n": 13,
+    "median_ms": {
+      "total": 59,
+      "layout": 1,
+      "lightTree": 56
+    }
+  },
+  "publishes": {
+    "n": 102,
+    "same_light_data": 7
+  },
+  "window": {
+    "since_inclusive": "03:30:00",
+    "until_exclusive": "03:33:00"
+  },
+  "source_log_sha256": "b4db19d87ed21bf1842733e5583473b366d0e66fa254b6df0cd8a75a0e7edfc1",
+  "kernel": {
+    "scope": "synthetic equivalent non-emissive actual SceneGeometry.replaceSections; not GPU/FPS/all-world merges",
+    "sections": 4001,
+    "emitters": 80000,
+    "warmups": 5,
+    "runs": 9,
+    "heap": "1g",
+    "java": 25,
+    "before_median_ms": 34.308,
+    "after_median_ms": 4.092,
+    "words_hash_both": 1168139004
+  }
+}

@@ -1,5 +1,21 @@
 package com.rtest.client;
 
+import static com.rtest.client.RayTracingMaterialBuffer.canUseIncrementalMaterialWrite;
+import static com.rtest.client.RayTracingMaterialBuffer.clearDynamicMaterialSlots;
+import static com.rtest.client.RayTracingMaterialBuffer.dynamicMaterialBase;
+import static com.rtest.client.RayTracingMaterialBuffer.hasChangedMaterialSections;
+import static com.rtest.client.RayTracingMaterialBuffer.materialFloatCount;
+import static com.rtest.client.RayTracingMaterialBuffer.restoreStaticMaterialData;
+import static com.rtest.client.RayTracingMaterialBuffer.sameDynamicMaterialBase;
+import static com.rtest.client.RayTracingMaterialBuffer.writeChangedSectionMaterials;
+import static com.rtest.client.RayTracingMaterialBuffer.writeMaterialBuffer;
+
+import com.rtest.client.RayTracingDynamicInstances.DynamicCachedBlas;
+import static com.rtest.client.RayTracingDynamicInstances.DYNAMIC_PLAYER_MATERIAL_TRIANGLES;
+import static com.rtest.client.RayTracingDynamicInstances.DYNAMIC_SLOT_MATERIAL_TRIANGLES;
+import static com.rtest.client.RayTracingDynamicInstances.MATERIAL_FLOATS_PER_TRIANGLE;
+
+
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuFence;
@@ -55,7 +71,6 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.shaderc.Shaderc;
 import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
 import org.lwjgl.vulkan.KHRRayTracingPipeline;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -66,12 +81,6 @@ import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryInstancesDataKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryTrianglesDataKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkDescriptorBufferInfo;
@@ -123,13 +132,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
          */
         private static volatile Set<Long> representedBlockEntities = Set.of();
         private final VulkanDevice device;
+        // Physical-device AS limits are immutable for this pass/device lifetime.
+        private final RayTracingSupport.Limits accelerationLimits;
         private final VkDevice vkDevice;
         // One pass-owned encoder is reused for incremental AS builds and RT/FSR submissions.
         // Keeping its command pools alive across frames lets a fence retire work without racing
         // per-frame encoder destruction on drivers with strict command-pool lifetime rules.
         private final VulkanCommandEncoder encoder;
         private final List<CachedBlas> sectionBlas;
-        private final List<DynamicCachedBlas> dynamicBlas;
+        private final BlasCache blasCache;
+        private final RayTracingDynamicInstances dynamicInstances;
         private final int dynamicSlotCapacity;
         private NativeBuffer instanceBuffer;
         private NativeBuffer dynamicMotionMetadataBuffer;
@@ -153,7 +165,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final long terrainTraversalShaderModule;
         private final long terrainHiZPipeline;
         private final long terrainHiZShaderModule;
-        private final int terrainTraversalNodeCount;
+        private int terrainTraversalNodeCount;
+        private int terrainTraversalNodeCapacity;
         private final boolean terrainTraversalEnabled;
         private final RayTracingPbrMaterials pbrMaterials;
         private int pbrMapCount;
@@ -171,6 +184,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final int outputHeight;
         private final RtestFsr3 fsr;
         private final NativeBuffer shaderBindingTable;
+        private RayTracingAtmosphere atmosphere;
+        private final NativeBuffer atmosphereCameraBuffer;
+        private final boolean atmosphereRequested;
+        private int atmosphereDensitySteps;
+        private int requestedAtmosphereDensitySteps;
+        private long atmosphereDensityChangedAt;
+        private int lastAtmosphereAltitudeOffsetMeters = Integer.MIN_VALUE;
+        private final boolean skyboxTextureEnabled;
+        private float atmosphereEyeRadiusKm;
+        private long pendingAtmosphereToken;
+        private long pendingMoonAtmosphereToken;
+        private float currentMoonDirectionY = 1.0F;
+        private boolean currentMoonSkyActive;
+        // Set per frame from the same gate the raygen uses (physical LUT + volume enabled), so the
+        // post-NRD aerial composite never reads an L image the raygen left unwritten.
+        private boolean aerialPerspectiveEnabled;
         // One TLAS is shared by all rays. VkAccelerationStructureInstanceKHR.mask plus the
         // ray cull mask in RayTracingShaders provide the primary/secondary visibility split:
         // the first-person body is available to continuation/reflection rays without occluding
@@ -184,7 +213,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final long[] shaderModules;
         private final int sbtStride;
         private static final int BLAS_BUILDS_PER_FRAME = 16;
-
         static boolean needsIncrementalDynamicBuild(
             boolean topLevelBuilt,
             boolean blasBuilt,
@@ -215,12 +243,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final long[] livingEntityTextureSamplersScratch = new long[PLAYER_SKIN_DESCRIPTOR_COUNT];
         private boolean topLevelBuilt;
         private boolean topLevelUpdatePending;
-        // A replacement TLAS has no valid correspondence with the previous secondary-ray
-        // geometry. Keep this pending until a complete RT submission carries the reset metadata.
-        private boolean dynamicHistoryResetPending = true;
-        // Geometry publication rewrites the whole material SSBO, so dynamic model ranges must be
-        // repopulated once. Stable frames then avoid mapping/flushing the large host-visible SSBO.
-        private boolean dynamicMaterialWritePending = true;
         private int frameIndex;
         private int lastPbrPackedMode = Integer.MIN_VALUE;
         private float lastPbrNormalStrength = Float.NaN;
@@ -229,6 +251,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private float lastPbrWetnessStrength = Float.NaN;
         private float lastPbrParallaxDepth = Float.NaN;
         private int lastPbrParallaxFlags = Integer.MIN_VALUE;
+        private float lastSkyboxTextureOpacity = Float.NaN;
+        private boolean lastSkyboxDaylightOpacityEnabled;
+        private boolean lastMoonEnabled;
+        private float lastSunAngularRadiusDegrees = Float.NaN;
+        private float lastSunIntensity = Float.NaN;
+        private int lastSunShadowSamples = -1;
+        private int lastMoonPhaseToken = -1;
+        private float lastMoonIntensity = Float.NaN;
         private boolean lastVolumetricLightingEnabled;
         private float lastVolumetricLightingStrength = Float.NaN;
         private float lastVolumetricFogDensity = Float.NaN;
@@ -237,27 +267,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final RayTracingFrameTiming dispatchTiming = new RayTracingFrameTiming();
         private RtestFsrCamera previousFsrCamera;
         private DynamicEntityGeometry.Frame dynamicFrame;
-        private final DynamicBlasCache dynamicBlasCache;
-        // Mutable entity/block-entity BLAS are owned per instance, never shared by matching poses.
-        private final Map<Long, DynamicCachedBlas> playerModelBlas = new HashMap<>();
-        private final Map<Long, DynamicCachedBlas> livingModelBlas = new HashMap<>();
-        private final Map<Long, DynamicCachedBlas> blockEntityModelBlas = new HashMap<>();
-        private final Map<Long, DynamicCachedBlas> itemModelBlas = new HashMap<>();
-        // updateDynamicInstances runs on the render thread and completes before the next call.
-        // Reusing these bounded scratch tables removes several HashMap/HashSet allocations from
-        // every frame without extending any data lifetime past the upload.
-        private final Map<Long, Long> dynamicAddressesScratch = new HashMap<>(96);
-        private final Map<Long, Integer> dynamicMaterialBasesScratch = new HashMap<>(96);
-        private final Set<Long> livePlayersScratch = new HashSet<>(96);
-        private final Set<Long> liveLivingScratch = new HashSet<>(96);
-        private final Set<Long> liveBlockEntitiesScratch = new HashSet<>(96);
-        private final Set<Long> liveItemsScratch = new HashSet<>(96);
-        private final Set<Long> historyResetIdentitiesScratch = new HashSet<>(96);
         private boolean reportedPlayerAnimationUpdate;
-        private boolean reportedItemMaterial;
-        private long dynamicTlasUpdateCount;
-        private long dynamicBlasBuildCommandCount;
-        private long dynamicMetadataUploadCount;
         // Minecraft advances its world clock at 20 TPS. Keep the RT sun phase
         // pinned to that clock instead of allowing render FPS to create a second
         // time source between ClientLevel ticks.
@@ -277,20 +287,23 @@ import com.rtest.client.fsr.RtestFsrSettings;
         // them. Geometry/resource publication can also use this retirement point if a submission
         // is still pending after an early-return path.
         private GpuFence pendingFrameFence;
+        private final RtBlasRetirement dynamicBlasRetirement = new RtBlasRetirement();
         private int pendingFrameTimingFrame;
         private int pendingFrameGpuIndex;
         private boolean closed;
-        // 0..3 retain RT/post/total timing; 4..5 bracket the optional terrain traversal.
-        private static final int GPU_TIMESTAMP_COUNT = 6;
+        // 0..3 retain RT/post/total; 4..5 bracket traversal/AS; 6..7 isolate dynamic sky LUT work.
+        private static final int GPU_TIMESTAMP_COUNT = 8;
         private final long gpuTimestampQueryPool;
         private final double gpuTimestampPeriodNs;
         private final boolean gpuTimestampsAvailable;
 
         private RayTracingVulkanPass(
             VulkanDevice device,
+            RayTracingSupport.Limits accelerationLimits,
             VulkanCommandEncoder encoder,
             List<CachedBlas> sectionBlas,
-            List<DynamicCachedBlas> dynamicBlas,
+            BlasCache blasCache,
+            RayTracingDynamicInstances dynamicInstances,
             int dynamicSlotCapacity,
             NativeBuffer instanceBuffer,
             NativeBuffer dynamicMotionMetadataBuffer,
@@ -338,9 +351,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long[] shaderModules,
             int sbtStride,
             DynamicEntityGeometry.Frame dynamicFrame,
-            DynamicBlasCache dynamicBlasCache
+            RayTracingAtmosphere atmosphere,
+            NativeBuffer atmosphereCameraBuffer,
+            boolean atmosphereRequested
         ) {
+            this.atmosphere = atmosphere;
+            this.atmosphereDensitySteps = atmosphereDensitySteps();
+            this.requestedAtmosphereDensitySteps = this.atmosphereDensitySteps;
+            this.atmosphereCameraBuffer = atmosphereCameraBuffer;
+            this.atmosphereRequested = atmosphereRequested;
+            this.skyboxTextureEnabled = RayTracingClientConfig.INSTANCE.skyboxTextureEnabled.get();
             this.device = device;
+            this.accelerationLimits = accelerationLimits;
             this.vkDevice = device.vkDevice();
             long queryPool = 0L;
             double timestampPeriod = 0.0;
@@ -371,7 +393,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
             this.encoder = encoder;
             this.sectionBlas = sectionBlas;
-            this.dynamicBlas = dynamicBlas;
+            this.blasCache = blasCache;
+            this.dynamicInstances = dynamicInstances;
             this.dynamicSlotCapacity = dynamicSlotCapacity;
             this.instanceBuffer = instanceBuffer;
             this.dynamicMotionMetadataBuffer = dynamicMotionMetadataBuffer;
@@ -394,6 +417,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.terrainHiZPipeline = terrainHiZPipeline;
             this.terrainHiZShaderModule = terrainHiZShaderModule;
             this.terrainTraversalNodeCount = terrainTraversalNodeCount;
+            this.terrainTraversalNodeCapacity = terrainNodeMetadataBuffer == null ? 0
+                : (int)(terrainNodeMetadataBuffer.size / RayTracingTerrainTraversalAbi.NODE_METADATA_BYTES);
             this.terrainTraversalEnabled = terrainTraversalEnabled;
             this.pbrMaterials = pbrMaterials;
             this.pbrMapCount = pbrMaterials == null ? geometry.pbrData[0] : pbrMaterials.loadedMapCount();
@@ -420,177 +445,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.shaderModules = shaderModules;
             this.sbtStride = sbtStride;
             this.dynamicFrame = dynamicFrame;
-            this.dynamicBlasCache = dynamicBlasCache;
-        }
-
-        private static final class DynamicBlasCache implements AutoCloseable {
-            private final Map<Long, DynamicCachedBlas> entries = new HashMap<>();
-            // A replaced/removed dynamic BLAS may still be referenced by the old TLAS while
-            // the current submission records its replacement update. Retire it only after the
-            // submission fence, rather than destroying its storage during instance publication.
-            private final List<DynamicCachedBlas> retired = new ArrayList<>();
-
-            DynamicCachedBlas acquire(VulkanDevice device, long topologyKey, DynamicPlaceholderGeometry.Mesh mesh) {
-                DynamicCachedBlas cached = entries.get(topologyKey);
-                int fingerprint = java.util.Arrays.hashCode(mesh.vertices());
-                if (cached != null && cached.fingerprint == fingerprint
-                    && cached.triangleCount == mesh.triangleCount()
-                    && java.util.Arrays.equals(cached.topologyVertices, mesh.vertices())) {
-                    return cached;
-                }
-                int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-                    | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-                    | KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-                NativeBuffer vertices = NativeBuffer.create(device, (long)mesh.vertices().length * Float.BYTES, usage, true);
-                AccelerationStructure bottomLevel = null;
-                DynamicCachedBlas candidate = null;
-                try {
-                    try (NativeBuffer.Mapped mapped = vertices.map()) {
-                        mapped.buffer().asFloatBuffer().put(mesh.vertices());
-                    }
-                    bottomLevel = AccelerationStructure.createBottomLevel(device, vertices, mesh.triangleCount());
-                    candidate = new DynamicCachedBlas(topologyKey, fingerprint, mesh.triangleCount(),
-                        mesh.vertices(), vertices, bottomLevel);
-                } catch (Throwable throwable) {
-                    if (candidate != null) {
-                        candidate.close();
-                    } else if (bottomLevel != null) {
-                        bottomLevel.close();
-                        vertices.close();
-                    } else {
-                        vertices.close();
-                    }
-                    throw throwable;
-                }
-                try {
-                    DynamicCachedBlas previous = entries.put(topologyKey, candidate);
-                    if (previous != null && previous != candidate) {
-                        retired.add(previous);
-                    }
-                    return candidate;
-                } catch (Throwable throwable) {
-                    // The old entry remains valid if publication or its replacement fails.
-                    if (entries.get(topologyKey) != candidate) {
-                        candidate.close();
-                    }
-                    throw throwable;
-                }
-            }
-
-            void release(long key) {
-                DynamicCachedBlas cached = entries.remove(key);
-                if (cached != null) {
-                    retired.add(cached);
-                }
-            }
-
-            void retireCompleted() {
-                Throwable failure = null;
-                for (DynamicCachedBlas cached : retired) {
-                    try {
-                        cached.close();
-                    } catch (Throwable cleanupFailure) {
-                        if (failure == null) {
-                            failure = cleanupFailure;
-                        } else {
-                            failure.addSuppressed(cleanupFailure);
-                        }
-                    }
-                }
-                retired.clear();
-                rethrow(failure);
-            }
-
-            @Override
-            public void close() {
-                Throwable failure = null;
-                for (DynamicCachedBlas cached : entries.values()) {
-                    try {
-                        cached.close();
-                    } catch (Throwable cleanupFailure) {
-                        if (failure == null) {
-                            failure = cleanupFailure;
-                        } else {
-                            failure.addSuppressed(cleanupFailure);
-                        }
-                    }
-                }
-                entries.clear();
-                for (DynamicCachedBlas cached : retired) {
-                    try {
-                        cached.close();
-                    } catch (Throwable cleanupFailure) {
-                        if (failure == null) {
-                            failure = cleanupFailure;
-                        } else {
-                            failure.addSuppressed(cleanupFailure);
-                        }
-                    }
-                }
-                retired.clear();
-                rethrow(failure);
-            }
-        }
-
-        private static final class DynamicCachedBlas implements AutoCloseable {
-            private final long topologyKey;
-            private int fingerprint;
-            private final int triangleCount;
-            private final float[] topologyVertices;
-            private final NativeBuffer vertexBuffer;
-            private final AccelerationStructure bottomLevel;
-            private boolean built;
-            private boolean pendingUpdate;
-            private float[] uploadedVertices;
-            private boolean closed;
-
-            private DynamicCachedBlas(long topologyKey, int fingerprint, int triangleCount,
-                                      float[] topologyVertices, NativeBuffer vertexBuffer,
-                                      AccelerationStructure bottomLevel) {
-                this.topologyKey = topologyKey;
-                this.fingerprint = fingerprint;
-                this.triangleCount = triangleCount;
-                this.topologyVertices = java.util.Arrays.copyOf(topologyVertices, topologyVertices.length);
-                this.vertexBuffer = vertexBuffer;
-                this.bottomLevel = bottomLevel;
-            }
-
-            private boolean updateVertices(float[] vertices) {
-                if (vertices.length * Float.BYTES != vertexBuffer.size) {
-                    throw new IllegalArgumentException("Dynamic mesh topology changed during BLAS UPDATE");
-                }
-                if (java.util.Arrays.equals(uploadedVertices, vertices)) return false;
-                try (NativeBuffer.Mapped mapped = vertexBuffer.map()) {
-                    mapped.buffer().asFloatBuffer().put(vertices);
-                }
-                uploadedVertices = java.util.Arrays.copyOf(vertices, vertices.length);
-                // Keep the cache fingerprint in sync with the uploaded geometry. Otherwise an
-                // animated model is mistaken for a topology replacement on every frame, causing
-                // a fresh BLAS allocation instead of an in-place update.
-                fingerprint = java.util.Arrays.hashCode(vertices);
-                pendingUpdate = true;
-                return true;
-            }
-
-            @Override
-            public void close() {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                try {
-                    bottomLevel.close();
-                } finally {
-                    vertexBuffer.close();
-                }
-            }
         }
 
         static final class BlasCache implements AutoCloseable {
             private final Map<SectionKey, CachedBlas> entries = new HashMap<>();
+            private final List<CachedBlas> retired = new ArrayList<>();
 
             CachedBlas acquire(VulkanDevice device, SceneGeometry.SectionGeometry section) {
-                SectionKey key = new SectionKey(section.originX, section.originY, section.originZ);
+                SectionKey key = new SectionKey(section.originX, section.originY, section.originZ,
+                    section.terrainNodeKey().level());
                 CachedBlas current = entries.get(key);
                 if (current != null && current.vertexFingerprint == section.vertexFingerprint()
                     && current.triangleCount == section.triangleCount()) {
@@ -622,10 +485,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
             /** Publishes candidates only after the surrounding pass transaction succeeded. */
             void commit(List<CachedBlas> candidates) {
+                validateUniqueBlasKeys(candidates);
                 for (CachedBlas candidate : candidates) {
                     CachedBlas previous = entries.put(candidate.key, candidate);
                     if (previous != null && previous != candidate) {
-                        previous.close();
+                        retired.add(previous);
                     }
                 }
             }
@@ -643,12 +507,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 if (entries.size() <= 2048) {
                     return;
                 }
-                entries.entrySet().removeIf(entry -> !active.contains(entry.getKey()) && closeEntry(entry.getValue()));
+                var iterator = entries.entrySet().iterator();
+                while (iterator.hasNext()) {
+                    Map.Entry<SectionKey, CachedBlas> entry = iterator.next();
+                    if (!active.contains(entry.getKey())) {
+                        retired.add(entry.getValue());
+                        iterator.remove();
+                    }
+                }
             }
 
-            private static boolean closeEntry(CachedBlas entry) {
-                entry.close();
-                return true;
+            /** Call only after the TLAS build/update using its source instance set has fenced. */
+            void retireCompleted() {
+                for (CachedBlas entry : retired) entry.close();
+                retired.clear();
             }
 
             @Override
@@ -666,23 +538,35 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     }
                 }
                 entries.clear();
+                for (CachedBlas entry : retired) {
+                    try {
+                        entry.close();
+                    } catch (Throwable cleanupFailure) {
+                        if (failure == null) {
+                            failure = cleanupFailure;
+                        } else {
+                            failure.addSuppressed(cleanupFailure);
+                        }
+                    }
+                }
+                retired.clear();
                 rethrow(failure);
             }
         }
 
-        private record SectionKey(int x, int y, int z) {
+        private record SectionKey(int x, int y, int z, int lodLevel) {
         }
 
-        private static boolean sameSectionBlas(List<CachedBlas> previous, List<CachedBlas> next) {
-            if (previous.size() != next.size()) {
-                return false;
+        static int tlasInstanceCapacity(int requiredInstances, long maxInstanceCount) {
+            if (requiredInstances < 1 || maxInstanceCount < requiredInstances) {
+                throw new IllegalArgumentException("TLAS instance count exceeds device capacity");
             }
-            for (int index = 0; index < previous.size(); index++) {
-                if (previous.get(index) != next.get(index)) {
-                    return false;
-                }
-            }
-            return true;
+            long maximum = Math.min(maxInstanceCount, Integer.MAX_VALUE);
+            long slack = Math.min(maximum - requiredInstances,
+                Math.max(64L, (long)requiredInstances / 8L));
+            long desired = requiredInstances + slack;
+            long rounded = (desired + 63L) & ~63L;
+            return (int)Math.max(requiredInstances, Math.min(maximum, rounded));
         }
 
         private static final class CachedBlas implements AutoCloseable {
@@ -717,6 +601,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
         }
 
+        /** A duplicate section origin would make cache commit close a live candidate in-place. */
+        private static void validateUniqueBlasKeys(List<CachedBlas> candidates) {
+            Set<SectionKey> seen = new HashSet<>();
+            for (CachedBlas candidate : candidates) {
+                if (!seen.add(candidate.key)) {
+                    throw new IllegalStateException("Duplicate section BLAS key: " + candidate.key);
+                }
+            }
+        }
+
         static RayTracingVulkanPass create(
             VulkanDevice device,
             int outputWidth,
@@ -733,7 +627,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             RayTracingPbrMaterials pbrMaterials,
             BlasCache blasCache,
             RtestFsr3 fsr,
-            DynamicEntityGeometry.Frame dynamicFrame
+            DynamicEntityGeometry.Frame dynamicFrame,
+            boolean terrainTraversalEnabled
         ) {
             if (outputWidth <= 0 || outputHeight <= 0) {
                 throw new IllegalArgumentException("Ray-tracing output dimensions must be positive");
@@ -751,9 +646,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long itemAtlasImageView = itemAtlasBinding[0];
             long itemAtlasSampler = itemAtlasBinding[1];
             List<CachedBlas> sectionBlas = new ArrayList<>();
-            List<DynamicCachedBlas> dynamicBlas = new ArrayList<>();
             int dynamicSlotCapacity = RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.get() ? 64 : 0;
-            DynamicBlasCache dynamicBlasCache = new DynamicBlasCache();
+            RayTracingDynamicInstances dynamicInstances = new RayTracingDynamicInstances(dynamicSlotCapacity);
             NativeBuffer instanceBuffer = null;
             NativeBuffer dynamicMotionMetadataBuffer = null;
             NativeBuffer scratchBuffer = null;
@@ -766,6 +660,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer terrainBlasAddressBuffer = null;
             NativeBuffer terrainTraversalParamsBuffer = null;
             NativeBuffer shaderBindingTable = null;
+            NativeBuffer atmosphereCameraBuffer = null;
+            RayTracingAtmosphere atmosphere = null;
+            boolean atmosphereRequested = RayTracingClientConfig.INSTANCE.primeAtmosphereEnabled.get();
             AccelerationStructure topLevel = null;
             VulkanCommandEncoder encoder = null;
             long descriptorSetLayout = 0L;
@@ -782,8 +679,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long terrainHiZPipeline = 0L;
             long terrainHiZShaderModule = 0L;
             int terrainTraversalNodeCount = 0;
-            boolean terrainTraversalEnabled = RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
-            long[] shaderModules = new long[7];
+            long[] shaderModules = new long[9];
             RayTracingSupport.Limits limits = RayTracingSupport.queryLimits(device);
             if (limits == null || limits.maxRayRecursionDepth() < 1) {
                 throw new IllegalStateException("Ray-tracing device must support recursion depth 1");
@@ -799,18 +695,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     sectionBlas.add(cached);
                     activeKeys.add(cached.key);
                 }
+                validateUniqueBlasKeys(sectionBlas);
+                int initialInstanceCount = sectionBlas.size() + dynamicSlotCapacity;
+                int initialTopLevelCapacity = tlasInstanceCapacity(
+                    initialInstanceCount, limits.maxInstanceCount());
                 if (RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.get()) {
                     DynamicPlaceholderGeometry.Mesh playerMesh = DynamicPlaceholderGeometry.box(0.25F, 0.6F, 1.0F, false);
                     DynamicPlaceholderGeometry.Mesh itemMesh = DynamicPlaceholderGeometry.box(1.0F, 0.35F, 0.05F, true);
-                    dynamicBlas.add(dynamicBlasCache.acquire(device, 0x504C415945524CL, playerMesh));
-                    dynamicBlas.add(dynamicBlasCache.acquire(device, 0x4C4956494E474CL, playerMesh));
-                    dynamicBlas.add(dynamicBlasCache.acquire(device, 0x4954454D4CL, itemMesh));
+                    dynamicInstances.addPlaceholder(device, 0x504C415945524CL, playerMesh);
+                    dynamicInstances.addPlaceholder(device, 0x4C4956494E474CL, playerMesh);
+                    dynamicInstances.addPlaceholder(device, 0x4954454D4CL, itemMesh);
                     com.mojang.logging.LogUtils.getLogger().info(
-                        "RTest allocated {} dynamic placeholder BLAS resources", dynamicBlas.size());
+                        "RTest allocated {} dynamic placeholder BLAS resources", dynamicInstances.blases().size());
                 }
                 instanceBuffer = NativeBuffer.create(
                     device,
-                    (long)(sectionBlas.size() + dynamicSlotCapacity) * VkAccelerationStructureInstanceKHR.SIZEOF,
+                    (long)initialTopLevelCapacity * VkAccelerationStructureInstanceKHR.SIZEOF,
                     geometryUsage,
                     true
                 );
@@ -821,50 +721,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     true
                 );
-                try (NativeBuffer.Mapped mapped = instanceBuffer.map()) {
-                    long address = MemoryUtil.memAddress(mapped.buffer());
-                    int materialTriangleOffset = 0;
-                    for (int i = 0; i < sectionBlas.size(); i++) {
-                        SceneGeometry.SectionGeometry section = geometry.sections.get(i);
-                        CachedBlas cached = sectionBlas.get(i);
-                        VkAccelerationStructureInstanceKHR instance = VkAccelerationStructureInstanceKHR.create(
-                            address + (long)i * VkAccelerationStructureInstanceKHR.SIZEOF
-                        );
-                        instance.transform(transform -> {
-                            FloatBuffer matrix = transform.matrix();
-                            matrix.put(0, 1.0F).put(1, 0.0F).put(2, 0.0F).put(3, (float)(section.originX - geometry.originX));
-                            matrix.put(4, 0.0F).put(5, 1.0F).put(6, 0.0F).put(7, (float)(section.originY - geometry.originY));
-                            matrix.put(8, 0.0F).put(9, 0.0F).put(10, 1.0F).put(11, (float)(section.originZ - geometry.originZ));
-                        });
-                        instance.instanceCustomIndex(materialTriangleOffset);
-                        instance.mask(DynamicTlasInstanceWriter.ALL_RAY_MASK);
-                        instance.instanceShaderBindingTableRecordOffset(0);
-                        instance.flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
-                        instance.accelerationStructureReference(cached.bottomLevel.deviceAddress);
-                        materialTriangleOffset += section.triangleCount;
-                    }
-                    long dummyAddress = sectionBlas.get(0).bottomLevel.deviceAddress;
-                    for (int slot = 0; slot < dynamicSlotCapacity; slot++) {
-                        VkAccelerationStructureInstanceKHR instance = VkAccelerationStructureInstanceKHR.create(
-                            address + (long)(sectionBlas.size() + slot) * VkAccelerationStructureInstanceKHR.SIZEOF);
-                        instance.mask(0).instanceCustomIndex(0).instanceShaderBindingTableRecordOffset(0)
-                            .flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                            .accelerationStructureReference(dummyAddress);
-                    }
-                }
+                writeInstanceBuffer(instanceBuffer, geometry, sectionBlas,
+                    dynamicSlotCapacity, initialTopLevelCapacity);
 
                 topLevel = AccelerationStructure.createTopLevel(device, instanceBuffer,
-                    sectionBlas.size() + dynamicSlotCapacity);
+                    initialTopLevelCapacity);
                 long scratchSize = topLevel.scratchSize;
                 for (CachedBlas cached : sectionBlas) {
                     scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
                 }
-                for (DynamicCachedBlas cached : dynamicBlas) {
+                for (DynamicCachedBlas cached : dynamicInstances.blases()) {
                     scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
                 }
                 scratchBuffer = NativeBuffer.create(
                     device,
-                    scratchSize,
+                    VulkanAccelerationResources.scratchBufferSize(scratchSize, Math.max(1L,
+                        limits.minScratchAlignment())),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     false
                 );
@@ -901,79 +773,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 }
 
                 if (terrainTraversalEnabled) {
-                    Map<RayTracingTerrainLod.NodeKey, Integer> traversalIndices = new HashMap<>();
-                    for (int index = 0; index < geometry.sections.size(); index++) {
-                        traversalIndices.put(geometry.sections.get(index).terrainNodeKey(), index);
-                    }
-                    Map<Integer, List<Integer>> traversalChildren = new HashMap<>();
-                    for (int index = 0; index < geometry.sections.size(); index++) {
-                        SceneGeometry.SectionGeometry childSection = geometry.sections.get(index);
-                        RayTracingTerrainLod.NodeKey childKey = childSection.terrainNodeKey();
-                        // Coarse meshes are built from opaque sections only. Keep transparent,
-                        // fluid, emissive, and other native-only level-0 geometry outside every
-                        // coarse parent so GPU traversal can never mask it as a LOD descendant.
-                        if (childKey.level() == 0 && !childSection.isOpaqueTerrain()) continue;
-                        RayTracingTerrainLod.NodeKey parent = childKey.parent();
-                        Integer parentIndex = parent == null ? null : traversalIndices.get(parent);
-                        if (parentIndex != null) {
-                            traversalChildren.computeIfAbsent(parentIndex, ignored -> new ArrayList<>()).add(index);
-                        }
-                    }
-                    List<RayTracingTerrainTraversalAbi.NodeMetadata> traversalNodes = new ArrayList<>();
-                    int materialBase = 0;
-                    for (int index = 0; index < geometry.sections.size(); index++) {
-                        SceneGeometry.SectionGeometry section = geometry.sections.get(index);
-                        RayTracingTerrainLod.NodeKey nodeKey = section.terrainNodeKey();
-                        RayTracingTerrainLod.Bounds nodeBounds = RayTracingTerrainLod.boundsFor(nodeKey);
-                        boolean hierarchyParticipant = nodeKey.level() > 0 || section.isOpaqueTerrain();
-                        int flags = RayTracingTerrainTraversalAbi.NODE_FLAG_READY
-                            | RayTracingTerrainTraversalAbi.NODE_FLAG_RENDERABLE
-                            | RayTracingTerrainTraversalAbi.NODE_FLAG_HAS_BLAS;
-                        Integer parentIndex = !hierarchyParticipant || nodeKey.parent() == null
-                            ? null : traversalIndices.get(nodeKey.parent());
-                        List<Integer> children = traversalChildren.getOrDefault(index, List.of());
-                        if (children.size() > 1) {
-                            children.sort(Integer::compare);
-                        }
-                        // The shader represents children as a contiguous firstChild + bitmask
-                        // range. Do not claim a partial/non-contiguous range: keeping the parent
-                        // as the selected fallback is conservative and avoids a hole in sparse
-                        // ClientLevel captures.
-                        boolean contiguousChildren = !children.isEmpty() && children.size() <= 8;
-                        for (int child = 1; contiguousChildren && child < children.size(); child++) {
-                            contiguousChildren = children.get(child) == children.get(0) + child;
-                        }
-                        int firstChild = contiguousChildren
-                            ? children.get(0) : RayTracingTerrainTraversalAbi.INVALID_INDEX;
-                        int childMask = contiguousChildren ? (1 << children.size()) - 1 : 0;
-                        float lodErrorPixels = nodeKey.level() == 0 ? 0.0F : nodeKey.level() * 16.0F;
-                        traversalNodes.add(new RayTracingTerrainTraversalAbi.NodeMetadata(
-                            new RayTracingTerrainTraversalAbi.Bounds(
-                                (float)nodeBounds.minX(), (float)nodeBounds.minY(), (float)nodeBounds.minZ(),
-                                (float)nodeBounds.maxX(), (float)nodeBounds.maxY(), (float)nodeBounds.maxZ()),
-                            parentIndex == null ? RayTracingTerrainTraversalAbi.INVALID_INDEX : parentIndex,
-                            firstChild, childMask, nodeKey.level(), index, materialBase,
-                            section.triangleCount(), flags, lodErrorPixels));
-                        materialBase += section.triangleCount();
-                    }
+                    List<RayTracingTerrainTraversalAbi.NodeMetadata> traversalNodes =
+                        buildTerrainTraversalMetadata(geometry);
                     terrainTraversalNodeCount = traversalNodes.size();
+                    int terrainTraversalNodeCapacity = terrainTraversalCapacity(terrainTraversalNodeCount);
                     terrainNodeMetadataBuffer = NativeBuffer.create(device,
-                        (long)terrainTraversalNodeCount * RayTracingTerrainTraversalAbi.NODE_METADATA_BYTES,
+                        (long)terrainTraversalNodeCapacity * RayTracingTerrainTraversalAbi.NODE_METADATA_BYTES,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-                    ByteBuffer nodeBytes = RayTracingTerrainTraversalAbi.nodeMetadataBuffer(traversalNodes);
-                    try (NativeBuffer.Mapped mapped = terrainNodeMetadataBuffer.map()) {
-                        mapped.buffer().put(nodeBytes);
-                    }
                     terrainBlasAddressBuffer = NativeBuffer.create(device,
-                        (long)Math.max(1, terrainTraversalNodeCount) * 8L,
+                        (long)terrainTraversalNodeCapacity * Long.BYTES,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-                    try (NativeBuffer.Mapped mapped = terrainBlasAddressBuffer.map()) {
-                        ByteBuffer addresses = mapped.buffer().order(ByteOrder.nativeOrder());
-                        for (int index = 0; index < terrainTraversalNodeCount; index++) {
-                            long address = sectionBlas.get(index).bottomLevel.deviceAddress;
-                            addresses.putLong(index * 8, address);
-                        }
-                    }
+                    writeTerrainTraversalBuffers(geometry, sectionBlas, traversalNodes,
+                        terrainNodeMetadataBuffer, terrainBlasAddressBuffer);
                     // std140: mat4 + four vec4 values (camera, viewport, config, sceneOrigin)
                     // plus one vec4 dummy BLAS address, for a stable 144-byte contract.
                     terrainTraversalParamsBuffer = NativeBuffer.create(device, 144,
@@ -1124,7 +935,19 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     }
                 }
 
-                ShaderModule raygen = ShaderModule.create(device, RayTracingShaders.RAYGEN_SHADER, Shaderc.shaderc_glsl_raygen_shader);
+                if (atmosphereRequested) {
+                    atmosphere = createOptionalAtmosphere(device, atmosphereDensitySteps());
+                    if (atmosphere != null) {
+                        atmosphereCameraBuffer = NativeBuffer.create(
+                            device, 16, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+                    }
+                }
+                boolean physicalAtmosphere = atmosphere != null;
+                String raygenSource = physicalAtmosphere
+                    ? RayTracingShaders.RAYGEN_SHADER.replace("#version 460",
+                        "#version 460\n#define RTEST_ATMOSPHERE_LUT 1")
+                    : RayTracingShaders.RAYGEN_SHADER;
+                ShaderModule raygen = ShaderModule.create(device, raygenSource, Shaderc.shaderc_glsl_raygen_shader);
                 shaderModules[0] = raygen.handle;
                 ShaderModule miss = ShaderModule.create(device, RayTracingShaders.MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
                 shaderModules[1] = miss.handle;
@@ -1138,9 +961,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 shaderModules[5] = shadowClosestHit.handle;
                 ShaderModule shadowAnyHit = ShaderModule.create(device, RayTracingShaders.SHADOW_ANY_HIT_SHADER, Shaderc.shaderc_glsl_anyhit_shader);
                 shaderModules[6] = shadowAnyHit.handle;
+                ShaderModule skyCdfMiss = ShaderModule.create(device, SkyImportanceShader.MISS, Shaderc.shaderc_glsl_miss_shader);
+                shaderModules[7] = skyCdfMiss.handle;
+                ShaderModule skyCdfHit = ShaderModule.create(device, SkyImportanceShader.HIT, Shaderc.shaderc_glsl_closesthit_shader);
+                shaderModules[8] = skyCdfHit.handle;
 
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(27, stack);
+                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    bindings.get(physicalAtmosphere ? 39 : 28).binding(39)
+                        .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                    bindings.get(physicalAtmosphere ? 40 : 29).binding(40)
+                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                    bindings.get(physicalAtmosphere ? 38 : 27).binding(38)
+                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                        .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
                     bindings.get(0).binding(0).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
                     bindings.get(1).binding(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
@@ -1194,6 +1030,31 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .descriptorCount(1).stageFlags(
                             KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
                                 | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+                    if (physicalAtmosphere) {
+                        for (int binding = 27; binding <= 28; binding++) {
+                            bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                                .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        }
+                        bindings.get(29).binding(29).descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        // Physical finite-segment aerial perspective: L output, pinned medium, the
+                        // bank-zero optical-depth and scattering-source samplers, and the
+                        // mean/ground/high multiple-scattering images.
+                        bindings.get(30).binding(30).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        bindings.get(31).binding(31).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        bindings.get(32).binding(32).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        bindings.get(33).binding(33).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        for (int binding = 34; binding <= 36; binding++) {
+                            bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                                .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                        }
+                        bindings.get(37).binding(37).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                    }
                     VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
                         .pBindings(bindings);
                     LongBuffer handle = stack.callocLong(1);
@@ -1208,12 +1069,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     // consolidated instead of repeating STORAGE_BUFFER/COMBINED_IMAGE_SAMPLER.
                     VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
                     poolSizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
-                        .descriptorCount(1);
-                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5);
-                    poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
+                        .descriptorCount(2);
+                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(8);
+                    poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(physicalAtmosphere ? 2 : 1);
                     poolSizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(3 + PLAYER_SKIN_DESCRIPTOR_COUNT);
-                    poolSizes.get(4).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(16);
+                        .descriptorCount(5 + PLAYER_SKIN_DESCRIPTOR_COUNT);
+                    poolSizes.get(4).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(physicalAtmosphere ? 23 : 16);
                     VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                         .maxSets(1).pPoolSizes(poolSizes);
                     VulkanUtils.crashIfFailure(
@@ -1284,7 +1145,21 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .imageView(nrd.primaryPositionView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                     VkDescriptorImageInfo.Buffer nrdSpecularMaterialInfo = VkDescriptorImageInfo.calloc(1, stack)
                         .imageView(nrd.specularMaterialView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(27, stack);
+                    VkDescriptorBufferInfo.Buffer skyImportanceInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                        .buffer(skybox.importanceBuffer()).offset(0).range(skybox.importanceSize());
+                    var skyCdfAccelerationInfo = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
+                        .sType$Default().pAccelerationStructures(stack.longs(skybox.cdfHandle()));
+                    var skyCdfMetadataInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                        .buffer(skybox.cdfMetadataBuffer()).offset(0).range(SkyCdfGeometry.METADATA_BYTES);
+                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    writes.get(physicalAtmosphere ? 39 : 28).sType$Default().pNext(skyCdfAccelerationInfo)
+                        .dstSet(descriptorSet).dstBinding(39).descriptorCount(1)
+                        .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+                    writes.get(physicalAtmosphere ? 40 : 29).sType$Default().dstSet(descriptorSet).dstBinding(40)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(skyCdfMetadataInfo);
+                    writes.get(physicalAtmosphere ? 38 : 27).sType$Default().dstSet(descriptorSet).dstBinding(38)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                        .pBufferInfo(skyImportanceInfo);
                     writes.get(0).sType$Default().pNext(accelerationInfo).dstSet(descriptorSet).dstBinding(0)
                         .descriptorCount(1).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
                     writes.get(1).sType$Default().dstSet(descriptorSet).dstBinding(1).descriptorCount(1)
@@ -1334,6 +1209,54 @@ import com.rtest.client.fsr.RtestFsrSettings;
                             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                             .pImageInfo(VkDescriptorImageInfo.create(fsrImages.get(binding - 7).address(), 1));
                     }
+                    if (physicalAtmosphere) {
+                        VkDescriptorImageInfo.Buffer skyInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.skyView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer transmittanceInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.cameraTransmittanceView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorBufferInfo.Buffer atmosphereInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                            .buffer(atmosphereCameraBuffer.buffer).offset(0).range(16);
+                        writes.get(27).sType$Default().dstSet(descriptorSet).dstBinding(27).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(skyInfo);
+                        writes.get(28).sType$Default().dstSet(descriptorSet).dstBinding(28).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(transmittanceInfo);
+                        writes.get(29).sType$Default().dstSet(descriptorSet).dstBinding(29).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).pBufferInfo(atmosphereInfo);
+                        VkDescriptorImageInfo.Buffer aerialLInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(fsr.physicalAerialLView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorBufferInfo.Buffer mediumInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                            .buffer(atmosphere.mediumBuffer()).offset(0).range(atmosphere.mediumSize());
+                        VkDescriptorImageInfo.Buffer opticalDepthInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .sampler(atmosphere.sampler()).imageView(atmosphere.opticalDepthView())
+                            .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer scatteringSourceInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .sampler(atmosphere.sampler()).imageView(atmosphere.scatteringSourceView())
+                            .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer meanInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.incidentMeanView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer groundInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.groundView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer highInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.highView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        VkDescriptorImageInfo.Buffer moonSkyInfo = VkDescriptorImageInfo.calloc(1, stack)
+                            .imageView(atmosphere.moonSkyView()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                        writes.get(30).sType$Default().dstSet(descriptorSet).dstBinding(30).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(aerialLInfo);
+                        writes.get(31).sType$Default().dstSet(descriptorSet).dstBinding(31).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(mediumInfo);
+                        writes.get(32).sType$Default().dstSet(descriptorSet).dstBinding(32).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(opticalDepthInfo);
+                        writes.get(33).sType$Default().dstSet(descriptorSet).dstBinding(33).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(scatteringSourceInfo);
+                        writes.get(34).sType$Default().dstSet(descriptorSet).dstBinding(34).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(meanInfo);
+                        writes.get(35).sType$Default().dstSet(descriptorSet).dstBinding(35).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(groundInfo);
+                        writes.get(36).sType$Default().dstSet(descriptorSet).dstBinding(36).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(highInfo);
+                        writes.get(37).sType$Default().dstSet(descriptorSet).dstBinding(37).descriptorCount(1)
+                            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(moonSkyInfo);
+                    }
                     VK10.vkUpdateDescriptorSets(vkDevice, writes, null);
 
                     VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
@@ -1345,7 +1268,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     );
                     pipelineLayout = handle.get(0);
 
-                    VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(7, stack);
+                    VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(9, stack);
                     stages.get(0).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR).module(raygen.handle).pName(stack.UTF8("main"));
                     stages.get(1).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(miss.handle).pName(stack.UTF8("main"));
                     stages.get(2).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(shadowMiss.handle).pName(stack.UTF8("main"));
@@ -1353,8 +1276,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     stages.get(4).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(anyHit.handle).pName(stack.UTF8("main"));
                     stages.get(5).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(shadowClosestHit.handle).pName(stack.UTF8("main"));
                     stages.get(6).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(shadowAnyHit.handle).pName(stack.UTF8("main"));
+                    stages.get(7).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(skyCdfMiss.handle).pName(stack.UTF8("main"));
+                    stages.get(8).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(skyCdfHit.handle).pName(stack.UTF8("main"));
                     // Group 3 (primary) and group 4 (shadow) share the alpha-testing Any Hit shader.
-                    VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(5, stack);
+                    VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(7, stack);
+                    groups.get(5).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
+                        .generalShader(7).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
+                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
+                    groups.get(6).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
+                        .generalShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).closestHitShader(8)
+                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
                     groups.get(0).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
                         .generalShader(0).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
                         .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
@@ -1383,24 +1314,25 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     int handleAlignment = limits.shaderGroupHandleAlignment();
                     int baseAlignment = limits.shaderGroupBaseAlignment();
                     int stride = alignUp(handleSize, Math.max(handleAlignment, baseAlignment));
-                    ByteBuffer shaderHandles = MemoryUtil.memAlloc(handleSize * 5);
+                    ByteBuffer shaderHandles = MemoryUtil.memAlloc(handleSize * 7);
                     try {
                         VulkanUtils.crashIfFailure(
                             device,
-                            KHRRayTracingPipeline.vkGetRayTracingShaderGroupHandlesKHR(vkDevice, pipeline, 0, 5, shaderHandles),
+                            KHRRayTracingPipeline.vkGetRayTracingShaderGroupHandlesKHR(vkDevice, pipeline, 0, 7, shaderHandles),
                             "Failed to retrieve ray-tracing shader group handles"
                         );
                         shaderBindingTable = NativeBuffer.create(
                             device,
-                            (long)stride * 5L,
+                            (long)stride * 7L,
                             KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR
                                 | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                             true
                         );
                         try (NativeBuffer.Mapped mapped = shaderBindingTable.map()) {
-                            for (int i = 0; i < 5; i++) {
+                            int[] sbtGroupOrder = {0, 1, 2, 5, 3, 4, 6};
+                            for (int i = 0; i < sbtGroupOrder.length; i++) {
                                 MemoryUtil.memCopy(
-                                    MemoryUtil.memAddress(shaderHandles) + (long)i * handleSize,
+                                    MemoryUtil.memAddress(shaderHandles) + (long)sbtGroupOrder[i] * handleSize,
                                     MemoryUtil.memAddress(mapped.buffer()) + (long)i * stride,
                                     handleSize
                                 );
@@ -1416,9 +1348,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     encoder = new VulkanCommandEncoder(device);
                     RayTracingVulkanPass resources = new RayTracingVulkanPass(
                         device,
+                        limits,
                         encoder,
                         sectionBlas,
-                        dynamicBlas,
+                        blasCache,
+                        dynamicInstances,
                         dynamicSlotCapacity,
                         instanceBuffer,
                         dynamicMotionMetadataBuffer,
@@ -1466,7 +1400,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         shaderModules,
                         stride,
                         dynamicFrame,
-                        dynamicBlasCache
+                        atmosphere,
+                        atmosphereCameraBuffer,
+                        atmosphereRequested
                     );
                     blasCache.commit(sectionBlas);
                     blasCache.trim(activeKeys);
@@ -1509,12 +1445,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 closeDuringFailure(terrainNodeMetadataBuffer, throwable);
                 closeDuringFailure(lightDataBuffer, throwable);
                 closeDuringFailure(materialBuffer, throwable);
+                closeDuringFailure(atmosphereCameraBuffer, throwable);
+                closeDuringFailure(atmosphere, throwable);
                 closeDuringFailure(cameraBuffer, throwable);
                 closeDuringFailure(outputBuffer, throwable);
                 closeDuringFailure(scratchBuffer, throwable);
                 closeDuringFailure(instanceBuffer, throwable);
                 closeDuringFailure(dynamicMotionMetadataBuffer, throwable);
-                closeDuringFailure(dynamicBlasCache, throwable);
+                closeDuringFailure(dynamicInstances, throwable);
                 try {
                     blasCache.abort(sectionBlas);
                 } catch (Throwable cleanupFailure) {
@@ -1524,9 +1462,112 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
         }
 
+        private static RayTracingAtmosphere createOptionalAtmosphere(VulkanDevice device, int aerosolDensitySteps) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
+                VK12.vkGetPhysicalDeviceProperties(device.vkDevice().getPhysicalDevice(), properties);
+                var limits = properties.limits();
+                if (limits.maxImageDimension2D() < 8193
+                    || limits.maxPerStageDescriptorStorageImages() < 27
+                    || limits.maxDescriptorSetStorageImages() < 27
+                    // RayGen's physical variant adds the pinned-medium SSBO to its existing five
+                    // read buffers (result/materials/pbr/dynamic-motion/light-tree).
+                    || limits.maxPerStageDescriptorStorageBuffers() < 6
+                    || limits.maxDescriptorSetStorageBuffers() < 6
+                    || limits.maxDescriptorSetSamplers() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
+                    || limits.maxDescriptorSetSampledImages() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
+                    || limits.maxPerStageDescriptorUniformBuffers() < 2
+                    || limits.maxDescriptorSetUniformBuffers() < 2
+                    || limits.maxPushConstantsSize() < 128) {
+                    throw new IllegalStateException("Prime atmosphere descriptor/push-constant limits unavailable");
+                }
+            }
+            try {
+                return RayTracingAtmosphere.create(device, aerosolDensitySteps);
+            } catch (RuntimeException failure) {
+                throw new IllegalStateException("Prime atmosphere initialization failed", failure);
+            }
+        }
+
+        private static int atmosphereDensitySteps() {
+            return Math.round(RayTracingClientConfig.INSTANCE.volumetricFogDensity.get().floatValue()
+                * com.rtest.client.atmosphere.AtmosphereSettings.STEPS_PER_UNIT);
+        }
+
+        private static com.rtest.client.atmosphere.AtmosphereSettings atmosphereSettings() {
+            return new com.rtest.client.atmosphere.AtmosphereSettings(atmosphereDensitySteps(),
+                RayTracingClientConfig.INSTANCE.atmosphereAltitudeOffsetMeters.get());
+        }
+
+        /** The previous frame has retired before this runs; the complete replacement is fenced. */
+        private void updateAtmosphereMedium() {
+            if (this.atmosphere == null) return;
+            int requested = atmosphereDensitySteps();
+            if (requested != this.requestedAtmosphereDensitySteps) {
+                this.requestedAtmosphereDensitySteps = requested;
+                this.atmosphereDensityChangedAt = System.nanoTime();
+            }
+            if (requested == this.atmosphereDensitySteps
+                || System.nanoTime() - this.atmosphereDensityChangedAt < 500_000_000L) return;
+
+            RayTracingAtmosphere replacement;
+            try {
+                replacement = RayTracingAtmosphere.create(this.device, requested);
+            } catch (RuntimeException failure) {
+                if (failure instanceof RayTracingAtmosphere.UnretiredWorkException
+                    || failure instanceof RayTracingAtmosphere.DeviceLostException
+                    || failure.getSuppressed().length != 0
+                    || String.valueOf(failure.getMessage()).toLowerCase(java.util.Locale.ROOT).contains("timed out")) {
+                    throw failure;
+                }
+                LOGGER.error("Atmosphere density rebuild failed; retaining generation {}", this.atmosphereDensitySteps, failure);
+                this.atmosphereDensityChangedAt = System.nanoTime();
+                return;
+            }
+            if (requested != atmosphereDensitySteps()) {
+                replacement.close();
+                return;
+            }
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                var writes = VkWriteDescriptorSet.calloc(9, stack);
+                int[] bindings = {27, 28, 31, 32, 33, 34, 35, 36, 37};
+                long[] views = {replacement.skyView(), replacement.cameraTransmittanceView(), 0L,
+                    replacement.opticalDepthView(), replacement.scatteringSourceView(),
+                    replacement.incidentMeanView(), replacement.groundView(), replacement.highView(),
+                    replacement.moonSkyView()};
+                for (int i = 0; i < bindings.length; i++) {
+                    if (bindings[i] == 31) {
+                        var info = VkDescriptorBufferInfo.calloc(1, stack)
+                            .buffer(replacement.mediumBuffer()).offset(0).range(replacement.mediumSize());
+                        writes.get(i).sType$Default().dstSet(this.descriptorSet).dstBinding(31)
+                            .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(info);
+                    } else {
+                        boolean sampled = bindings[i] == 32 || bindings[i] == 33;
+                        var info = VkDescriptorImageInfo.calloc(1, stack).imageView(views[i])
+                            .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            .sampler(sampled ? replacement.sampler() : 0L);
+                        writes.get(i).sType$Default().dstSet(this.descriptorSet).dstBinding(bindings[i])
+                            .descriptorCount(1).descriptorType(sampled ? VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                : VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(info);
+                    }
+                }
+                VK10.vkUpdateDescriptorSets(this.vkDevice, writes, null);
+            } catch (Throwable failure) {
+                replacement.close();
+                throw failure;
+            }
+            RayTracingAtmosphere previous = this.atmosphere;
+            this.atmosphere = replacement;
+            this.atmosphereDensitySteps = requested;
+            this.fsr.requestReset();
+            previous.close();
+            LOGGER.info("Prime atmosphere medium rebuilt: aerosol_density={}", requested / 100.0F);
+        }
+
         boolean matches(VulkanDevice candidateDevice, int renderWidth, int renderHeight,
                         int width, int height, long image, long imageView, GpuFormat format,
-                        SceneGeometry geometry, long atlasImageView, long atlasSampler, RtestFsr3 fsr) {
+                        SceneGeometry geometry, long atlasImageView, long atlasSampler, RtestFsr3 fsr,
+                        boolean terrainTraversalEnabled) {
             return this.device == candidateDevice
                 && this.fsr.renderWidth() == renderWidth
                 && this.fsr.renderHeight() == renderHeight
@@ -1538,14 +1579,152 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 && this.atlasImageView == atlasImageView
                 && this.atlasSampler == atlasSampler
                 && this.fsr == fsr
-                // The experimental GPU traversal owns geometry-sized metadata/address buffers;
-                // recreate the pass on a publication rather than risking a stale node-to-BLAS map.
-                && (!this.terrainTraversalEnabled || this.geometry == geometry)
-                && this.terrainTraversalEnabled == RayTracingClientConfig.INSTANCE.terrainLodGpuTraversalEnabled.get();
+                && this.atmosphereRequested == RayTracingClientConfig.INSTANCE.primeAtmosphereEnabled.get()
+                && this.skyboxTextureEnabled == RayTracingClientConfig.INSTANCE.skyboxTextureEnabled.get()
+                // Geometry-owned BLAS/TLAS and GPU traversal metadata are replaced together by
+                // updateGeometry(). Do not tear down the RT pipeline and FSR temporal history for
+                // every streamed section publication.
+                && this.terrainTraversalEnabled == terrainTraversalEnabled;
         }
 
         boolean usesGeometry(SceneGeometry candidate) {
             return this.geometry == candidate;
+        }
+
+        private static int terrainTraversalCapacity(int nodeCount) {
+            int capacity = 16;
+            while (capacity < nodeCount) {
+                if (capacity > Integer.MAX_VALUE / 2) return nodeCount;
+                capacity <<= 1;
+            }
+            return capacity;
+        }
+
+        private static List<RayTracingTerrainTraversalAbi.NodeMetadata> buildTerrainTraversalMetadata(
+                SceneGeometry geometry) {
+            Map<RayTracingTerrainLod.NodeKey, Integer> traversalIndices = new HashMap<>();
+            for (int index = 0; index < geometry.sections.size(); index++) {
+                traversalIndices.put(geometry.sections.get(index).terrainNodeKey(), index);
+            }
+            Map<Integer, List<Integer>> traversalChildren = new HashMap<>();
+            for (int index = 0; index < geometry.sections.size(); index++) {
+                SceneGeometry.SectionGeometry childSection = geometry.sections.get(index);
+                RayTracingTerrainLod.NodeKey childKey = childSection.terrainNodeKey();
+                // Coarse meshes contain opaque terrain only. Keep transparent, fluid, emissive,
+                // and other native-only leaves outside every coarse parent.
+                if (childKey.level() == 0 && !childSection.isOpaqueTerrain()) continue;
+                RayTracingTerrainLod.NodeKey parent = childKey.parent();
+                Integer parentIndex = parent == null ? null : traversalIndices.get(parent);
+                if (parentIndex != null) {
+                    traversalChildren.computeIfAbsent(parentIndex, ignored -> new ArrayList<>()).add(index);
+                }
+            }
+            List<RayTracingTerrainTraversalAbi.NodeMetadata> traversalNodes =
+                new ArrayList<>(geometry.sections.size());
+            for (int index = 0; index < geometry.sections.size(); index++) {
+                SceneGeometry.SectionGeometry section = geometry.sections.get(index);
+                RayTracingTerrainLod.NodeKey nodeKey = section.terrainNodeKey();
+                RayTracingTerrainLod.Bounds nodeBounds = RayTracingTerrainLod.boundsFor(nodeKey);
+                boolean hierarchyParticipant = nodeKey.level() > 0 || section.isOpaqueTerrain();
+                int flags = RayTracingTerrainTraversalAbi.NODE_FLAG_READY
+                    | RayTracingTerrainTraversalAbi.NODE_FLAG_RENDERABLE
+                    | RayTracingTerrainTraversalAbi.NODE_FLAG_HAS_BLAS;
+                Integer parentIndex = !hierarchyParticipant || nodeKey.parent() == null
+                    ? null : traversalIndices.get(nodeKey.parent());
+                List<Integer> children = traversalChildren.getOrDefault(index, List.of());
+                if (children.size() > 1) children.sort(Integer::compare);
+                // Shader child links use a contiguous firstChild + bitmask range. A sparse
+                // parent remains a conservative leaf instead of claiming a partial child set.
+                // A partial child list is not a complete spatial cut. It can happen when the
+                // GPU candidate compaction removes distant native leaves; treating the remaining
+                // children as complete would mask the parent and leave holes in the missing
+                // octants. Descend only when all eight direct octants are resident.
+                boolean contiguousChildren = children.size() == 8;
+                for (int child = 1; contiguousChildren && child < children.size(); child++) {
+                    contiguousChildren = children.get(child) == children.get(0) + child;
+                }
+                int firstChild = contiguousChildren
+                    ? children.get(0) : RayTracingTerrainTraversalAbi.INVALID_INDEX;
+                int childMask = contiguousChildren ? (1 << children.size()) - 1 : 0;
+                float lodErrorPixels = nodeKey.level() == 0 ? 0.0F : nodeKey.level() * 16.0F;
+                traversalNodes.add(new RayTracingTerrainTraversalAbi.NodeMetadata(
+                    new RayTracingTerrainTraversalAbi.Bounds(
+                        (float)nodeBounds.minX(), (float)nodeBounds.minY(), (float)nodeBounds.minZ(),
+                        (float)nodeBounds.maxX(), (float)nodeBounds.maxY(), (float)nodeBounds.maxZ()),
+                    parentIndex == null ? RayTracingTerrainTraversalAbi.INVALID_INDEX : parentIndex,
+                    firstChild, childMask, nodeKey.level(), index,
+                    geometry.materialLayout.baseTriangle(section),
+                    section.triangleCount(), flags, lodErrorPixels));
+            }
+            return traversalNodes;
+        }
+
+        private static void writeTerrainTraversalBuffers(
+                SceneGeometry geometry,
+                List<CachedBlas> sectionBlas,
+                List<RayTracingTerrainTraversalAbi.NodeMetadata> traversalNodes,
+                NativeBuffer metadataBuffer,
+                NativeBuffer addressBuffer) {
+            int nodeCount = traversalNodes.size();
+            if (nodeCount != geometry.sections.size() || nodeCount != sectionBlas.size()) {
+                throw new IllegalStateException("Terrain traversal nodes, geometry, and BLAS arrays diverged");
+            }
+            ByteBuffer metadata = RayTracingTerrainTraversalAbi.nodeMetadataBuffer(traversalNodes);
+            try (NativeBuffer.Mapped mapped = metadataBuffer.map()) {
+                ByteBuffer destination = mapped.buffer();
+                destination.clear();
+                destination.put(metadata);
+            }
+            try (NativeBuffer.Mapped mapped = addressBuffer.map()) {
+                ByteBuffer addresses = mapped.buffer().order(ByteOrder.nativeOrder());
+                addresses.clear();
+                for (int index = 0; index < nodeCount; index++) {
+                    addresses.putLong(sectionBlas.get(index).bottomLevel.deviceAddress);
+                }
+            }
+        }
+
+        private void updateTerrainTraversalBufferDescriptors(
+                NativeBuffer metadataBuffer, NativeBuffer addressBuffer) {
+            if (!this.terrainTraversalEnabled) return;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                int setCount = 1;
+                for (long descriptorSet : this.terrainHiZDescriptorSets) {
+                    if (descriptorSet != 0L) setCount++;
+                }
+                VkDescriptorBufferInfo.Buffer metadataInfo = VkDescriptorBufferInfo.calloc(setCount, stack);
+                VkDescriptorBufferInfo.Buffer addressInfo = VkDescriptorBufferInfo.calloc(setCount, stack);
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(setCount * 2, stack);
+                int setIndex = 0;
+                setIndex = writeTerrainTraversalBufferSet(this.terrainTraversalDescriptorSet,
+                    setIndex, metadataInfo, addressInfo, writes, metadataBuffer, addressBuffer);
+                for (long descriptorSet : this.terrainHiZDescriptorSets) {
+                    if (descriptorSet != 0L) {
+                        setIndex = writeTerrainTraversalBufferSet(descriptorSet, setIndex,
+                            metadataInfo, addressInfo, writes, metadataBuffer, addressBuffer);
+                    }
+                }
+                VK10.vkUpdateDescriptorSets(this.vkDevice, writes, null);
+            }
+        }
+
+        private static int writeTerrainTraversalBufferSet(
+                long descriptorSet,
+                int index,
+                VkDescriptorBufferInfo.Buffer metadataInfo,
+                VkDescriptorBufferInfo.Buffer addressInfo,
+                VkWriteDescriptorSet.Buffer writes,
+                NativeBuffer metadataBuffer,
+                NativeBuffer addressBuffer) {
+            metadataInfo.get(index).buffer(metadataBuffer.buffer).offset(0).range(metadataBuffer.size);
+            addressInfo.get(index).buffer(addressBuffer.buffer).offset(0).range(addressBuffer.size);
+            writes.get(index * 2).sType$Default().dstSet(descriptorSet).dstBinding(0)
+                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .pBufferInfo(metadataInfo.position(index));
+            writes.get(index * 2 + 1).sType$Default().dstSet(descriptorSet).dstBinding(1)
+                .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .pBufferInfo(addressInfo.position(index));
+            return index + 1;
         }
 
         /**
@@ -1568,13 +1747,23 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer nextMaterial = null;
             NativeBuffer nextLightData = null;
             NativeBuffer nextPbr = null;
+            NativeBuffer nextTerrainNodeMetadata = this.terrainNodeMetadataBuffer;
+            NativeBuffer nextTerrainBlasAddresses = this.terrainBlasAddressBuffer;
             AccelerationStructure nextTopLevel = null;
             NativeBuffer nextScratch = null;
             boolean reuseTopLevel = false;
             boolean reuseInstance = false;
             boolean reuseScratch = false;
             boolean reuseMaterial = false;
+            boolean reuseLightData = false;
             boolean reusePbr = false;
+            boolean incrementalMaterialWrite = false;
+            boolean dynamicMaterialRangesReset = false;
+            boolean materialWriteMayHaveChanged = false;
+            boolean reuseTerrainTraversalBuffers = true;
+            RtResourceRollback rollback = new RtResourceRollback();
+            int nextTerrainTraversalNodeCount = this.terrainTraversalNodeCount;
+            int nextTerrainTraversalNodeCapacity = this.terrainTraversalNodeCapacity;
             try {
                 int geometryUsage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                     | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
@@ -1584,34 +1773,74 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     nextBlas.add(cached);
                     activeKeys.add(cached.key);
                 }
-                long requiredInstanceSize = (long)(nextBlas.size() + this.dynamicSlotCapacity)
+                validateUniqueBlasKeys(nextBlas);
+                List<RayTracingTerrainTraversalAbi.NodeMetadata> nextTerrainTraversalMetadata = null;
+                if (this.terrainTraversalEnabled) {
+                    nextTerrainTraversalMetadata = buildTerrainTraversalMetadata(nextGeometry);
+                    nextTerrainTraversalNodeCount = nextTerrainTraversalMetadata.size();
+                    if (nextTerrainTraversalNodeCount != nextGeometry.sections.size()) {
+                        throw new IllegalStateException("Terrain traversal metadata count differs from scene geometry");
+                    }
+                    if (nextTerrainTraversalNodeCount > nextTerrainTraversalNodeCapacity) {
+                        nextTerrainTraversalNodeCapacity = terrainTraversalCapacity(nextTerrainTraversalNodeCount);
+                        NativeBuffer grownMetadata = NativeBuffer.create(this.device,
+                            (long)nextTerrainTraversalNodeCapacity
+                                * RayTracingTerrainTraversalAbi.NODE_METADATA_BYTES,
+                            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+                        try {
+                            NativeBuffer grownAddresses = NativeBuffer.create(this.device,
+                                (long)nextTerrainTraversalNodeCapacity * Long.BYTES,
+                                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+                            nextTerrainNodeMetadata = grownMetadata;
+                            nextTerrainBlasAddresses = grownAddresses;
+                        } catch (Throwable allocationFailure) {
+                            RtResourceRollback.attempt(allocationFailure, grownMetadata::close);
+                            throw allocationFailure;
+                        }
+                        reuseTerrainTraversalBuffers = false;
+                    }
+                }
+                int requiredInstanceCount = nextBlas.size() + this.dynamicSlotCapacity;
+                reuseTopLevel = requiredInstanceCount <= this.topLevel.primitiveCount;
+                int nextTopLevelCapacity = reuseTopLevel ? this.topLevel.primitiveCount
+                    : tlasInstanceCapacity(requiredInstanceCount,
+                        this.accelerationLimits.maxInstanceCount());
+                long requiredInstanceSize = (long)nextTopLevelCapacity
                     * VkAccelerationStructureInstanceKHR.SIZEOF;
                 reuseInstance = requiredInstanceSize <= this.instanceBuffer.size;
                 nextInstance = reuseInstance
                     ? this.instanceBuffer
                     : NativeBuffer.create(this.device, requiredInstanceSize, geometryUsage, true);
-                writeInstanceBuffer(nextInstance, nextGeometry, nextBlas, this.dynamicSlotCapacity);
-                // A TLAS UPDATE may read the previous TLAS while it resolves instance
-                // references. If even one section BLAS changed, the previous TLAS can still
-                // contain the old BLAS address; build a fresh TLAS instead of updating it after
-                // the cache transaction replaces that address.
-                reuseTopLevel = sameSectionBlas(this.sectionBlas, nextBlas);
+                if (reuseInstance) {
+                    rollback.before(() -> {
+                        writeInstanceBuffer(this.instanceBuffer, this.geometry, this.sectionBlas,
+                            this.dynamicSlotCapacity, this.topLevel.primitiveCount);
+                        // Static inputs are restored, dynamic slots were zeroed. Force re-emission
+                        // and a fence-protected TLAS rebuild before any old-geometry trace.
+                        this.topLevelUpdatePending = this.topLevelUpdatePending || this.topLevelBuilt;
+                        this.topLevelBuilt = false;
+                    });
+                }
+                writeInstanceBuffer(nextInstance, nextGeometry, nextBlas,
+                    this.dynamicSlotCapacity, nextTopLevelCapacity);
                 nextTopLevel = reuseTopLevel
                     ? this.topLevel
-                    : AccelerationStructure.createTopLevel(this.device, nextInstance, nextBlas.size() + dynamicSlotCapacity);
+                    : AccelerationStructure.createTopLevel(this.device, nextInstance, nextTopLevelCapacity);
                 long scratchSize = nextTopLevel.scratchSize;
                 for (CachedBlas cached : nextBlas) {
                     scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
                 }
-                for (DynamicCachedBlas cached : dynamicBlas) {
+                for (DynamicCachedBlas cached : dynamicInstances.blases()) {
                     scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
                 }
-                reuseScratch = reuseTopLevel && scratchSize <= this.scratchBuffer.size;
+                long scratchAlignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
+                long requiredScratchBufferSize = VulkanAccelerationResources.scratchBufferSize(scratchSize, scratchAlignment);
+                reuseScratch = reuseTopLevel && requiredScratchBufferSize <= this.scratchBuffer.size;
                 nextScratch = reuseScratch
                     ? this.scratchBuffer
                     : NativeBuffer.create(
                         this.device,
-                        scratchSize,
+                        requiredScratchBufferSize,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         false);
                 long nextMaterialFloatCount = materialFloatCount(nextGeometry, dynamicSlotCapacity);
@@ -1620,12 +1849,40 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     ? this.materialBuffer
                     : NativeBuffer.create(this.device, nextMaterialFloatCount * Float.BYTES,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-                writeMaterialBuffer(nextMaterial, nextGeometry, dynamicSlotCapacity);
-                nextLightData = uploadIntBuffer(this.device, nextGeometry.lightTree.words(),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                // SectionGeometry instances are preserved by replaceSections() for clean
+                // sections. When their per-index material spans are unchanged, those identities
+                // are enough to update only replaced sections; the dynamic ranges remain at the
+                // same absolute offsets and must not be cleared out from under the next frame.
+                boolean dynamicMaterialBaseStable = sameDynamicMaterialBase(this.geometry, nextGeometry);
+                incrementalMaterialWrite = canUseIncrementalMaterialWrite(
+                    this.geometry, nextGeometry, reuseMaterial, this.materialBuffer, nextMaterial);
+                if (incrementalMaterialWrite) {
+                    materialWriteMayHaveChanged = hasChangedMaterialSections(this.geometry, nextGeometry);
+                    if (materialWriteMayHaveChanged) {
+                        writeChangedSectionMaterials(nextMaterial, this.geometry, nextGeometry, false);
+                    }
+                    dynamicMaterialRangesReset = !dynamicMaterialBaseStable;
+                    if (dynamicMaterialRangesReset) {
+                        clearDynamicMaterialSlots(nextMaterial, nextGeometry, dynamicSlotCapacity);
+                    }
+                } else {
+                    // A full static rewrite is still safe without clearing dynamic rows when
+                    // the old allocation and dynamic base are preserved. New allocations or a
+                    // shifted base need the original zero initialization.
+                    dynamicMaterialRangesReset = !reuseMaterial || !dynamicMaterialBaseStable;
+                    materialWriteMayHaveChanged = reuseMaterial;
+                    writeMaterialBuffer(nextMaterial, nextGeometry, dynamicSlotCapacity,
+                        dynamicMaterialRangesReset);
+                }
+                int[] nextLightWords = nextGeometry.lightTree.words();
+                reuseLightData = java.util.Arrays.equals(this.geometry.lightTree.words(), nextLightWords);
+                nextLightData = reuseLightData ? this.lightDataBuffer
+                    : uploadIntBuffer(this.device, nextLightWords, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 if (this.pbrMaterials == null) {
                     int[] nextPbrData = nextGeometry.pbrData;
-                    reusePbr = nextPbrData.length * (long)Integer.BYTES <= this.pbrBuffer.size;
+                    // Capacity alone is not content equality. Keep changed immutable snapshots
+                    // in a new allocation so a failed publication leaves old PBR bytes intact.
+                    reusePbr = java.util.Arrays.equals(this.geometry.pbrData, nextPbrData);
                     nextPbr = reusePbr ? this.pbrBuffer : uploadIntBuffer(this.device, nextPbrData,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 } else {
@@ -1636,17 +1893,59 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     nextPbr = this.pbrBuffer;
                 }
                 long pbrRange = nextPbr.size;
+                rollback.before(() -> updateSceneDescriptors(this.topLevel, this.materialBuffer,
+                    this.lightDataBuffer, this.pbrBuffer,
+                    materialFloatCount(this.geometry, this.dynamicSlotCapacity) * Float.BYTES,
+                    this.pbrBuffer.size, this.pbrMaterials == null));
                 updateSceneDescriptors(nextTopLevel, nextMaterial, nextLightData, nextPbr,
                     nextMaterialFloatCount * Float.BYTES, pbrRange,
                     this.pbrMaterials == null);
+                if (nextTerrainTraversalMetadata != null) {
+                    if (reuseTerrainTraversalBuffers) {
+                        rollback.before(() -> writeTerrainTraversalBuffers(this.geometry, this.sectionBlas,
+                            buildTerrainTraversalMetadata(this.geometry),
+                            this.terrainNodeMetadataBuffer, this.terrainBlasAddressBuffer));
+                    }
+                    writeTerrainTraversalBuffers(nextGeometry, nextBlas, nextTerrainTraversalMetadata,
+                        nextTerrainNodeMetadata, nextTerrainBlasAddresses);
+                    rollback.before(() -> updateTerrainTraversalBufferDescriptors(
+                        this.terrainNodeMetadataBuffer, this.terrainBlasAddressBuffer));
+                    updateTerrainTraversalBufferDescriptors(nextTerrainNodeMetadata, nextTerrainBlasAddresses);
+                }
             } catch (Throwable throwable) {
-                if (nextTopLevel != null && !reuseTopLevel) nextTopLevel.close();
-                if (nextPbr != null && !reusePbr) nextPbr.close();
-                if (nextLightData != null) nextLightData.close();
-                if (nextMaterial != null && !reuseMaterial) nextMaterial.close();
-                if (nextScratch != null && !reuseScratch) nextScratch.close();
-                if (nextInstance != null && !reuseInstance) nextInstance.close();
-                blasCache.abort(nextBlas);
+                // Reused allocations are written in place only after the previous submission's
+                // fence retired. If descriptor or another replacement step fails afterwards,
+                // restore the old static snapshot before leaving the published pass untouched.
+                // A base-changing full write may have disturbed old dynamic rows; mark them
+                // pending so the next old-geometry dispatch repopulates active slots.
+                if (dynamicMaterialRangesReset && nextMaterial == this.materialBuffer) {
+                    this.dynamicInstances.markMaterialWritePending();
+                }
+                if (materialWriteMayHaveChanged && nextMaterial == this.materialBuffer) {
+                    try {
+                        if (incrementalMaterialWrite) {
+                            writeChangedSectionMaterials(nextMaterial, this.geometry, nextGeometry, true);
+                        } else {
+                            restoreStaticMaterialData(nextMaterial, this.geometry);
+                        }
+                    } catch (Throwable restoreFailure) {
+                        throwable.addSuppressed(restoreFailure);
+                    }
+                }
+                // Undo bindings and partially written reused inputs before destroying candidates.
+                // Every cleanup is attempted even if another restore/destroy throws.
+                rollback.restore(throwable);
+                if (nextTopLevel != null && !reuseTopLevel) RtResourceRollback.attempt(throwable, nextTopLevel::close);
+                if (nextPbr != null && !reusePbr) RtResourceRollback.attempt(throwable, nextPbr::close);
+                if (nextLightData != null && !reuseLightData) RtResourceRollback.attempt(throwable, nextLightData::close);
+                if (nextMaterial != null && !reuseMaterial) RtResourceRollback.attempt(throwable, nextMaterial::close);
+                if (nextScratch != null && !reuseScratch) RtResourceRollback.attempt(throwable, nextScratch::close);
+                if (nextInstance != null && !reuseInstance) RtResourceRollback.attempt(throwable, nextInstance::close);
+                if (!reuseTerrainTraversalBuffers) {
+                    if (nextTerrainBlasAddresses != null) RtResourceRollback.attempt(throwable, nextTerrainBlasAddresses::close);
+                    if (nextTerrainNodeMetadata != null) RtResourceRollback.attempt(throwable, nextTerrainNodeMetadata::close);
+                }
+                RtResourceRollback.attempt(throwable, () -> blasCache.abort(nextBlas));
                 throw throwable;
             }
 
@@ -1661,6 +1960,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer oldMaterial = this.materialBuffer;
             NativeBuffer oldLightData = this.lightDataBuffer;
             NativeBuffer oldPbr = this.pbrBuffer;
+            NativeBuffer oldTerrainNodeMetadata = this.terrainNodeMetadataBuffer;
+            NativeBuffer oldTerrainBlasAddresses = this.terrainBlasAddressBuffer;
             this.sectionBlas.clear();
             this.sectionBlas.addAll(nextBlas);
             this.instanceBuffer = nextInstance;
@@ -1668,6 +1969,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.materialBuffer = nextMaterial;
             this.lightDataBuffer = nextLightData;
             this.pbrBuffer = nextPbr;
+            this.terrainNodeMetadataBuffer = nextTerrainNodeMetadata;
+            this.terrainBlasAddressBuffer = nextTerrainBlasAddresses;
+            this.terrainTraversalNodeCount = nextTerrainTraversalNodeCount;
+            this.terrainTraversalNodeCapacity = nextTerrainTraversalNodeCapacity;
             this.pbrMapCount = this.pbrMaterials == null ? nextGeometry.pbrData[0] : this.pbrMaterials.loadedMapCount();
             this.topLevel = nextTopLevel;
             if (reuseTopLevel) {
@@ -1678,11 +1983,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
             this.geometry = nextGeometry;
             this.topLevelBuilt = false;
-            this.dynamicMaterialWritePending = true;
+            // Only a new allocation or a shifted base initialized/cleared the dynamic ranges.
+            // Both incremental writes and full static fallbacks with a stable base preserve
+            // their old contents, so retain the prior pending state instead of forcing a
+            // redundant dynamic material upload.
+            if (dynamicMaterialRangesReset) this.dynamicInstances.markMaterialWritePending();
             // NRD only receives motion for the primary hit. A static primary surface can still
             // reflect a changed dynamic/scene TLAS, so preserve no specular history across this
             // resource publication.
-            this.dynamicHistoryResetPending = true;
+            this.dynamicInstances.markHistoryResetPending();
             this.fsr.requestReset();
             if (!reuseTopLevel) {
                 oldTopLevel.close();
@@ -1696,55 +2005,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (!reuseMaterial) {
                 oldMaterial.close();
             }
-            oldLightData.close();
+            if (!reuseLightData) {
+                oldLightData.close();
+            }
             if (!reusePbr) {
                 oldPbr.close();
             }
-            LOGGER.info(
-                "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, temporalReset={}, resetReason={}, duration={} ms",
-                previousSectionCount, nextBlas.size(), reuseTopLevel, !reuseInstance, !reuseMaterial,
-                true, TemporalResetReason.GEOMETRY_PUBLICATION,
-                (System.nanoTime() - startNanos) / 1_000_000L);
-        }
-
-        // Player body overlays plus both held-item hands share one dynamic BLAS. Keep enough
-        // material slots for a fully decorated body and a high-poly baked item without silently
-        // dropping the player instance.
-        private static final int DYNAMIC_PLAYER_MATERIAL_TRIANGLES =
-            DynamicEntityGeometry.DYNAMIC_MODEL_TRIANGLE_CAPACITY;
-        private static final int DYNAMIC_PLACEHOLDER_TRIANGLES = 12;
-        private static final int DYNAMIC_ITEM_MATERIAL_TRIANGLES =
-            DynamicEntityGeometry.DYNAMIC_ITEM_TRIANGLE_CAPACITY;
-        private static final int DYNAMIC_SLOT_MATERIAL_TRIANGLES =
-            DYNAMIC_PLAYER_MATERIAL_TRIANGLES + DYNAMIC_ITEM_MATERIAL_TRIANGLES;
-        private static final int MATERIAL_FLOATS_PER_TRIANGLE = 28;
-
-        private static final float[] DYNAMIC_PLAYER_PLACEHOLDER_MATERIAL =
-            DynamicPlaceholderGeometry.box(0.20F, 0.55F, 0.90F, false).materialData();
-        private static final float[] DYNAMIC_ITEM_PLACEHOLDER_MATERIAL =
-            DynamicPlaceholderGeometry.box(1.0F, 0.35F, 0.05F, true).materialData();
-
-        private static long materialFloatCount(SceneGeometry geometry, int capacity) {
-            return (long)geometry.materialData.length
-                + DYNAMIC_PLAYER_PLACEHOLDER_MATERIAL.length
-                + DYNAMIC_ITEM_PLACEHOLDER_MATERIAL.length
-                + (long)capacity * DYNAMIC_SLOT_MATERIAL_TRIANGLES * MATERIAL_FLOATS_PER_TRIANGLE;
-        }
-
-        /** Writes the scene and fixed dynamic ranges directly into the mapped SSBO. */
-        private static void writeMaterialBuffer(
-            NativeBuffer buffer, SceneGeometry geometry, int capacity
-        ) {
-            try (NativeBuffer.Mapped mapped = buffer.map()) {
-                FloatBuffer destination = mapped.buffer().asFloatBuffer();
-                destination.put(geometry.materialData);
-                destination.put(DYNAMIC_PLAYER_PLACEHOLDER_MATERIAL);
-                destination.put(DYNAMIC_ITEM_PLACEHOLDER_MATERIAL);
-                int dynamicPadding = capacity * DYNAMIC_SLOT_MATERIAL_TRIANGLES * MATERIAL_FLOATS_PER_TRIANGLE;
-                for (int index = 0; index < dynamicPadding; index++) {
-                    destination.put(0.0F);
-                }
+            if (!reuseTerrainTraversalBuffers) {
+                oldTerrainNodeMetadata.close();
+                oldTerrainBlasAddresses.close();
             }
+            LOGGER.info(
+                "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, reuseLightData={}, incrementalMaterialWrite={}, temporalReset={}, resetReason={}, duration={} ms",
+                previousSectionCount, nextBlas.size(), reuseTopLevel, !reuseInstance, !reuseMaterial,
+                reuseLightData,
+                incrementalMaterialWrite, true, TemporalResetReason.GEOMETRY_PUBLICATION,
+                (System.nanoTime() - startNanos) / 1_000_000L);
         }
 
         private void updateLivingEntityTextureDescriptors(DynamicEntityGeometry.Frame frame) {
@@ -1829,274 +2105,28 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private boolean updateDynamicInstances(DynamicEntityGeometry.Frame frame,
                                                boolean forceInstanceWrite) {
             updateLivingEntityTextureDescriptors(frame);
-            boolean tlasChanged = frame.dynamicFrame().instances().stream()
-                .anyMatch(instance -> instance.historyReset()
-                    || !instance.currentTransform().equals(instance.previousTransform()));
-            // The one-frame history-reset bit must also be cleared on the following frame. The
-            // fixed 64-slot metadata upload is only 7 KiB and is cheaper than retaining stale flags.
-            boolean metadataChanged = true;
-            Map<Long, Long> addresses = this.dynamicAddressesScratch;
-            Map<Long, Integer> materialBases = this.dynamicMaterialBasesScratch;
-            Set<Long> livePlayers = this.livePlayersScratch;
-            Set<Long> liveLiving = this.liveLivingScratch;
-            Set<Long> liveBlockEntities = this.liveBlockEntitiesScratch;
-            Set<Long> liveItems = this.liveItemsScratch;
-            Set<Long> historyResetIdentities = this.historyResetIdentitiesScratch;
-            addresses.clear();
-            materialBases.clear();
-            livePlayers.clear();
-            liveLiving.clear();
-            liveBlockEntities.clear();
-            liveItems.clear();
-            historyResetIdentities.clear();
-            if (this.dynamicHistoryResetPending) {
-                for (DynamicInstanceRegistry.Instance instance : frame.dynamicFrame().instances()) {
-                    if (instance.active()) {
-                        historyResetIdentities.add(instance.identity());
-                    }
-                }
+            boolean tlasChanged;
+            try {
+                tlasChanged = this.dynamicInstances.update(
+                    frame,
+                    forceInstanceWrite,
+                    this.device,
+                    this.accelerationLimits,
+                    this.geometry,
+                    this.sectionBlas.size(),
+                    this.sectionBlas.get(0).bottomLevel.deviceAddress,
+                    this.instanceBuffer,
+                    this.dynamicMotionMetadataBuffer,
+                    this.materialBuffer,
+                    this.scratchBuffer,
+                    this.dispatchTimingFrame
+                );
+            } finally {
+                // The updater publishes a replacement before retiring the previous allocation,
+                // including when a later upload in the same frame throws.
+                this.scratchBuffer = this.dynamicInstances.scratchBuffer();
             }
-            // dispatch waits for its previous frame fence before returning, so the previous use is
-            // complete. Stable dynamic frames do not need to map/flush the full material SSBO.
-            boolean materialUploadNeeded = this.dynamicMaterialWritePending
-                || !frame.dynamicFrame().changedGeometry().isEmpty();
-            try (NativeBuffer.Mapped mapped = materialUploadNeeded ? materialBuffer.map() : null) {
-                FloatBuffer materials = mapped == null ? null : mapped.buffer().asFloatBuffer();
-                for (DynamicEntityGeometry.Instance instance : frame.instances()) {
-                    long id = instance.snapshot().identity();
-                    int slot = instance.snapshot().slot();
-                    if (slot >= dynamicSlotCapacity || !instance.snapshot().active()) continue;
-                    if (instance.family() == DynamicEntityGeometry.Family.PLAYER_BODY
-                        || instance.family() == DynamicEntityGeometry.Family.FIRST_PERSON_BODY
-                        || instance.family() == DynamicEntityGeometry.Family.LIVING_BODY
-                        || instance.family() == DynamicEntityGeometry.Family.BLOCK_ENTITY_MODEL
-                        || instance.family() == DynamicEntityGeometry.Family.PARTICLE) {
-                        boolean player = instance.family() == DynamicEntityGeometry.Family.PLAYER_BODY
-                            || instance.family() == DynamicEntityGeometry.Family.FIRST_PERSON_BODY;
-                        boolean blockEntity =
-                            instance.family() == DynamicEntityGeometry.Family.BLOCK_ENTITY_MODEL;
-                        PlayerModelGeometryAdapter.Mesh mesh = player ? frame.playerMeshes().get(id)
-                            : blockEntity ? frame.blockEntityMeshes().get(id)
-                            : frame.livingMeshes().get(id);
-                        if (mesh != null && mesh.triangleCount() <= DYNAMIC_PLAYER_MATERIAL_TRIANGLES) {
-                            // Block-entity identities and cache keys occupy their own high-bit
-                            // namespace; their per-slot material range is the same bounded model
-                            // range as player and living models.
-                            long key = blockEntity ? 0x5000000000000000L | (id & 0x0fffffffffffffffL)
-                                : 0x7000000000000000L | (id & 0xffffffffL);
-                            Map<Long, DynamicCachedBlas> cacheMap = player ? playerModelBlas
-                                : blockEntity ? blockEntityModelBlas : livingModelBlas;
-                            DynamicCachedBlas cached = cacheMap.get(id);
-                            DynamicPlaceholderGeometry.Mesh dynamicMesh =
-                                new DynamicPlaceholderGeometry.Mesh(mesh.vertices(), mesh.materialData());
-                            if (cached != null && cached.triangleCount != mesh.triangleCount()) {
-                                // acquire() publishes the replacement only after its complete
-                                // BLAS allocation succeeds; keep the old entry/list membership
-                                // untouched on an allocation failure.
-                                DynamicCachedBlas previous = cached;
-                                cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                                dynamicBlas.remove(previous);
-                                dynamicBlas.add(cached);
-                                cached.uploadedVertices = mesh.vertices();
-                                cacheMap.put(id, cached);
-                                historyResetIdentities.add(id);
-                                tlasChanged = true;
-                            } else if (cached == null) {
-                                cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                                cached.uploadedVertices = mesh.vertices();
-                                cacheMap.put(id, cached);
-                                dynamicBlas.add(cached);
-                                historyResetIdentities.add(id);
-                                tlasChanged = true;
-                            } else if (cached.updateVertices(mesh.vertices())) {
-                                historyResetIdentities.add(id);
-                                metadataChanged = true;
-                            }
-                            if (player) {
-                                livePlayers.add(id);
-                            } else if (blockEntity) {
-                                liveBlockEntities.add(id);
-                            } else {
-                                liveLiving.add(id);
-                            }
-                            int base = geometry.triangleCount() + DYNAMIC_PLACEHOLDER_TRIANGLES
-                                + DYNAMIC_ITEM_MATERIAL_TRIANGLES + slot * DYNAMIC_SLOT_MATERIAL_TRIANGLES;
-                            if (materials != null && (this.dynamicMaterialWritePending
-                                    || frame.dynamicFrame().changedGeometry().contains(id))) {
-                                materials.position(base * MATERIAL_FLOATS_PER_TRIANGLE);
-                            // Each selector-2 triangle already carries its own living-texture
-                            // descriptor index in optical.x. A player BLAS can contain skin,
-                            // several armor PNGs and a trim atlas, so the dynamic/TLAS slot must
-                            // never replace those per-layer texture indices.
-                                materials.put(mesh.materialData());
-                            }
-                            materialBases.put(id, base);
-                            addresses.put(id, cached.bottomLevel.deviceAddress);
-                            continue;
-                        }
-                    } else if (instance.family() == DynamicEntityGeometry.Family.ITEM_PLACEHOLDER
-                        || instance.family() == DynamicEntityGeometry.Family.FIRST_PERSON_ITEM) {
-                        ItemModelGeometryAdapter.Mesh mesh = frame.itemMeshes().get(id);
-                        if (mesh != null && mesh.triangleCount() <= DYNAMIC_ITEM_MATERIAL_TRIANGLES) {
-                            long key = 0x6000000000000000L | (id & 0xffffffffL);
-                            DynamicCachedBlas cached = itemModelBlas.get(id);
-                            DynamicPlaceholderGeometry.Mesh dynamicMesh =
-                                new DynamicPlaceholderGeometry.Mesh(mesh.vertices(), mesh.materialData());
-                            if (cached != null && cached.triangleCount != mesh.triangleCount()) {
-                                // See the player path above: publish the new BLAS before
-                                // removing the old list entry so a failed replacement is atomic.
-                                DynamicCachedBlas previous = cached;
-                                cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                                dynamicBlas.remove(previous);
-                                dynamicBlas.add(cached);
-                                cached.uploadedVertices = mesh.vertices();
-                                itemModelBlas.put(id, cached);
-                                historyResetIdentities.add(id);
-                                tlasChanged = true;
-                            } else if (cached == null) {
-                                cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                                cached.uploadedVertices = mesh.vertices();
-                                itemModelBlas.put(id, cached);
-                                dynamicBlas.add(cached);
-                                historyResetIdentities.add(id);
-                                tlasChanged = true;
-                            } else if (cached.updateVertices(mesh.vertices())) {
-                                historyResetIdentities.add(id);
-                                metadataChanged = true;
-                            }
-                            liveItems.add(id);
-                            int base = geometry.triangleCount() + DYNAMIC_PLACEHOLDER_TRIANGLES
-                                + DYNAMIC_ITEM_MATERIAL_TRIANGLES
-                                + slot * DYNAMIC_SLOT_MATERIAL_TRIANGLES
-                                + DYNAMIC_PLAYER_MATERIAL_TRIANGLES;
-                            if (materials != null && (this.dynamicMaterialWritePending
-                                    || frame.dynamicFrame().changedGeometry().contains(id))) {
-                                materials.position(base * MATERIAL_FLOATS_PER_TRIANGLE);
-                                materials.put(mesh.materialData());
-                            }
-                            if (!reportedItemMaterial) {
-                                reportedItemMaterial = true;
-                                float[] material = mesh.materialData();
-                                LOGGER.info(
-                                    "RTest item material upload: id={}, base={}, triangles={}, selector={}, pbrMapIndex={}, opticalX={}, uv=({}, {})..({}, {})",
-                                    id, base, mesh.triangleCount(), material[15], material[19], material[24],
-                                    material[8], material[9], material[10], material[11]);
-                            }
-                            materialBases.put(id, base);
-                            addresses.put(id, cached.bottomLevel.deviceAddress);
-                            continue;
-                        }
-                    }
-
-                    long topology = switch (instance.family()) {
-                        case PLAYER_BODY, FIRST_PERSON_BODY -> 0x504C415945524CL;
-                        case LIVING_BODY -> 0x4C4956494E474CL;
-                        case BLOCK_ENTITY_MODEL -> instance.topology();
-                        case ITEM_PLACEHOLDER, FIRST_PERSON_ITEM -> 0x4954454D4CL;
-                        case PARTICLE -> 0x5041525449434C45L;
-                    };
-                    for (DynamicCachedBlas cached : dynamicBlas) {
-                        if (cached.topologyKey == topology) {
-                            addresses.put(id, cached.bottomLevel.deviceAddress);
-                            materialBases.put(id, geometry.triangleCount()
-                                + (instance.family() == DynamicEntityGeometry.Family.ITEM_PLACEHOLDER
-                                    ? DYNAMIC_PLACEHOLDER_TRIANGLES : 0));
-                            break;
-                        }
-                    }
-                }
-                this.dynamicMaterialWritePending = false;
-            }
-            var players = playerModelBlas.entrySet().iterator();
-            while (players.hasNext()) {
-                var entry = players.next();
-                if (!livePlayers.contains(entry.getKey())) {
-                    DynamicCachedBlas cached = entry.getValue();
-                    dynamicBlas.remove(cached);
-                    dynamicBlasCache.release(cached.topologyKey);
-                    tlasChanged = true;
-                    metadataChanged = true;
-                    players.remove();
-                }
-            }
-            var living = livingModelBlas.entrySet().iterator();
-            while (living.hasNext()) {
-                var entry = living.next();
-                if (!liveLiving.contains(entry.getKey())) {
-                    DynamicCachedBlas cached = entry.getValue();
-                    dynamicBlas.remove(cached);
-                    dynamicBlasCache.release(cached.topologyKey);
-                    tlasChanged = true;
-                    metadataChanged = true;
-                    living.remove();
-                }
-            }
-            var blockEntities = blockEntityModelBlas.entrySet().iterator();
-            while (blockEntities.hasNext()) {
-                var entry = blockEntities.next();
-                if (!liveBlockEntities.contains(entry.getKey())) {
-                    DynamicCachedBlas cached = entry.getValue();
-                    dynamicBlas.remove(cached);
-                    dynamicBlasCache.release(cached.topologyKey);
-                    tlasChanged = true;
-                    metadataChanged = true;
-                    blockEntities.remove();
-                }
-            }
-            var items = itemModelBlas.entrySet().iterator();
-            while (items.hasNext()) {
-                var entry = items.next();
-                if (!liveItems.contains(entry.getKey())) {
-                    DynamicCachedBlas cached = entry.getValue();
-                    dynamicBlas.remove(cached);
-                    dynamicBlasCache.release(cached.topologyKey);
-                    tlasChanged = true;
-                    metadataChanged = true;
-                    items.remove();
-                }
-            }
-            long scratchSize = scratchBuffer.size;
-            for (DynamicCachedBlas cached : dynamicBlas) {
-                scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
-            }
-            if (scratchSize > scratchBuffer.size) {
-                NativeBuffer replacement = NativeBuffer.create(device, scratchSize,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-                NativeBuffer previousScratch = scratchBuffer;
-                // Publish ownership before closing the old allocation. If destruction reports a
-                // runtime/device failure, the replacement is still reachable from the pass and
-                // will be released by close().
-                scratchBuffer = replacement;
-                previousScratch.close();
-            }
-            if (tlasChanged || forceInstanceWrite) {
-                if (tlasChanged) {
-                    this.dynamicTlasUpdateCount++;
-                }
-                try (NativeBuffer.Mapped mapped = instanceBuffer.map()) {
-                    ByteBuffer buffer = mapped.buffer();
-                    buffer.position(sectionBlas.size() * VkAccelerationStructureInstanceKHR.SIZEOF);
-                    DynamicTlasInstanceWriter.write(buffer, dynamicSlotCapacity, frame.dynamicFrame(), addresses,
-                        materialBases, sectionBlas.get(0).bottomLevel.deviceAddress,
-                        (float)geometry.originX, (float)geometry.originY, (float)geometry.originZ);
-                }
-            }
-            if (metadataChanged) {
-                this.dynamicMetadataUploadCount++;
-                try (NativeBuffer.Mapped mapped = dynamicMotionMetadataBuffer.map()) {
-                    DynamicTlasInstanceWriter.writeMotionMetadata(mapped.buffer(), dynamicSlotCapacity,
-                        frame.dynamicFrame(), historyResetIdentities,
-                        (float)geometry.originX, (float)geometry.originY, (float)geometry.originZ);
-                }
-            }
-            // Publish exactly the block entities whose geometry reached the TLAS this frame.
-            Set<Long> represented = new HashSet<>();
-            for (Long identity : materialBases.keySet()) {
-                if ((identity >>> 48) == 0x8001L) {
-                    represented.add(identity);
-                }
-            }
-            representedBlockEntities = Set.copyOf(represented);
+            representedBlockEntities = this.dynamicInstances.representedBlockEntities();
             return tlasChanged;
         }
 
@@ -2105,11 +2135,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
             SceneGeometry geometry,
             List<CachedBlas> sectionBlas,
             int dynamicSlotCapacity,
+            int instanceCapacity,
             int usage
         ) {
             NativeBuffer buffer = NativeBuffer.create(
-                device, (long)(sectionBlas.size() + dynamicSlotCapacity) * VkAccelerationStructureInstanceKHR.SIZEOF, usage, true);
-            writeInstanceBuffer(buffer, geometry, sectionBlas, dynamicSlotCapacity);
+                device, (long)instanceCapacity * VkAccelerationStructureInstanceKHR.SIZEOF, usage, true);
+            writeInstanceBuffer(buffer, geometry, sectionBlas, dynamicSlotCapacity, instanceCapacity);
             return buffer;
         }
 
@@ -2117,11 +2148,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer buffer,
             SceneGeometry geometry,
             List<CachedBlas> sectionBlas,
-            int dynamicSlotCapacity
+            int dynamicSlotCapacity,
+            int instanceCapacity
         ) {
+            int minimumCapacity = sectionBlas.size() + dynamicSlotCapacity;
+            if (instanceCapacity < minimumCapacity) {
+                throw new IllegalArgumentException("TLAS input capacity is smaller than its live instances");
+            }
             try (NativeBuffer.Mapped mapped = buffer.map()) {
                 long address = MemoryUtil.memAddress(mapped.buffer());
-                int materialTriangleOffset = 0;
                 for (int i = 0; i < sectionBlas.size(); i++) {
                     SceneGeometry.SectionGeometry section = geometry.sections.get(i);
                     CachedBlas cached = sectionBlas.get(i);
@@ -2136,22 +2171,39 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         matrix.put(8, 0.0F).put(9, 0.0F).put(10, 1.0F)
                             .put(11, (float)(section.originZ - geometry.originZ));
                     });
-                    instance.instanceCustomIndex(materialTriangleOffset);
+                    instance.instanceCustomIndex(geometry.materialLayout.baseTriangle(section));
                     instance.mask(DynamicTlasInstanceWriter.ALL_RAY_MASK);
                     instance.instanceShaderBindingTableRecordOffset(0);
                     instance.flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
                     instance.accelerationStructureReference(cached.bottomLevel.deviceAddress);
-                    materialTriangleOffset += section.triangleCount;
                 }
                 long dummyAddress = sectionBlas.get(0).bottomLevel.deviceAddress;
                 for (int slot = 0; slot < dynamicSlotCapacity; slot++) {
                     VkAccelerationStructureInstanceKHR instance = VkAccelerationStructureInstanceKHR.create(
                         address + (long)(sectionBlas.size() + slot) * VkAccelerationStructureInstanceKHR.SIZEOF);
-                    instance.mask(0).instanceCustomIndex(0).instanceShaderBindingTableRecordOffset(0)
-                        .flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                        .accelerationStructureReference(dummyAddress);
+                    writeUntracedInstance(instance, dummyAddress);
+                }
+                for (int slot = minimumCapacity; slot < instanceCapacity; slot++) {
+                    VkAccelerationStructureInstanceKHR instance = VkAccelerationStructureInstanceKHR.create(
+                        address + (long)slot * VkAccelerationStructureInstanceKHR.SIZEOF);
+                    writeUntracedInstance(instance, dummyAddress);
                 }
             }
+        }
+
+        private static void writeUntracedInstance(
+            VkAccelerationStructureInstanceKHR instance, long dummyBlasAddress
+        ) {
+            instance.transform(transform -> {
+                FloatBuffer matrix = transform.matrix();
+                matrix.put(0, 1.0F).put(1, 0.0F).put(2, 0.0F).put(3, 0.0F);
+                matrix.put(4, 0.0F).put(5, 1.0F).put(6, 0.0F).put(7, 0.0F);
+                matrix.put(8, 0.0F).put(9, 0.0F).put(10, 1.0F).put(11, 0.0F);
+            });
+            instance.mask(DynamicTlasInstanceWriter.UNTRACED_INSTANCE_MASK)
+                .instanceCustomIndex(0).instanceShaderBindingTableRecordOffset(0)
+                .flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
+                .accelerationStructureReference(dummyBlasAddress);
         }
 
         private static NativeBuffer uploadFloatBuffer(VulkanDevice device, float[] values, int usage) {
@@ -2248,17 +2300,29 @@ import com.rtest.client.fsr.RtestFsrSettings;
             RtestFsrCamera previous = previousFsrCamera == null ? currentCamera : previousFsrCamera;
             RtestFsrSettings.Jitter jitter = token.jitter();
             RayTracingClientConfig config = RayTracingClientConfig.INSTANCE;
+            float sunIntensity = config.sunIntensity.get().floatValue();
+            float sunAngularRadiusDegrees = config.sunAngularRadiusDegrees.get().floatValue();
+            int sunShadowSamples = config.sunShadowSamples.get();
             int pbrPackedMode = config.pbrPackedMode();
             float pbrNormalStrength = config.pbrNormalStrength.get().floatValue();
             float pbrEmissionStrength = config.pbrEmissionStrength.get().floatValue();
             float emissionScale = config.emissionScale.get().floatValue();
             float pbrWetnessStrength = config.pbrWetnessStrength.get().floatValue();
             float pbrParallaxDepth = config.pbrParallaxDepth.get().floatValue();
-            int pbrParallaxFlags = config.pbrParallaxFlags();
+            int pbrParallaxFlags = config.pbrParallaxFlags() | (config.skyImportanceSamplingEnabled.get() ? 8 : 0)
+                | (config.skyCdfHardwareEnabled.get() ? 16 : 0);
             boolean volumetricLightingEnabled = config.volumetricLightingEnabled.get();
             float volumetricLightingStrength = config.volumetricLightingStrength.get().floatValue();
             float volumetricFogDensity = config.volumetricFogDensity.get().floatValue();
+            int atmosphereAltitudeOffsetMeters = config.atmosphereAltitudeOffsetMeters.get();
             int volumetricLightingQuality = config.volumetricLightingQuality.get();
+            float skyboxTextureOpacity = config.skyboxTextureOpacity.get().floatValue();
+            boolean skyboxDaylightOpacityEnabled = config.skyboxDaylightOpacityEnabled.get();
+            boolean moonEnabled = config.moonEnabled.get();
+            this.aerialPerspectiveEnabled = this.atmosphere != null
+                && level.dimensionType().hasSkyLight()
+                && volumetricLightingEnabled
+                && volumetricLightingStrength > 1.0e-4f;
             if (this.lastPbrPackedMode != pbrPackedMode
                 || Float.compare(this.lastPbrNormalStrength, pbrNormalStrength) != 0
                 || Float.compare(this.lastPbrEmissionStrength, pbrEmissionStrength) != 0
@@ -2269,7 +2333,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 || this.lastVolumetricLightingEnabled != volumetricLightingEnabled
                 || Float.compare(this.lastVolumetricLightingStrength, volumetricLightingStrength) != 0
                 || Float.compare(this.lastVolumetricFogDensity, volumetricFogDensity) != 0
-                || this.lastVolumetricLightingQuality != volumetricLightingQuality) {
+                || this.lastAtmosphereAltitudeOffsetMeters != atmosphereAltitudeOffsetMeters
+                || this.lastVolumetricLightingQuality != volumetricLightingQuality
+                || Float.compare(this.lastSkyboxTextureOpacity, skyboxTextureOpacity) != 0
+                || this.lastSkyboxDaylightOpacityEnabled != skyboxDaylightOpacityEnabled
+                || this.lastMoonEnabled != moonEnabled
+                || Float.compare(this.lastSunIntensity, sunIntensity) != 0
+                || Float.compare(this.lastSunAngularRadiusDegrees, sunAngularRadiusDegrees) != 0
+                || this.lastSunShadowSamples != sunShadowSamples) {
                 // Material interpretation changes invalidate temporal samples just like a
                 // geometry replacement; otherwise the old BRDF leaks into the new PBR mode.
                 this.fsr.requestReset();
@@ -2283,7 +2354,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastVolumetricLightingEnabled = volumetricLightingEnabled;
                 this.lastVolumetricLightingStrength = volumetricLightingStrength;
                 this.lastVolumetricFogDensity = volumetricFogDensity;
+                this.lastAtmosphereAltitudeOffsetMeters = atmosphereAltitudeOffsetMeters;
                 this.lastVolumetricLightingQuality = volumetricLightingQuality;
+                this.lastSkyboxTextureOpacity = skyboxTextureOpacity;
+                this.lastSkyboxDaylightOpacityEnabled = skyboxDaylightOpacityEnabled;
+                this.lastMoonEnabled = moonEnabled;
+                this.lastSunIntensity = sunIntensity;
+                this.lastSunAngularRadiusDegrees = sunAngularRadiusDegrees;
+                this.lastSunShadowSamples = sunShadowSamples;
                 LOGGER.info("RTest volumetric lighting config: enabled={}, strength={}, fogDensity={}, quality={}",
                     volumetricLightingEnabled, volumetricLightingStrength, volumetricFogDensity,
                     volumetricLightingQuality);
@@ -2300,6 +2378,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 float aspect = currentCamera.projectionM11() / currentCamera.projectionM00();
                 float tanHalfFov = 1.0F / currentCamera.projectionM11();
                 BlockPos cameraBlock = BlockPos.containing(position.x, position.y, position.z);
+                var cameraFluid = level.getFluidState(cameraBlock);
+                boolean cameraInWater = cameraFluid.is(net.minecraft.tags.FluidTags.WATER)
+                    && position.y - cameraBlock.getY() < cameraFluid.getHeight(level, cameraBlock);
                 long liveClockTicks = Math.floorMod(level.getOverworldClockTime(), 24000L);
                 float liveRain = Math.max(0.0F, Math.min(1.0F, level.getRainLevel(1.0F)));
                 float liveThunder = Math.max(0.0F, Math.min(1.0F, level.getThunderLevel(1.0F)));
@@ -2331,13 +2412,29 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     daylight = 0.0F;
                 }
                 float night = 1.0F - daylight;
+                float moonAngle = (float)Math.toRadians(level.environmentAttributes().getValue(
+                    EnvironmentAttributes.MOON_ANGLE, cameraBlock) + configuredSunOffset);
+                float moonHorizontal = (float)Math.sin(moonAngle);
+                float moonDirectionX = -moonHorizontal * (float)Math.cos(sunAzimuth);
+                float moonDirectionY = (float)Math.cos(moonAngle);
+                float moonDirectionZ = moonHorizontal * (float)Math.sin(sunAzimuth);
+                int moonPhase = level.dimensionType().hasSkyLight()
+                    ? level.environmentAttributes().getValue(EnvironmentAttributes.MOON_PHASE, cameraBlock).index()
+                    : 4;
+                this.currentMoonSkyActive = moonEnabled && level.dimensionType().hasSkyLight()
+                    && this.lastMoonIntensity > 0.0F && moonPhase != 4;
+                float moonPhaseToken = this.currentMoonSkyActive
+                    ? moonPhase + 1.0F + this.lastMoonIntensity * 0.25F : 0.0F;
+                this.currentMoonDirectionY = moonDirectionY;
                 float timeOfDay = clockTicks / 24000.0F;
                 buffer.putFloat(0, (float)(position.x - geometry.originX));
                 buffer.putFloat(4, (float)(position.y - geometry.originY));
                 buffer.putFloat(8, (float)(position.z - geometry.originZ));
-                buffer.putFloat(12, 0.0F);
-                buffer.putFloat(16, forward.x()).putFloat(20, forward.y()).putFloat(24, forward.z()).putFloat(28, 0.0F);
-                buffer.putFloat(32, -left.x()).putFloat(36, -left.y()).putFloat(40, -left.z()).putFloat(44, 0.0F);
+                // Spare origin.w/environment.w/jitter.zw: moon xyz and phase+1+intensity/4.
+                // Preserve the 304-byte camera layout; zero phase token disables the moon.
+                buffer.putFloat(12, moonDirectionX);
+                buffer.putFloat(16, forward.x()).putFloat(20, forward.y()).putFloat(24, forward.z()).putFloat(28, (float)Math.toRadians(sunAngularRadiusDegrees));
+                buffer.putFloat(32, -left.x()).putFloat(36, -left.y()).putFloat(40, -left.z()).putFloat(44, sunShadowSamples);
                 buffer.putFloat(48, up.x()).putFloat(52, up.y()).putFloat(56, up.z()).putFloat(60, 0.0F);
                 buffer.putFloat(64, tanHalfFov).putFloat(68, aspect)
                     // parameters.z carries the RT diagnostic view selector; it is never used to
@@ -2368,13 +2465,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     // settings.w carries the atmosphere quality tier: 1=performance,
                     // 2=balanced, 3=quality.
                     .putFloat(108, RayTracingClientConfig.INSTANCE.volumetricLightingQuality.get());
-                // environment.x carries the visible atmosphere fog-density multiplier; the other
-                // components remain the authored RT environment baseline.
+                // environment.x remains the legacy RGB fog input. In physical mode the same
+                // user control builds a new medium generation instead of scaling final color.
                 // environment.y/z carry the authored sun and ambient color temperatures (Kelvin).
                 buffer.putFloat(112, RayTracingClientConfig.INSTANCE.volumetricFogDensity.get().floatValue())
                     .putFloat(116, RayTracingClientConfig.INSTANCE.sunColorTemperature.get().floatValue())
                     .putFloat(120, RayTracingClientConfig.INSTANCE.ambientColorTemperature.get().floatValue())
-                    .putFloat(124, 1.0F);
+                    .putFloat(124, moonDirectionY);
                 // random.w carries the Minecraft game tick for animated PBR companion maps;
                 // render-frame jitter remains in the dedicated jitter fields below.
                 buffer.putFloat(128, Float.intBitsToFloat(currentFrame))
@@ -2383,20 +2480,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     .putFloat(140, Float.intBitsToFloat((int)level.getGameTime()));
                 putCameraState(buffer, 144, previous, geometry);
                 buffer.putFloat(224, jitter.x()).putFloat(228, jitter.y())
-                    .putFloat(232, 0.0F).putFloat(236, 0.0F);
+                    .putFloat(232, moonDirectionZ).putFloat(236, moonPhaseToken);
                 // x=time of day, y=rain, z=thunder, w=night factor.
                 buffer.putFloat(240, timeOfDay).putFloat(244, rain)
                     .putFloat(248, thunder).putFloat(252, night);
-                int dynamicMaterialStart = geometry.triangleCount()
-                    + DYNAMIC_PLACEHOLDER_TRIANGLES + DYNAMIC_ITEM_MATERIAL_TRIANGLES;
-                boolean signalSplitEnabled = RayTracingClientConfig.INSTANCE.nrdEnabled.get()
-                    && RayTracingClientConfig.INSTANCE.nrdStrength.get().floatValue() > 0.0001f
-                    && !(RayTracingClientConfig.INSTANCE.sundialDenoiserEnabled.get()
-                        && RayTracingClientConfig.INSTANCE.sundialDenoiserStrength.get().floatValue() > 0.0001f);
+                int dynamicMaterialStart = Math.toIntExact(dynamicMaterialBase(geometry));
+                // beginFrame resolved this mode before the camera upload, so the shader
+                // never writes guides for a different consumer than this frame schedules.
                 buffer.putFloat(256, dynamicMaterialStart)
                     .putFloat(260, DYNAMIC_SLOT_MATERIAL_TRIANGLES)
                     .putFloat(264, dynamicSlotCapacity)
-                    .putFloat(268, signalSplitEnabled ? 1.0F : 0.0F);
+                    .putFloat(268, this.fsr.denoiserMode().shaderSignal());
                 // x packs format in the low byte and feature flags above it; y normal strength;
                 // z authored emission multiplier; w rain wetness strength.
                 buffer.putFloat(272, pbrPackedMode)
@@ -2408,8 +2502,26 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 // scale as vanilla block lights without increasing the visible lamp surface.
                 buffer.putFloat(288, pbrParallaxDepth)
                     .putFloat(292, emissionScale)
-                    .putFloat(296, 0.0F)
-                    .putFloat(300, pbrParallaxFlags);
+                    // Previously unused lane: legacy PNG sampling; atmosphere LUT is independent.
+                    .putFloat(296, this.skyboxTextureEnabled ? 1.0F : 0.0F)
+                    .putFloat(300, pbrParallaxFlags | (cameraInWater ? 4 : 0));
+            }
+            if (this.atmosphere != null) {
+                this.atmosphereEyeRadiusKm = com.rtest.client.atmosphere.AtmosphereCoordinates.eyeRadiusKm(
+                    currentCamera.y(), atmosphereSettings());
+                // Read unquantized dimension sky brightness, not a block/player light sample.
+                // Daily/weather changes must not repeatedly reset NRD/FSR histories.
+                boolean physicalSkyEnabled = this.atmosphere != null && level.dimensionType().hasSkyLight();
+                float effectiveSkyboxTextureOpacity = !physicalSkyEnabled && skyboxDaylightOpacityEnabled
+                    ? SkyboxOpacityCurve.fromSkyLightLevel(level.environmentAttributes().getDimensionValue(
+                        EnvironmentAttributes.SKY_LIGHT_LEVEL), level.getOverworldClockTime())
+                    : skyboxTextureOpacity;
+                try (NativeBuffer.Mapped mapped = this.atmosphereCameraBuffer.map()) {
+                    mapped.buffer().putFloat(0, this.atmosphereEyeRadiusKm)
+                        .putFloat(4, effectiveSkyboxTextureOpacity)
+                        .putFloat(8, RayTracingClientConfig.INSTANCE.volumetricShadowSamples.get())
+                        .putFloat(12, level.dimensionType().hasSkyLight() ? 1.0F : 0.0F);
+                }
             }
             updateTerrainTraversalCamera(currentCamera);
             previousFsrCamera = currentCamera;
@@ -2421,37 +2533,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
             try (NativeBuffer.Mapped mapped = this.terrainTraversalParamsBuffer.map()) {
                 ByteBuffer buffer = mapped.buffer().order(ByteOrder.nativeOrder());
-                float rightX = currentCamera.rightX();
-                float rightY = currentCamera.rightY();
-                float rightZ = currentCamera.rightZ();
-                float upX = currentCamera.upX();
-                float upY = currentCamera.upY();
-                float upZ = currentCamera.upZ();
-                float forwardX = currentCamera.forwardX();
-                float forwardY = currentCamera.forwardY();
-                float forwardZ = currentCamera.forwardZ();
+                writeTerrainTraversalProjection(buffer, currentCamera);
                 float cameraX = (float)currentCamera.x();
                 float cameraY = (float)currentCamera.y();
                 float cameraZ = (float)currentCamera.z();
-                float tanHalfFov = 1.0F / currentCamera.projectionM11();
-                float aspect = currentCamera.projectionM11() / currentCamera.projectionM00();
-                float scaleX = 1.0F / Math.max(tanHalfFov * aspect, 1.0e-5F);
-                float scaleY = 1.0F / Math.max(tanHalfFov, 1.0e-5F);
-                // This is a conservative reversed-Z projection: clip z is the near-depth
-                // constant and clip w is forward distance, matching the FSR depth 0.05/viewZ
-                // convention used by the traversal shader.
-                // GLSL mat4 values are column-major: write the four rows by their column
-                // offsets so clip.x/y use the complete world-space camera basis.
-                buffer.putFloat(0, scaleX * rightX).putFloat(4, scaleY * upX)
-                    .putFloat(8, 0.0F).putFloat(12, forwardX);
-                buffer.putFloat(16, scaleX * rightY).putFloat(20, scaleY * upY)
-                    .putFloat(24, 0.0F).putFloat(28, forwardY);
-                buffer.putFloat(32, scaleX * rightZ).putFloat(36, scaleY * upZ)
-                    .putFloat(40, 0.0F).putFloat(44, forwardZ);
-                buffer.putFloat(48, -scaleX * (rightX * cameraX + rightY * cameraY + rightZ * cameraZ))
-                    .putFloat(52, -scaleY * (upX * cameraX + upY * cameraY + upZ * cameraZ))
-                    .putFloat(56, 0.05F)
-                    .putFloat(60, -(forwardX * cameraX + forwardY * cameraY + forwardZ * cameraZ));
                 float renderDistance = (float)((this.geometry.renderDistanceChunks + 1) * 16.0 * Math.sqrt(2.0));
                 buffer.putFloat(64, cameraX).putFloat(68, cameraY).putFloat(72, cameraZ)
                     .putFloat(76, renderDistance);
@@ -2470,6 +2555,49 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     .putInt(132, (int)(dummyAddress >>> 32))
                     .putInt(136, 0).putInt(140, 0);
             }
+        }
+
+        /** Writes the column-major camera projection shared by the GPU terrain traversal shader. */
+        static void writeTerrainTraversalProjection(ByteBuffer buffer, RtestFsrCamera currentCamera) {
+            if (buffer == null || currentCamera == null || buffer.capacity() < 64) {
+                throw new IllegalArgumentException("terrain traversal projection buffer is too small");
+            }
+            float rightX = currentCamera.rightX();
+            float rightY = currentCamera.rightY();
+            float rightZ = currentCamera.rightZ();
+            float upX = currentCamera.upX();
+            float upY = currentCamera.upY();
+            float upZ = currentCamera.upZ();
+            float forwardX = currentCamera.forwardX();
+            float forwardY = currentCamera.forwardY();
+            float forwardZ = currentCamera.forwardZ();
+            float cameraX = (float)currentCamera.x();
+            float cameraY = (float)currentCamera.y();
+            float cameraZ = (float)currentCamera.z();
+            float tanHalfFov = 1.0F / currentCamera.projectionM11();
+            float aspect = currentCamera.projectionM11() / currentCamera.projectionM00();
+            float scaleX = 1.0F / Math.max(tanHalfFov * aspect, 1.0e-5F);
+            float scaleY = 1.0F / Math.max(tanHalfFov, 1.0e-5F);
+            // This is a conservative reversed-Z projection: clip z is the near-depth
+            // constant and clip w is forward distance, matching the FSR depth 0.05/viewZ
+            // convention used by the traversal shader.
+            // GLSL mat4 values are column-major. The four clip rows are
+            //   x = scaleX * dot(right, world-camera)
+            //   y = scaleY * dot(up, world-camera)
+            //   z = 0.05
+            //   w = dot(forward, world-camera)
+            // Each four-float group is one column in the std140 mat4.
+            float rightTranslation = -scaleX * (rightX * cameraX + rightY * cameraY + rightZ * cameraZ);
+            float upTranslation = -scaleY * (upX * cameraX + upY * cameraY + upZ * cameraZ);
+            float forwardTranslation = -(forwardX * cameraX + forwardY * cameraY + forwardZ * cameraZ);
+            buffer.putFloat(0, scaleX * rightX).putFloat(4, scaleY * upX)
+                .putFloat(8, 0.0F).putFloat(12, forwardX);
+            buffer.putFloat(16, scaleX * rightY).putFloat(20, scaleY * upY)
+                .putFloat(24, 0.0F).putFloat(28, forwardY);
+            buffer.putFloat(32, scaleX * rightZ).putFloat(36, scaleY * upZ)
+                .putFloat(40, 0.0F).putFloat(44, forwardZ);
+            buffer.putFloat(48, rightTranslation).putFloat(52, upTranslation)
+                .putFloat(56, 0.05F).putFloat(60, forwardTranslation);
         }
 
         private static void putCameraState(ByteBuffer buffer, int offset, RtestFsrCamera camera,
@@ -2543,7 +2671,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private void waitForPreviousFrame(RayTracingFrameTiming timing) {
             GpuFence fence = this.pendingFrameFence;
             if (fence == null) {
-                this.dynamicBlasCache.retireCompleted();
+                // No submission is not evidence that the old TLAS stopped referencing retired BLAS.
                 return;
             }
             long fenceWaitStart = System.nanoTime();
@@ -2562,19 +2690,28 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     closeAndCapture(fence);
                 }
             }
-            this.dynamicBlasCache.retireCompleted();
+            if (this.pendingAtmosphereToken != 0L) {
+                this.atmosphere.completed(this.pendingAtmosphereToken);
+                this.pendingAtmosphereToken = 0L;
+            }
+            if (this.pendingMoonAtmosphereToken != 0L) {
+                this.atmosphere.moonCompleted(this.pendingMoonAtmosphereToken);
+                this.pendingMoonAtmosphereToken = 0L;
+            }
+            if (this.dynamicBlasRetirement.completed()) this.dynamicInstances.retireCompleted();
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 double[] gpuMilliseconds = readGpuTimestamps(stack);
                 if (gpuMilliseconds != null && this.pendingFrameGpuIndex % 120 == 0) {
                     LOGGER.info(
-                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={}",
+                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={}",
                         this.pendingFrameGpuIndex,
                         formatGpuMs(gpuMilliseconds[0]),
                         formatGpuMs(gpuMilliseconds[1]),
                         formatGpuMs(gpuMilliseconds[2]),
                         formatGpuMs(gpuMilliseconds[3]),
-                        gpuTimestampPeriodNs);
+                        gpuTimestampPeriodNs,
+                        formatGpuMs(gpuMilliseconds[4]));
                 }
                 if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
                     logTerrainTraversalStats(this.pendingFrameGpuIndex);
@@ -2616,6 +2753,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             // Retire the previous GPU frame only now, immediately before any mapped buffer or
             // temporal image is written again, so that work can overlap with that capture.
             waitForPreviousFrame(timing);
+            updateAtmosphereMedium();
             // Cleared before any early return so a frame that did not rebuild its dynamic instances
             // never claims block entities are represented.
             representedBlockEntities = Set.of();
@@ -2660,6 +2798,19 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
             RtestFsrCamera currentCamera = OfflineRenderController.camera(
                 cameraState(camera), this.geometry.revision());
+            // Lunar phase is now an illumination source. Resolve its discrete change before
+            // beginFrame snapshots the reset token, not after camera upload.
+            int nextMoonPhaseToken = RayTracingClientConfig.INSTANCE.moonEnabled.get()
+                && level.dimensionType().hasSkyLight()
+                ? level.environmentAttributes().getValue(EnvironmentAttributes.MOON_PHASE,
+                    BlockPos.containing(currentCamera.x(), currentCamera.y(), currentCamera.z())).index() + 1 : 0;
+            float nextMoonIntensity = RayTracingClientConfig.INSTANCE.moonIntensity.get().floatValue();
+            if (this.lastMoonPhaseToken != nextMoonPhaseToken
+                || Float.compare(this.lastMoonIntensity, nextMoonIntensity) != 0) {
+                this.fsr.requestReset();
+                this.lastMoonPhaseToken = nextMoonPhaseToken;
+                this.lastMoonIntensity = nextMoonIntensity;
+            }
             RtestFsr3Upscaler.FrameToken fsrToken = this.fsr.beginFrame(
                 currentCamera, this.geometry.revision(), this.atlasImageView, this.atlasSampler);
             updateCamera(level, camera, fsrToken, currentCamera);
@@ -2688,10 +2839,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 // frame, after Minecraft has actually submitted the frame.
                 GpuFence fence = frameEncoder.createFence();
                 this.pendingFrameFence = fence;
+                this.dynamicBlasRetirement.submitted(holder.tlasBuildRecorded);
                 this.pendingFrameTimingFrame = (int)timingFrame;
                 this.pendingFrameGpuIndex = frameIndex;
                 int rebuiltDynamics = 0;
-                this.dynamicBlasBuildCommandCount += holder.dynamicBuilds.size();
+                this.dynamicInstances.recordBlasBuildCommands(holder.dynamicBuilds.size());
                 for (DynamicCachedBlas cached : holder.dynamicBuilds) {
                     if (cached.built) rebuiltDynamics++;
                     cached.built = true;
@@ -2703,12 +2855,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         "RTest dynamic animation: {} BLAS rebuild submitted before TLAS/trace", rebuiltDynamics);
                 }
                 this.topLevelUpdatePending = false;
-                this.dynamicHistoryResetPending = false;
+                this.dynamicInstances.historyResetSubmitted();
                 this.fsr.submitted(fsrToken);
                 if (frameIndex % 120 == 0) {
+                    RayTracingDynamicInstances.Stats dynamicStats = this.dynamicInstances.stats();
                     LOGGER.info(
-                        "RTest dynamic RT scheduling: frame={}, TLAS updates={}, BLAS build commands={}, metadata uploads={}",
-                        frameIndex, dynamicTlasUpdateCount, dynamicBlasBuildCommandCount, dynamicMetadataUploadCount);
+                        "RTest dynamic RT scheduling: frame={}, TLAS updates={}, BLAS build commands={}, deferred BLAS updates={}, material uploads={}, metadata uploads={}",
+                        frameIndex, dynamicStats.tlasUpdates(), dynamicStats.blasBuildCommands(),
+                        dynamicStats.deferredBlasUpdates(), dynamicStats.materialUploads(),
+                        dynamicStats.metadataUploads());
                 }
                 rendered = true;
                 return this.lastCenterPixel;
@@ -2818,6 +2973,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     // recording. Retire this fence at the start of the next RT frame just like a
                     // normal dispatch; submitting here would reorder the rest of the frame.
                     this.pendingFrameFence = fence;
+                    this.dynamicBlasRetirement.submitted(false);
                     this.pendingFrameTimingFrame = (int)this.dispatchTimingFrame;
                     this.pendingFrameGpuIndex = this.frameIndex;
                 }
@@ -2839,8 +2995,29 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
         private void recordBlas(org.lwjgl.vulkan.VkCommandBuffer commandBuffer, MemoryStack stack,
                                 AccelerationStructure blas, boolean update) {
+            if (blas.closed || blas.storage.closed || blas.inputBuffer == null || blas.inputBuffer.closed) {
+                throw new IllegalStateException("Attempted to build a closed acceleration structure resource");
+            }
             try (MemoryStack blasStack = MemoryStack.stackPush()) {
-                var info = blas.buildInfo(blasStack, scratchBuffer.deviceAddress(), update);
+                long scratchAlignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
+                long scratchBase = this.scratchBuffer.deviceAddress();
+                long scratchAddress = VulkanAccelerationResources.alignDeviceAddress(scratchBase, scratchAlignment);
+                long inputAddress = blas.inputBuffer.deviceAddress();
+                VulkanAccelerationResources.validateBuildArguments(
+                    blas.topLevel,
+                    inputAddress,
+                    blas.inputBuffer.size,
+                    blas.primitiveCount,
+                    scratchBase,
+                    scratchAddress,
+                    this.scratchBuffer.size,
+                    blas.scratchSize,
+                    scratchAlignment,
+                    blas.storage.size,
+                    blas.handle,
+                    update
+                );
+                var info = blas.buildInfo(blasStack, inputAddress, scratchAddress, update);
                 var range = VkAccelerationStructureBuildRangeInfoKHR.calloc(blasStack).primitiveCount(blas.primitiveCount);
                 KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(commandBuffer, info, blasStack.pointers(range.address()));
             }
@@ -2852,6 +3029,39 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                 KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
                     | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+        }
+
+        /** Vulkan's AS scratch alignment applies to the device address, not just buffer size. */
+        private long scratchDeviceAddress() {
+            long alignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
+            return this.scratchBuffer.alignedDeviceAddress(alignment);
+        }
+
+        private VkAccelerationStructureBuildGeometryInfoKHR.Buffer topLevelBuildInfo(
+            MemoryStack stack, boolean update) {
+            if (this.topLevel == null || this.topLevel.closed || this.topLevel.storage.closed
+                || this.topLevel.inputBuffer == null || this.topLevel.inputBuffer.closed) {
+                throw new IllegalStateException("Attempted to build a closed TLAS resource");
+            }
+            long scratchAlignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
+            long scratchBase = this.scratchBuffer.deviceAddress();
+            long scratchAddress = VulkanAccelerationResources.alignDeviceAddress(scratchBase, scratchAlignment);
+            long inputAddress = this.topLevel.inputBuffer.deviceAddress();
+            VulkanAccelerationResources.validateBuildArguments(
+                true,
+                inputAddress,
+                this.topLevel.inputBuffer.size,
+                this.topLevel.primitiveCount,
+                scratchBase,
+                scratchAddress,
+                this.scratchBuffer.size,
+                this.topLevel.scratchSize,
+                scratchAlignment,
+                this.topLevel.storage.size,
+                this.topLevel.handle,
+                update
+            );
+            return this.topLevel.buildInfo(stack, inputAddress, scratchAddress, update);
         }
 
         private void buildAccelerationStructuresIncrementally(RayTracingFrameTiming timing) {
@@ -2866,7 +3076,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_ACCESS_HOST_WRITE_BIT,
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                     KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK10.VK_ACCESS_SHADER_READ_BIT);
-                for (DynamicCachedBlas cached : dynamicBlas) {
+                for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
                     if (!needsIncrementalDynamicBuild(this.topLevelBuilt, cached.built, cached.pendingUpdate)
                             || newlyBuilt.size() >= BLAS_BUILDS_PER_FRAME) {
                         continue;
@@ -2886,7 +3096,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     newlyBuilt.add(cached);
                 }
                 boolean allBlasBuilt = true;
-                for (DynamicCachedBlas cached : dynamicBlas) {
+                for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
                     if (!cached.built && !newlyBuilt.contains(cached)) {
                         allBlasBuilt = false;
                         break;
@@ -2911,10 +3121,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                         KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
                     try (MemoryStack tlasStack = MemoryStack.stackPush()) {
-                        VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevel.buildInfo(
-                            tlasStack, scratchBuffer.deviceAddress(), topLevelUpdatePending);
+                        VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevelBuildInfo(
+                        tlasStack, topLevelUpdatePending);
                         VkAccelerationStructureBuildRangeInfoKHR tlasRange = VkAccelerationStructureBuildRangeInfoKHR
-                            .calloc(tlasStack).primitiveCount(sectionBlas.size() + dynamicSlotCapacity);
+                            .calloc(tlasStack).primitiveCount(topLevel.primitiveCount);
                         PointerBuffer tlasRanges = tlasStack.mallocPointer(1).put(tlasRange.address());
                         tlasRanges.flip();
                         KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(commandBuffer, tlasInfo, tlasRanges);
@@ -2953,6 +3163,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     if (allBlasBuilt) {
                         this.topLevelBuilt = true;
                         this.topLevelUpdatePending = false;
+                        // UPDATE may have read the source TLAS's old BLAS references. The build
+                        // fence above has retired, so replaced/removed BLAS resources are now safe.
+                        this.blasCache.retireCompleted();
+                        this.dynamicInstances.retireCompleted();
                     }
                 }
             } catch (Throwable throwable) {
@@ -3097,6 +3311,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (gpuTimestampsAvailable) {
                 VK10.vkCmdResetQueryPool(commandBuffer, gpuTimestampQueryPool, 0, GPU_TIMESTAMP_COUNT);
             }
+            writeGpuTimestamp(commandBuffer, 6, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            if (this.atmosphere != null) {
+                this.pendingAtmosphereToken = this.atmosphere.recordSky(commandBuffer,
+                    this.atmosphereEyeRadiusKm, this.currentSunDirectionY);
+                if (this.currentMoonSkyActive) {
+                    this.pendingMoonAtmosphereToken = this.atmosphere.recordMoonSky(commandBuffer,
+                        this.atmosphereEyeRadiusKm, this.currentMoonDirectionY);
+                }
+            }
+            writeGpuTimestamp(commandBuffer, 7, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             boolean terrainHistoryUsable = this.terrainTraversalEnabled && this.terrainTraversalPrimed
                 && !fsrToken.reset() && !fsrToken.cameraCut();
             boolean terrainTraversalMaskReset = this.terrainTraversalEnabled
@@ -3120,25 +3344,26 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     | KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                 KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK10.VK_ACCESS_SHADER_READ_BIT);
             // No outer '!built' gate: an already-built BLAS with new animation vertices also runs.
-            for (DynamicCachedBlas cached : dynamicBlas) {
+            for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
                 if (cached.built && !cached.pendingUpdate) continue;
                 // BUILD into the existing, correctly-sized AS storage. This avoids UPDATE's
                 // strict source-geometry identity contract while retaining stable AS addresses.
                 recordBlas(commandBuffer, stack, cached.bottomLevel, false);
                 dynamicBuilds.add(cached);
             }
-            if (this.topLevelBuilt && (this.topLevelUpdatePending
-                    || terrainHistoryUsable || terrainTraversalMaskReset)) {
+            boolean tlasBuildRecorded = this.topLevelBuilt && (this.topLevelUpdatePending
+                || terrainHistoryUsable || terrainTraversalMaskReset);
+            if (tlasBuildRecorded) {
                 barrier(commandBuffer, stack,
                     VK10.VK_PIPELINE_STAGE_HOST_BIT,
                     VK10.VK_ACCESS_HOST_WRITE_BIT,
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                     KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
                 try (MemoryStack tlasStack = MemoryStack.stackPush()) {
-                    VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevel.buildInfo(
-                        tlasStack, scratchBuffer.deviceAddress(), true);
+                    VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevelBuildInfo(
+                        tlasStack, true);
                     VkAccelerationStructureBuildRangeInfoKHR tlasRange = VkAccelerationStructureBuildRangeInfoKHR
-                        .calloc(tlasStack).primitiveCount(sectionBlas.size() + dynamicSlotCapacity);
+                        .calloc(tlasStack).primitiveCount(topLevel.primitiveCount);
                     PointerBuffer tlasRanges = tlasStack.mallocPointer(1).put(tlasRange.address());
                     tlasRanges.flip();
                     KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(commandBuffer, tlasInfo, tlasRanges);
@@ -3173,14 +3398,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
             VkStridedDeviceAddressRegionKHR raygen = VkStridedDeviceAddressRegionKHR.calloc(stack)
                 .deviceAddress(sbtAddress).stride(sbtStride).size(sbtStride);
             VkStridedDeviceAddressRegionKHR miss = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                .deviceAddress(sbtAddress + sbtStride).stride(sbtStride).size(2L * sbtStride);
+                .deviceAddress(sbtAddress + sbtStride).stride(sbtStride).size(3L * sbtStride);
             VkStridedDeviceAddressRegionKHR hit = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                .deviceAddress(sbtAddress + 3L * sbtStride).stride(sbtStride).size(2L * sbtStride);
+                .deviceAddress(sbtAddress + 4L * sbtStride).stride(sbtStride).size(3L * sbtStride);
             VkStridedDeviceAddressRegionKHR callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
             writeGpuTimestamp(commandBuffer, 0, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, outputWidth, outputHeight, 1);
             writeGpuTimestamp(commandBuffer, 1, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-            this.fsr.recordAfterRayTracing(commandBuffer, fsrToken);
+            this.fsr.recordAfterRayTracing(commandBuffer, fsrToken, this.aerialPerspectiveEnabled);
             this.terrainTraversalPrimed = this.terrainTraversalEnabled;
             writeGpuTimestamp(commandBuffer, 2, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             imageBarrier(commandBuffer, stack,
@@ -3227,12 +3452,28 @@ import com.rtest.client.fsr.RtestFsrSettings;
             int endResult = VK10.vkEndCommandBuffer(commandBuffer);
             commandBufferEnded = true;
             VulkanUtils.crashIfFailure(device, endResult, "Failed to end ray-tracing command buffer");
-            return new VkCommandBufferHolder(commandBuffer, dynamicBuilds);
+            return new VkCommandBufferHolder(commandBuffer, dynamicBuilds, tlasBuildRecorded);
             } catch (Throwable throwable) {
                 if (!commandBufferEnded) {
                     // The pass owns this direct command buffer, not VulkanCommandEncoder's
                     // private currentCommandBuffer slot; finish it before encoder.destroy().
                     VK10.vkEndCommandBuffer(commandBuffer);
+                }
+                if (this.pendingAtmosphereToken != 0L) {
+                    try {
+                        this.atmosphere.abandon(this.pendingAtmosphereToken);
+                        this.pendingAtmosphereToken = 0L;
+                    } catch (Throwable rollbackFailure) {
+                        throwable.addSuppressed(rollbackFailure);
+                    }
+                }
+                if (this.pendingMoonAtmosphereToken != 0L) {
+                    try {
+                        this.atmosphere.moonAbandon(this.pendingMoonAtmosphereToken);
+                        this.pendingMoonAtmosphereToken = 0L;
+                    } catch (Throwable rollbackFailure) {
+                        throwable.addSuppressed(rollbackFailure);
+                    }
                 }
                 throw throwable;
             }
@@ -3288,12 +3529,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[4];
+            double[] milliseconds = new double[5];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[3] = this.terrainTraversalEnabled
                 ? (values.get(5) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0 : 0.0;
+            milliseconds[4] = (values.get(7) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
             return milliseconds;
         }
 
@@ -3417,6 +3659,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(topLevel, failure);
             failure = closeAndCapture(shaderBindingTable, failure);
             failure = closeAndCapture(outputBuffer, failure);
+            failure = closeAndCapture(atmosphereCameraBuffer, failure);
+            failure = closeAndCapture(atmosphere, failure);
             failure = closeAndCapture(cameraBuffer, failure);
             failure = closeAndCapture(materialBuffer, failure);
             failure = closeAndCapture(lightDataBuffer, failure);
@@ -3427,12 +3671,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(scratchBuffer, failure);
             failure = closeAndCapture(instanceBuffer, failure);
             failure = closeAndCapture(dynamicMotionMetadataBuffer, failure);
-            failure = closeAndCapture(dynamicBlasCache, failure);
+            failure = closeAndCapture(dynamicInstances, failure);
             rethrow(failure);
         }
 
     private record VkCommandBufferHolder(org.lwjgl.vulkan.VkCommandBuffer commandBuffer,
-                                         List<DynamicCachedBlas> dynamicBuilds) {
+                                         List<DynamicCachedBlas> dynamicBuilds, boolean tlasBuildRecorded) {
     }
 
     private static String loadShaderResource(String path) {
@@ -3502,314 +3746,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
         }
     }
 
-    static final class AccelerationStructure implements AutoCloseable {
-        private final VulkanDevice device;
-        private final NativeBuffer storage;
-        private final long handle;
-        private final long deviceAddress;
-        private final long scratchSize;
-        private NativeBuffer inputBuffer;
-        private final boolean topLevel;
-        private final int primitiveCount;
-        private boolean closed;
-
-        private AccelerationStructure(
-            VulkanDevice device,
-            NativeBuffer storage,
-            long handle,
-            long deviceAddress,
-            long scratchSize,
-            NativeBuffer inputBuffer,
-            boolean topLevel,
-            int primitiveCount
-        ) {
-            this.device = device;
-            this.storage = storage;
-            this.handle = handle;
-            this.deviceAddress = deviceAddress;
-            this.scratchSize = scratchSize;
-            this.inputBuffer = inputBuffer;
-            this.topLevel = topLevel;
-            this.primitiveCount = primitiveCount;
-        }
-
-        private static AccelerationStructure createBottomLevel(VulkanDevice device, NativeBuffer vertices, int primitiveCount) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkAccelerationStructureGeometryTrianglesDataKHR triangles = VkAccelerationStructureGeometryTrianglesDataKHR
-                    .calloc(stack)
-                    .sType$Default()
-                    .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT)
-                    .vertexStride(3L * Float.BYTES)
-                    .maxVertex(primitiveCount * 3 - 1)
-                    .indexType(KHRAccelerationStructure.VK_INDEX_TYPE_NONE_KHR);
-                triangles.vertexData(address -> address.deviceAddress(vertices.deviceAddress()));
-                VkAccelerationStructureGeometryKHR geometry = VkAccelerationStructureGeometryKHR.calloc(stack)
-                    .sType$Default().geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR)
-                    .flags(0);
-                geometry.geometry().triangles(triangles);
-                return create(
-                    device,
-                    geometry,
-                    primitiveCount,
-                    KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-                    vertices,
-                    false
-                );
-            }
-        }
-
-        private static AccelerationStructure createTopLevel(VulkanDevice device, NativeBuffer instances, int instanceCount) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkAccelerationStructureGeometryInstancesDataKHR data = VkAccelerationStructureGeometryInstancesDataKHR
-                    .calloc(stack).sType$Default().arrayOfPointers(false);
-                data.data(address -> address.deviceAddress(instances.deviceAddress()));
-                VkAccelerationStructureGeometryKHR geometry = VkAccelerationStructureGeometryKHR.calloc(stack)
-                    .sType$Default().geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR)
-                    .flags(0);
-                geometry.geometry().instances(data);
-                return create(
-                    device,
-                    geometry,
-                    instanceCount,
-                    KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-                    instances,
-                    true
-                );
-            }
-        }
-
-        private static AccelerationStructure create(
-            VulkanDevice device,
-            VkAccelerationStructureGeometryKHR geometry,
-            int primitiveCount,
-            int type,
-            NativeBuffer inputBuffer,
-            boolean topLevel
-        ) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkAccelerationStructureBuildGeometryInfoKHR sizeInfo = VkAccelerationStructureBuildGeometryInfoKHR
-                    .calloc(stack).sType$Default().type(type).flags(
-                        KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
-                            | KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
-                    .mode(KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-                    .geometryCount(1).pGeometries(VkAccelerationStructureGeometryKHR.calloc(1, stack));
-                sizeInfo.pGeometries().get(0).set(geometry);
-                VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
-                KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR(
-                    device.vkDevice(),
-                    KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    sizeInfo,
-                    stack.ints(primitiveCount),
-                    sizes
-                );
-                long alignment = Math.max(1L, RayTracingSupport.queryLimits(device).minScratchAlignment());
-                NativeBuffer storage = NativeBuffer.create(
-                    device,
-                    alignUp(sizes.accelerationStructureSize(), alignment),
-                    KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
-                        | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    false
-                );
-                long accelerationStructure = VK10.VK_NULL_HANDLE;
-                try {
-                    VkAccelerationStructureCreateInfoKHR createInfo = VkAccelerationStructureCreateInfoKHR.calloc(stack)
-                        .sType$Default().buffer(storage.buffer).offset(0).size(sizes.accelerationStructureSize()).type(type);
-                    LongBuffer handle = stack.callocLong(1);
-                    VulkanUtils.crashIfFailure(
-                        device,
-                        KHRAccelerationStructure.vkCreateAccelerationStructureKHR(device.vkDevice(), createInfo, null, handle),
-                        "Failed to create acceleration structure"
-                    );
-                    accelerationStructure = handle.get(0);
-                    VkAccelerationStructureDeviceAddressInfoKHR addressInfo = VkAccelerationStructureDeviceAddressInfoKHR
-                        .calloc(stack).sType$Default().accelerationStructure(accelerationStructure);
-                    long deviceAddress = KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR(device.vkDevice(), addressInfo);
-                    return new AccelerationStructure(
-                        device,
-                        storage,
-                        accelerationStructure,
-                        deviceAddress,
-                        Math.max(sizes.buildScratchSize(), sizes.updateScratchSize()),
-                        inputBuffer,
-                        topLevel,
-                        primitiveCount
-                    );
-                } catch (Throwable throwable) {
-                    if (accelerationStructure != VK10.VK_NULL_HANDLE) {
-                        KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(
-                            device.vkDevice(), accelerationStructure, null);
-                    }
-                    storage.close();
-                    throw throwable;
-                }
-            }
-        }
-
-        private VkAccelerationStructureBuildGeometryInfoKHR.Buffer buildInfo(MemoryStack stack, long scratchAddress, boolean update) {
-            return buildInfo(stack, handle, inputBuffer.deviceAddress(), scratchAddress, primitiveCount, topLevel, update);
-        }
-
-        // Pure command encoding is also exercised without a Vulkan device by the contract tests.
-        static VkAccelerationStructureBuildGeometryInfoKHR.Buffer buildInfo(MemoryStack stack, long handle,
-                long inputAddress, long scratchAddress, int primitiveCount, boolean topLevel, boolean update) {
-            VkAccelerationStructureGeometryKHR.Buffer geometries = VkAccelerationStructureGeometryKHR.calloc(1, stack);
-            if (topLevel) {
-                VkAccelerationStructureGeometryInstancesDataKHR instances = VkAccelerationStructureGeometryInstancesDataKHR
-                    .calloc(stack).sType$Default().arrayOfPointers(false);
-                instances.data(address -> address.deviceAddress(inputAddress));
-                geometries.get(0).sType$Default()
-                    .geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR)
-                    .flags(0)
-                    .geometry().instances(instances);
-            } else {
-                VkAccelerationStructureGeometryTrianglesDataKHR triangles = VkAccelerationStructureGeometryTrianglesDataKHR
-                    .calloc(stack)
-                    .sType$Default()
-                    .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT)
-                    .vertexStride(3L * Float.BYTES)
-                    .maxVertex(primitiveCount * 3 - 1)
-                    .indexType(KHRAccelerationStructure.VK_INDEX_TYPE_NONE_KHR);
-                triangles.vertexData(address -> address.deviceAddress(inputAddress));
-                geometries.get(0).sType$Default()
-                    .geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR)
-                    .flags(0)
-                    .geometry().triangles(triangles);
-            }
-
-            VkAccelerationStructureBuildGeometryInfoKHR.Buffer info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
-            info.get(0).sType$Default()
-                .type(topLevel
-                    ? KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
-                    : KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
-                    | KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
-                .mode(update ? KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-                .srcAccelerationStructure(update ? handle : VK10.VK_NULL_HANDLE)
-                .dstAccelerationStructure(handle)
-                .geometryCount(1)
-                .pGeometries(geometries)
-                .scratchData(address -> address.deviceAddress(scratchAddress));
-            return info;
-        }
-
-        private void rebindInputBuffer(NativeBuffer inputBuffer) {
-            if (!this.topLevel) {
-                throw new IllegalStateException("Only TLAS input buffers can be rebound");
-            }
-            this.inputBuffer = inputBuffer;
-        }
-
-        @Override
-        public void close() {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            try {
-                KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device.vkDevice(), handle, null);
-            } finally {
-                storage.close();
-            }
-        }
-    }
-
-    private static final class NativeBuffer implements AutoCloseable {
-        private final VulkanDevice device;
-        private final long buffer;
-        private final long allocation;
-        private final long size;
-        private boolean closed;
-
-        private NativeBuffer(VulkanDevice device, long buffer, long allocation, long size) {
-            this.device = device;
-            this.buffer = buffer;
-            this.allocation = allocation;
-            this.size = size;
-        }
-
-        private static NativeBuffer create(VulkanDevice device, long size, int usage, boolean hostVisible) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                org.lwjgl.vulkan.VkBufferCreateInfo bufferInfo = org.lwjgl.vulkan.VkBufferCreateInfo.calloc(stack)
-                    .sType$Default().size(size).usage(usage).sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
-                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
-                if (hostVisible) {
-                    allocationInfo.requiredFlags(VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-                }
-                LongBuffer bufferHandle = stack.callocLong(1);
-                PointerBuffer allocationHandle = stack.callocPointer(1);
-                VulkanUtils.crashIfFailure(
-                    device,
-                    Vma.vmaCreateBuffer(device.vma(), bufferInfo, allocationInfo, bufferHandle, allocationHandle, null),
-                    "Failed to create ray-tracing buffer"
-                );
-                long buffer = bufferHandle.get(0);
-                long allocation = allocationHandle.get(0);
-                try {
-                    return new NativeBuffer(device, buffer, allocation, size);
-                } catch (Throwable throwable) {
-                    Vma.vmaDestroyBuffer(device.vma(), buffer, allocation);
-                    throw throwable;
-                }
-            }
-        }
-
-        private Mapped map() {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                PointerBuffer mapped = stack.callocPointer(1);
-                VulkanUtils.crashIfFailure(device, Vma.vmaMapMemory(device.vma(), allocation, mapped), "Failed to map ray-tracing buffer");
-                try {
-                    return new Mapped(MemoryUtil.memByteBuffer(mapped.get(0), Math.toIntExact(size)));
-                } catch (Throwable throwable) {
-                    Vma.vmaUnmapMemory(device.vma(), allocation);
-                    throw throwable;
-                }
-            }
-        }
-
-        private final class Mapped implements AutoCloseable {
-            private final ByteBuffer buffer;
-            private boolean closed;
-
-            private Mapped(ByteBuffer buffer) {
-                this.buffer = buffer;
-            }
-
-            private ByteBuffer buffer() {
-                return this.buffer;
-            }
-
-            @Override
-            public void close() {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                try {
-                    Vma.vmaFlushAllocation(device.vma(), allocation, 0L, VK10.VK_WHOLE_SIZE);
-                } finally {
-                    Vma.vmaUnmapMemory(device.vma(), allocation);
-                }
-            }
-        }
-
-        private long deviceAddress() {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                var addressInfo = org.lwjgl.vulkan.VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer);
-                return VK12.vkGetBufferDeviceAddress(device.vkDevice(), addressInfo);
-            }
-        }
-
-        @Override
-        public void close() {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            Vma.vmaDestroyBuffer(device.vma(), buffer, allocation);
-        }
-    }
-
     private static void closeDuringFailure(AutoCloseable resource, Throwable failure) {
         if (resource == null) {
             return;
@@ -3855,10 +3791,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
     private static int alignUp(int value, int alignment) {
         return (value + alignment - 1) / alignment * alignment;
-    }
-
-    private static long alignUp(long value, long alignment) {
-        return (value + alignment - 1L) / alignment * alignment;
     }
 
     boolean hasPresentedFrame() {

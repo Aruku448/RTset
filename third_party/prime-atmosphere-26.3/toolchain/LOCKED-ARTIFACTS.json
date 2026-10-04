@@ -1,0 +1,47 @@
+{
+  "upstream_commit": "3ab5f75e33de3f6947e96f4a4dd1406588e9e98b",
+  "mode": "locked",
+  "required_compiler": "2026.13.1-1-g84792eb15",
+  "actual_compiler": "2026.13.1-1-g84792eb15",
+  "compiler_sha256": "2fbe224d2fec0456ad07cb80fb78a21481e84aff008e3f5df3ac25abbd474983",
+  "compiler_libraries": {
+    "lib/libslang-compiler.so": "2b54cc1f816e6deac462620d0a7f0173fb6270e7427d59bca2a3f407e1f65e5c",
+    "lib/libslang-compiler.so.0.2026.13.1": "2b54cc1f816e6deac462620d0a7f0173fb6270e7427d59bca2a3f407e1f65e5c",
+    "lib/libslang-glsl-module-2026.13.1.so": "7ca67a9d9f470d9c797727fc48c550f63848b584dd4f96b0e81e31099a2a9416",
+    "lib/libslang-glslang-2026.13.1.so": "0daacbdd06aeaeaa224159573a97ea104cc5d9b05df7511015ad089585e4ba8d"
+  },
+  "source_manifest_sha256": "d6b4dfde8f269e0e75de51d1f5fa49e4d5e8429934b6f9d77b95090eb0ff4c1f",
+  "generated_scalar_abi_sha256": "88391a7a24edf1d16704eb4d61316e2f5aeaa1e8cc6392b8280f58fdaf483e5c",
+  "target": "spirv1.5/vulkan1.2",
+  "runtime_integrated": false,
+  "binaries": {
+    "atmosphere_transmittance.comp.spv": {
+      "sha256": "91995e8c20fa0e7ade0630fecf51cab3bd150da8399420597f7f3699872dc9d1",
+      "bytes": 3952
+    },
+    "atmosphere_directions.comp.spv": {
+      "sha256": "47d0935236edaf56ba535d942b1c17c334c3296b0d1057c7c130f207f44ebf78",
+      "bytes": 4008
+    },
+    "atmosphere_incident.comp.spv": {
+      "sha256": "0a4596b9e75ceab800936dd8e24ce864eaafcd8b60792590c63a3c67881315d7",
+      "bytes": 25380
+    },
+    "atmosphere_moments.comp.spv": {
+      "sha256": "17b74a43964a749fbc65ad9efe9ae2d285e08e503d78891a9aa5974a37ab2ebf",
+      "bytes": 5316
+    },
+    "atmosphere_multi_scattering.comp.spv": {
+      "sha256": "7680e06882bc6a6f285293b46663c3c740d35eeefd1f94473dbc5124b10e9e0e",
+      "bytes": 7908
+    },
+    "atmosphere_ground.comp.spv": {
+      "sha256": "3de8207d522d6157ffaf686e03e579e08be68e9e4d55dcce4f91cdf1b0fe8c18",
+      "bytes": 4756
+    },
+    "atmosphere_sky.comp.spv": {
+      "sha256": "e9bc9d54bb23a11e6b247c1f629483b92260eb78d4e20286c1a3cc7c958289b5",
+      "bytes": 33480
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "scope": "glslang -V -Os --target-env vulkan1.2, NOT GPU frame-time/pixel comparison",
+  "raygen": {
+    "before": {
+      "bytes": 144128,
+      "instructions": 7814,
+      "imageWrites": 16,
+      "sha256": "cbfb944fa6ee4dc1722d1b4e9f05ddb9dddd9aaca39f3dd57f015ee7a9c20194"
+    },
+    "after": {
+      "bytes": 140012,
+      "instructions": 7593,
+      "imageWrites": 16,
+      "sha256": "2d6b1c8fa6df7c5aaeb24f2190c6002dc78a25cf52fbac26e03bb8233c91d45f"
+    }
+  },
+  "closestHit": {
+    "before": {
+      "bytes": 37132,
+      "instructions": 2144,
+      "imageWrites": 0,
+      "sha256": "63d6a2a24b62553578c765f8d451e0d5a89542e70f712329131583da126dac15"
+    },
+    "after": {
+      "bytes": 37132,
+      "instructions": 2144,
+      "imageWrites": 0,
+      "sha256": "63d6a2a24b62553578c765f8d451e0d5a89542e70f712329131583da126dac15"
+    }
+  },
+  "sourceLines": {
+    "RayTracingShaderRaygen.java": {
+      "before": 1890,
+      "after": 1785
+    },
+    "RayTracingShaderStages.java": {
+      "before": 700,
+      "after": 359
+    },
+    "RayTracingShaders.java": {
+      "before": 17,
+      "after": 14
+    },
+    "RayTracingVulkanPass.java": {
+      "before": 3409,
+      "after": 3411
+    },
+    "RayTracingDynamicInstances.java": {
+      "before": 748,
+      "after": 752
+    },
+    "NrdDenoiser.java": {
+      "before": 2154,
+      "after": 2162
+    }
+  }
+}

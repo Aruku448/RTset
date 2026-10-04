@@ -1,0 +1,201 @@
+{
+  "log_sha256": "75eb5c216a2f10bb2876a6ba06996f6ce489dd286a9b5522a5a0d2401917b138",
+  "requested_window": {
+    "since": "17:59:43",
+    "until": "18:00:10"
+  },
+  "sample_window": {
+    "first": "17:59:49",
+    "last": "17:59:58"
+  },
+  "scope_sample_counts": {
+    "vulkan_dispatch_cpu": 2,
+    "smoke_run_cpu": 2,
+    "gpu": 2
+  },
+  "statistics": {
+    "vulkan_dispatch_cpu": {
+      "resource_match": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "resource_rebuild": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "dynamic_update": {
+        "n": 2,
+        "mean_ms": 0.0185,
+        "median_ms": 0.0185,
+        "p95_ms": 0.021,
+        "min_ms": 0.016,
+        "max_ms": 0.021
+      },
+      "pbr_sync": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 2,
+        "mean_ms": 0.062,
+        "median_ms": 0.062,
+        "p95_ms": 0.066,
+        "min_ms": 0.058,
+        "max_ms": 0.066
+      },
+      "fence_wait_cpu": {
+        "n": 2,
+        "mean_ms": 68.704,
+        "median_ms": 68.704,
+        "p95_ms": 69.019,
+        "min_ms": 68.389,
+        "max_ms": 69.019
+      },
+      "readback": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "smoke_run_cpu": {
+      "resource_match": {
+        "n": 2,
+        "mean_ms": 0.0005,
+        "median_ms": 0.0005,
+        "p95_ms": 0.001,
+        "min_ms": 0.0,
+        "max_ms": 0.001
+      },
+      "resource_rebuild": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "dynamic_update": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "pbr_sync": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "fence_wait_cpu": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "readback": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "gpu": {
+      "rt": {
+        "n": 2,
+        "mean_ms": 67.978,
+        "median_ms": 67.978,
+        "p95_ms": 68.026,
+        "min_ms": 67.93,
+        "max_ms": 68.026
+      },
+      "post_rt": {
+        "n": 2,
+        "mean_ms": 1.645,
+        "median_ms": 1.645,
+        "p95_ms": 1.647,
+        "min_ms": 1.643,
+        "max_ms": 1.647
+      },
+      "total": {
+        "n": 2,
+        "mean_ms": 69.679,
+        "median_ms": 69.679,
+        "p95_ms": 69.725,
+        "min_ms": 69.633,
+        "max_ms": 69.725
+      },
+      "terrain_traversal": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "atmosphere_lut": {
+        "n": 2,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    }
+  },
+  "notes": [
+    "All durations are milliseconds.",
+    "CPU waits overlap GPU work; do not sum CPU and GPU durations.",
+    "Zero in sampled frames does not imply a stage is free or never executed.",
+    "GPU results are asynchronous; configuration-change boundaries are ambiguous.",
+    "Select a stable resolution, denoiser and offline-mode window before comparing.",
+    "P95 uses nearest rank; sparse samples are not full-frame P95."
+  ],
+  "source": "/home/aruku/.minecraft/versions/RTest/logs/latest.log"
+}

@@ -13,6 +13,8 @@ public final class RtActivationContractTest {
             "src/main/java/com/rtest/client/RayTracingProbe.java")).replace("\r\n", "\n");
         String settings = Files.readString(Path.of(
             "src/main/java/com/rtest/client/RayTracingSettingsScreen.java")).replace("\r\n", "\n");
+        String config = Files.readString(Path.of(
+            "src/main/java/com/rtest/client/RayTracingClientConfig.java")).replace("\r\n", "\n");
 
         require(probe, "RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.set(true)");
 
@@ -37,6 +39,53 @@ public final class RtActivationContractTest {
         require(probe, "RtActivationFreeze.mayPublishFullSnapshot(");
         require(probe, "RtActivationFreeze.holdIncrementalUpdates(activationFreeze, smokeGeometry != null)");
         require(probe, "activationFreeze = false;");
+        require(config, ".define(\"terrainLodEnabled\", true);");
+
+        int renderFailure = probe.indexOf("public static void renderRtAfterHandCapture()");
+        int renderEnd = probe.indexOf("/** Consumes model vertices", renderFailure);
+        String renderSource = probe.substring(renderFailure, renderEnd);
+        require(probe, "MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL =\n        MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY");
+        require(renderSource, "terrainLodGpuTraversalActive");
+        require(renderSource, "RT_RETRY_BASE_DELAY_NANOS << (rtFailureCount - 1)");
+        if (renderSource.contains("stopSmokeTestResources();")) {
+            throw new AssertionError("A transient Vulkan presentation failure must not disable RT activation");
+        }
+
+        int effectiveLodStart = probe.indexOf("private static void updateTerrainLod(");
+        int effectiveLodEnd = probe.indexOf("private static void logTerrainLodState(", effectiveLodStart);
+        String effectiveLodSource = probe.substring(effectiveLodStart, effectiveLodEnd);
+        require(effectiveLodSource, "smokeGeometry.triangleCount() <= MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL");
+        require(effectiveLodSource, "if (terrainLodScheduler != null || terrainLodSourceGeometry != null)");
+        require(effectiveLodSource, "candidateTriangleCount > MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL");
+        require(effectiveLodSource, "&& !terrainLodGpuCandidateLimitExceeded;");
+        require(effectiveLodSource, "gpuTraversalEnabled &= terrainLodPending.isEmpty();");
+        require(effectiveLodSource, "compositionNeeded |= terrainLodCompositionPending");
+        require(effectiveLodSource, "TERRAIN_COMPOSITION_EXECUTOR");
+
+        int prepareStart = probe.indexOf("public static void prepareLevelRender()");
+        int renderStart = probe.indexOf("public static void renderRtAfterHandCapture()");
+        String prepareSource = probe.substring(prepareStart, renderStart);
+        int lodUpdate = prepareSource.indexOf("updateTerrainLod(camera);");
+        int activationFreezeGuard = prepareSource.indexOf(
+            "if (RtActivationFreeze.holdIncrementalUpdates(activationFreeze, smokeGeometry != null))");
+        if (lodUpdate < 0 || activationFreezeGuard < 0 || lodUpdate > activationFreezeGuard) {
+            throw new AssertionError(
+                "terrain LOD must progress before the activation-freeze return so oversized scenes can reach RT");
+        }
+        int lodStart = probe.indexOf("private static void updateTerrainLod(");
+        int lodEnd = probe.indexOf("private static void logTerrainLodState(", lodStart);
+        String lodSource = probe.substring(lodStart, lodEnd);
+        int selectionGate = lodSource.indexOf("if (selectionUpdateDue)");
+        int hierarchyBuild = lodSource.indexOf("RayTracingTerrainLod.fromNodes(hierarchyNodes)");
+        if (selectionGate < 0 || hierarchyBuild < selectionGate) {
+            throw new AssertionError("terrain LOD hierarchy selection must be cached between state changes");
+        }
+        require(probe, "TERRAIN_LOD_SELECTION_INTERVAL_NANOS = 1_000_000_000L;");
+        require(lodSource, "terrainLodScheduler.poll(budget, terrainLodSourceGeneration,");
+        require(lodSource, "new RayTracingTerrainLodScheduler.NodeKey(id), terrainLodSourceGeneration,");
+        if (lodSource.contains("terrainLodSceneGeneration != sceneGeneration")) {
+            throw new AssertionError("pending block events must not cancel builds for an unchanged LOD source snapshot");
+        }
 
         if (!probe.contains("GUI widgets are drawn after this seam. Keep RT active underneath them;")) {
             throw new AssertionError("GUI screens must keep RT active underneath the GUI");

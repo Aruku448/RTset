@@ -1,0 +1,53 @@
+{
+  "log_sha256": "b4e51f299379b2a130d9fe4f09776753ed9729080658241f9f2fc5c2004de6b9",
+  "bootstrap": [
+    {
+      "time": "16:28:25",
+      "wall_ms": 827
+    },
+    {
+      "time": "16:28:38",
+      "wall_ms": 752
+    },
+    {
+      "time": "16:32:32",
+      "wall_ms": 764
+    },
+    {
+      "time": "16:33:42",
+      "wall_ms": 752
+    },
+    {
+      "time": "16:33:46",
+      "wall_ms": 751
+    }
+  ],
+  "gpu_samples": 62,
+  "lut_samples_positive": [
+    {
+      "time": "16:32:44",
+      "frame": 360.0,
+      "rt_ms": 32.626,
+      "post_rt_ms": 5.492,
+      "total_ms": 38.162,
+      "terrain_traversal_ms": 0.0,
+      "period_ns": 10.0,
+      "atmosphere_lut_ms": 1.134
+    },
+    {
+      "time": "16:33:58",
+      "frame": 360.0,
+      "rt_ms": 19.427,
+      "post_rt_ms": 4.203,
+      "total_ms": 23.652,
+      "terrain_traversal_ms": 0.0,
+      "period_ns": 10.0,
+      "atmosphere_lut_ms": 0.568
+    }
+  ],
+  "notes": [
+    "GPU timing is sampled every 120 frames; zero samples are not proof of zero update cost or update frequency.",
+    "Bootstrap wall time includes allocation, driver pipeline compilation, submissions and waits.",
+    "RT query includes material/lighting/finite-volume/LUT consumers; no controlled A/B is available."
+  ]
+}

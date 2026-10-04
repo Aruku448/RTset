@@ -1,0 +1,48 @@
+{
+  "area_shadow_endpoint": {
+    "old_tmax": 10.0,
+    "target_intersection_t": 9.998,
+    "target_is_inside_shadow_segment": true
+  },
+  "rough_transparent_emitter": {
+    "area_nee_enabled": false,
+    "emitter_hit_suppressed": true
+  },
+  "rough_transparent_sky": {
+    "sky_nee_enabled": false,
+    "unpaired_bsdf_mis_weight_fixture": 0.2,
+    "correct_exclusive_bsdf_weight": 1.0
+  },
+  "control_variate_clamp": {
+    "raw_samples": [
+      -9.0,
+      9.0
+    ],
+    "raw_expectation": 0.0,
+    "clamped_expectation": 4.5,
+    "reference": 0.0
+  },
+  "light_tree_float32": {
+    "actual_right_branch_probability": 0.0,
+    "reverse_queried_right_probability": 9.99999993922529e-09
+  },
+  "dielectric_closure": {
+    "ior": 1.5,
+    "authored_f0": 0.5,
+    "branch_f0": 0.04000000000000001,
+    "reflected_plus_transmitted": 1.46
+  },
+  "spectral_rgb_composition": {
+    "project_after_product": [
+      0.24952251390788346,
+      0.29450385600826023,
+      0.2446951181822255
+    ],
+    "product_after_projection": [
+      0.26077939632984803,
+      0.297590754141425,
+      0.24598671833653094
+    ]
+  },
+  "scope": "Synthetic counterexamples for current formulas/call-site gates; not an actual GPU scene replay."
+}

@@ -31,16 +31,80 @@ final class RayTracingLightTree {
     private RayTracingLightTree() {
     }
 
+    /** Snapshot-local reuse only: identical ordered scalar inputs imply identical packed words. */
+    static Data buildOrReuse(RayTracingScene.SceneGeometry previous,
+                            List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
+                            double originX, double originY, double originZ,
+                            RayTracingMaterialBuffer.Layout materialLayout) {
+        if (previous != null && sameLightInputs(previous, sections, originX, originY, originZ, materialLayout)) {
+            return previous.lightTree;
+        }
+        return build(sections, originX, originY, originZ, materialLayout);
+    }
+
+    private static final int[] LIGHT_MATERIAL_INPUTS = {0, 1, 2, 4, 5, 6, 15, 22};
+
+    private static boolean sameLightInputs(RayTracingScene.SceneGeometry previous,
+                                          List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
+                                          double originX, double originY, double originZ,
+                                          RayTracingMaterialBuffer.Layout layout) {
+        if (Double.doubleToRawLongBits(previous.originX) != Double.doubleToRawLongBits(originX)
+                || Double.doubleToRawLongBits(previous.originY) != Double.doubleToRawLongBits(originY)
+                || Double.doubleToRawLongBits(previous.originZ) != Double.doubleToRawLongBits(originZ)
+                || previous.materialLayout.highWaterTriangle() != layout.highWaterTriangle()
+                || previous.lightTree.words()[5] != layout.highWaterTriangle()) return false;
+        int oldIndex = 0;
+        for (RayTracingScene.SceneGeometry.SectionGeometry next : sections) {
+            if (next.emissiveTriangles.length == 0) continue;
+            while (oldIndex < previous.sections.size()
+                    && previous.sections.get(oldIndex).emissiveTriangles.length == 0) oldIndex++;
+            if (oldIndex == previous.sections.size()) return false;
+            RayTracingScene.SceneGeometry.SectionGeometry old = previous.sections.get(oldIndex++);
+            if (previous.materialLayout.baseTriangle(old) != layout.baseTriangle(next)) return false;
+            if (old == next) continue;
+            // Keep source order, candidate indices and raw bits: stable sort ties and floating
+            // accumulation order must match. Never use a hash as proof of equality.
+            if (old.originX != next.originX || old.originY != next.originY || old.originZ != next.originZ
+                    || !Arrays.equals(old.emissiveTriangles, next.emissiveTriangles)) return false;
+            for (int triangle : next.emissiveTriangles) {
+                for (int v = triangle * 9; v < triangle * 9 + 9; v++) {
+                    if (Float.floatToRawIntBits(old.vertices[v]) != Float.floatToRawIntBits(next.vertices[v])) return false;
+                }
+                for (int field : LIGHT_MATERIAL_INPUTS) {
+                    int m = triangle * MATERIAL_STRIDE + field;
+                    if (Float.floatToRawIntBits(old.materialData[m]) != Float.floatToRawIntBits(next.materialData[m])) return false;
+                }
+            }
+        }
+        while (oldIndex < previous.sections.size()
+                && previous.sections.get(oldIndex).emissiveTriangles.length == 0) oldIndex++;
+        return oldIndex == previous.sections.size();
+    }
+
     static Data build(List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
                       float[] materialData, double originX, double originY, double originZ) {
+        return build(sections, originX, originY, originZ,
+            RayTracingMaterialBuffer.Layout.compact(sections));
+    }
+
+    static Data build(List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
+                      double originX, double originY, double originZ) {
+        return build(sections, originX, originY, originZ,
+            RayTracingMaterialBuffer.Layout.compact(sections));
+    }
+
+    static Data build(List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
+                      double originX, double originY, double originZ,
+                      RayTracingMaterialBuffer.Layout materialLayout) {
         List<Emitter> emitters = new ArrayList<>();
-        int materialIndex = 0;
-        int[] materialToEmitter = new int[materialData.length / MATERIAL_STRIDE];
+        int[] materialToEmitter = new int[materialLayout.highWaterTriangle()];
         Arrays.fill(materialToEmitter, -1);
         for (RayTracingScene.SceneGeometry.SectionGeometry section : sections) {
-            for (int triangle = 0; triangle < section.triangleCount(); triangle++) {
-                int materialOffset = materialIndex * MATERIAL_STRIDE;
-                float emission = materialData[materialOffset + 22];
+            int materialBase = materialLayout.baseTriangle(section);
+            float[] sectionMaterials = section.materialData;
+            for (int triangle : section.emissiveTriangles) {
+                int materialOffset = triangle * MATERIAL_STRIDE;
+                float emission = sectionMaterials[materialOffset + 22];
                 if (emission > 0.0F && Float.isFinite(emission)) {
                     int vertexOffset = triangle * 9;
                     float ax = (float)(section.originX - originX) + section.vertices[vertexOffset];
@@ -73,7 +137,7 @@ final class RayTracingLightTree {
                         // normalized radiance.
                         float emitterEmission = emission * REFERENCE_EMITTER_AREA / area;
                         float power = area * (float)Math.PI * emitterEmission
-                            * emitterImportance(materialData, materialOffset);
+                            * emitterImportance(sectionMaterials, materialOffset);
                         if (!(power > 0.0F) || !Float.isFinite(power)) {
                             continue;
                         }
@@ -81,9 +145,9 @@ final class RayTracingLightTree {
                         // not guaranteed to match the face direction used by the hit shader; if
                         // we retain the cross-product sign, the source can be visible while its
                         // area-light cosine rejects every shadow ray on that face.
-                        float emitterNormalX = materialData[materialOffset + MATERIAL_NORMAL_OFFSET];
-                        float emitterNormalY = materialData[materialOffset + MATERIAL_NORMAL_OFFSET + 1];
-                        float emitterNormalZ = materialData[materialOffset + MATERIAL_NORMAL_OFFSET + 2];
+                        float emitterNormalX = sectionMaterials[materialOffset + MATERIAL_NORMAL_OFFSET];
+                        float emitterNormalY = sectionMaterials[materialOffset + MATERIAL_NORMAL_OFFSET + 1];
+                        float emitterNormalZ = sectionMaterials[materialOffset + MATERIAL_NORMAL_OFFSET + 2];
                         float normalLength = (float)Math.sqrt(
                             emitterNormalX * emitterNormalX
                                 + emitterNormalY * emitterNormalY
@@ -99,13 +163,13 @@ final class RayTracingLightTree {
                             emitterNormalZ *= normalInverse;
                         }
                         int emitterIndex = emitters.size();
+                        int materialIndex = materialBase + triangle;
                         emitters.add(new Emitter(ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z,
                             emitterNormalX, emitterNormalY, emitterNormalZ, area, emitterEmission, power,
                             materialIndex, emitterIndex));
                         materialToEmitter[materialIndex] = emitterIndex;
                     }
                 }
-                materialIndex++;
             }
         }
         return Data.create(emitters, materialToEmitter);
@@ -173,22 +237,24 @@ final class RayTracingLightTree {
                 }
                 return new Data(words, 0);
             }
-            List<Emitter> emitters = new ArrayList<>(source);
-            List<Node> nodes = new ArrayList<>(emitters.size() * 2 - 1);
-            int[] leafNodes = new int[emitters.size()];
+            Emitter[] emitters = source.toArray(Emitter[]::new);
+            List<Node> nodes = new ArrayList<>(emitters.length * 2 - 1);
+            int[] leafNodes = new int[emitters.length];
             Arrays.fill(leafNodes, -1);
-            nodes.add(Node.create(emitters, 0, emitters.size(), -1));
-            populate(emitters, 0, emitters.size(), 0, nodes, leafNodes);
+            RadixWorkspace sorter = emitters.length >= RadixWorkspace.MIN_RADIX_SIZE
+                ? new RadixWorkspace(emitters.length) : null;
+            nodes.add(Node.create(emitters, 0, emitters.length, -1));
+            populate(emitters, 0, emitters.length, 0, nodes, leafNodes, sorter);
 
             int nodeOffset = HEADER_WORDS;
             int forwardOffset = nodeOffset + nodes.size() * NODE_WORDS;
             int reverseOffset = forwardOffset + nodes.size();
             int emitterOffset = reverseOffset + nodes.size();
-            int materialMapOffset = emitterOffset + emitters.size() * EMITTER_WORDS;
+            int materialMapOffset = emitterOffset + emitters.length * EMITTER_WORDS;
             int leafNodeOffset = materialMapOffset + materialToEmitter.length;
-            int[] words = new int[leafNodeOffset + emitters.size()];
+            int[] words = new int[leafNodeOffset + emitters.length];
             words[0] = nodes.size();
-            words[1] = emitters.size();
+            words[1] = emitters.length;
             words[2] = forwardOffset;
             words[3] = reverseOffset;
             words[4] = emitterOffset;
@@ -233,33 +299,37 @@ final class RayTracingLightTree {
                 words[cursor++] = Float.floatToRawIntBits(emitter.nz);
                 words[cursor++] = emitter.materialIndex;
             }
-            int[] packedEmitterBySource = new int[emitters.size()];
-            for (int packed = 0; packed < emitters.size(); packed++) {
-                packedEmitterBySource[emitters.get(packed).sourceIndex] = packed;
+            int[] packedEmitterBySource = new int[emitters.length];
+            for (int packed = 0; packed < emitters.length; packed++) {
+                packedEmitterBySource[emitters[packed].sourceIndex] = packed;
             }
             for (int i = 0; i < materialToEmitter.length; i++) {
                 int sourceEmitter = materialToEmitter[i];
                 words[materialMapOffset + i] = sourceEmitter < 0 ? -1 : packedEmitterBySource[sourceEmitter];
             }
-            for (int packed = 0; packed < emitters.size(); packed++) {
-                words[leafNodeOffset + packed] = leafNodes[emitters.get(packed).sourceIndex];
+            for (int packed = 0; packed < emitters.length; packed++) {
+                words[leafNodeOffset + packed] = leafNodes[emitters[packed].sourceIndex];
             }
-            return new Data(words, emitters.size());
+            return new Data(words, emitters.length);
         }
 
         int[] words() { return this.words; }
         int emitterCount() { return this.emitterCount; }
 
-        private static void populate(List<Emitter> emitters, int start, int end, int nodeIndex,
-                                     List<Node> nodes, int[] leafNodes) {
+        private static void populate(Emitter[] emitters, int start, int end, int nodeIndex,
+                                     List<Node> nodes, int[] leafNodes, RadixWorkspace sorter) {
             Node node = nodes.get(nodeIndex);
             if (end - start == 1) {
                 node.left = start;
-                leafNodes[emitters.get(start).sourceIndex] = nodeIndex;
+                leafNodes[emitters[start].sourceIndex] = nodeIndex;
                 return;
             }
             int axis = node.longestAxis();
-            emitters.subList(start, end).sort(Comparator.comparingDouble(e -> e.center(axis)));
+            if (end - start < RadixWorkspace.MIN_RADIX_SIZE) {
+                Arrays.sort(emitters, start, end, RadixWorkspace.comparator(axis));
+            } else {
+                sorter.sort(emitters, start, end, axis);
+            }
             int middle = start + (end - start) / 2;
             int left = nodes.size();
             nodes.add(Node.create(emitters, start, middle, nodeIndex));
@@ -267,8 +337,57 @@ final class RayTracingLightTree {
             nodes.add(Node.create(emitters, middle, end, nodeIndex));
             node.left = left;
             node.right = right;
-            populate(emitters, start, middle, left, nodes, leafNodes);
-            populate(emitters, middle, end, right, nodes, leafNodes);
+            populate(emitters, start, middle, left, nodes, leafNodes, sorter);
+            populate(emitters, middle, end, right, nodes, leafNodes, sorter);
+        }
+    }
+
+    /** Stable IEEE-float order, identical to comparingDouble(float), including -0 and NaN. */
+    private static int floatSortKey(float value) {
+        int bits = Float.floatToIntBits(value);
+        return bits < 0 ? ~bits : bits ^ Integer.MIN_VALUE;
+    }
+
+    /** One scratch array per build; four stable byte passes give O(k) sorting at each node. */
+    private static final class RadixWorkspace {
+        static final int MIN_RADIX_SIZE = 128;
+        private static final Comparator<Emitter> X = (a, b) -> Integer.compareUnsigned(a.keyX, b.keyX);
+        private static final Comparator<Emitter> Y = (a, b) -> Integer.compareUnsigned(a.keyY, b.keyY);
+        private static final Comparator<Emitter> Z = (a, b) -> Integer.compareUnsigned(a.keyZ, b.keyZ);
+        private final Emitter[] scratch;
+        private final int[] counts = new int[256];
+
+        RadixWorkspace(int size) {
+            scratch = new Emitter[size];
+        }
+
+        static Comparator<Emitter> comparator(int axis) {
+            return axis == 0 ? X : axis == 1 ? Y : Z;
+        }
+
+        void sort(Emitter[] emitters, int start, int end, int axis) {
+            Emitter[] from = emitters, to = scratch;
+            for (int shift = 0; shift < 32; shift += 8) {
+                Arrays.fill(counts, 0);
+                for (int i = start; i < end; i++) {
+                    counts[(from[i].sortKey(axis) >>> shift) & 255]++;
+                }
+                int cursor = start;
+                for (int bucket = 0; bucket < counts.length; bucket++) {
+                    int length = counts[bucket];
+                    counts[bucket] = cursor;
+                    cursor += length;
+                }
+                for (int i = start; i < end; i++) {
+                    Emitter emitter = from[i];
+                    int bucket = (emitter.sortKey(axis) >>> shift) & 255;
+                    to[counts[bucket]++] = emitter;
+                }
+                Emitter[] swap = from;
+                from = to;
+                to = swap;
+            }
+            // Four passes finish in the original array; neither children nor siblings need copies.
         }
     }
 
@@ -276,18 +395,18 @@ final class RayTracingLightTree {
         float minX, minY, minZ, maxX, maxY, maxZ, power, softening;
         int parent, left = -1, right = -1;
 
-        static Node create(List<Emitter> emitters, int start, int end, int parent) {
+        static Node create(Emitter[] emitters, int start, int end, int parent) {
             Node node = new Node();
             node.minX = node.minY = node.minZ = Float.POSITIVE_INFINITY;
             node.maxX = node.maxY = node.maxZ = Float.NEGATIVE_INFINITY;
             for (int i = start; i < end; i++) {
-                Emitter e = emitters.get(i);
-                node.minX = Math.min(node.minX, Math.min(e.ax, Math.min(e.ax + e.e1x, e.ax + e.e2x)));
-                node.minY = Math.min(node.minY, Math.min(e.ay, Math.min(e.ay + e.e1y, e.ay + e.e2y)));
-                node.minZ = Math.min(node.minZ, Math.min(e.az, Math.min(e.az + e.e1z, e.az + e.e2z)));
-                node.maxX = Math.max(node.maxX, Math.max(e.ax, Math.max(e.ax + e.e1x, e.ax + e.e2x)));
-                node.maxY = Math.max(node.maxY, Math.max(e.ay, Math.max(e.ay + e.e1y, e.ay + e.e2y)));
-                node.maxZ = Math.max(node.maxZ, Math.max(e.az, Math.max(e.az + e.e1z, e.az + e.e2z)));
+                Emitter e = emitters[i];
+                node.minX = Math.min(node.minX, e.minX);
+                node.minY = Math.min(node.minY, e.minY);
+                node.minZ = Math.min(node.minZ, e.minZ);
+                node.maxX = Math.max(node.maxX, e.maxX);
+                node.maxY = Math.max(node.maxY, e.maxY);
+                node.maxZ = Math.max(node.maxZ, e.maxZ);
                 node.power += e.power;
             }
             // The branch score is power * distanceSquared(other). Only a tiny epsilon is added to
@@ -309,13 +428,27 @@ final class RayTracingLightTree {
 
     private record Emitter(float ax, float ay, float az, float e1x, float e1y, float e1z,
                            float e2x, float e2y, float e2z, float nx, float ny, float nz,
-                           float area, float emission, float power, int materialIndex, int sourceIndex) {
-        float center(int axis) {
-            return switch (axis) {
-                case 0 -> ax + 0.5F * (e1x + e2x);
-                case 1 -> ay + 0.5F * (e1y + e2y);
-                default -> az + 0.5F * (e1z + e2z);
-            };
+                           float area, float emission, float power, int materialIndex, int sourceIndex,
+                           int keyX, int keyY, int keyZ,
+                           float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+        private Emitter(float ax, float ay, float az, float e1x, float e1y, float e1z,
+                        float e2x, float e2y, float e2z, float nx, float ny, float nz,
+                        float area, float emission, float power, int materialIndex, int sourceIndex) {
+            this(ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z, nx, ny, nz,
+                area, emission, power, materialIndex, sourceIndex,
+                floatSortKey(ax + 0.5F * (e1x + e2x)),
+                floatSortKey(ay + 0.5F * (e1y + e2y)),
+                floatSortKey(az + 0.5F * (e1z + e2z)),
+                Math.min(ax, Math.min(ax + e1x, ax + e2x)),
+                Math.min(ay, Math.min(ay + e1y, ay + e2y)),
+                Math.min(az, Math.min(az + e1z, az + e2z)),
+                Math.max(ax, Math.max(ax + e1x, ax + e2x)),
+                Math.max(ay, Math.max(ay + e1y, ay + e2y)),
+                Math.max(az, Math.max(az + e1z, az + e2z)));
+        }
+
+        int sortKey(int axis) {
+            return axis == 0 ? keyX : axis == 1 ? keyY : keyZ;
         }
     }
 }

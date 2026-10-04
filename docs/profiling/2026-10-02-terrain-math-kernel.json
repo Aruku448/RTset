@@ -1,0 +1,66 @@
+{
+  "kind": "synthetic CPU light-tree build; not live terrain/FPS",
+  "warmup": 5,
+  "measured_runs": 9,
+  "heap": "1g",
+  "rows": [
+    {
+      "before": {
+        "sections": 512,
+        "emitters": 65536,
+        "median_ms": 69.511,
+        "min_ms": 68.178,
+        "max_ms": 99.014,
+        "sha256": "55478c03a8cec25a80ceb5ba0ddad2eb987c4ac36d1103edb524ac313f025dbc"
+      },
+      "after": {
+        "sections": 512,
+        "emitters": 65536,
+        "median_ms": 35.501,
+        "min_ms": 34.56,
+        "max_ms": 66.453,
+        "sha256": "55478c03a8cec25a80ceb5ba0ddad2eb987c4ac36d1103edb524ac313f025dbc"
+      },
+      "speedup": 1.9580011830652657,
+      "median_time_reduction_percent": 48.9275078764512
+    },
+    {
+      "before": {
+        "sections": 9000,
+        "emitters": 72000,
+        "median_ms": 102.35,
+        "min_ms": 101.096,
+        "max_ms": 116.889,
+        "sha256": "dfb210fe1af32d821a15b1be10aa351d26709748f08742f1f3e14995c48a2e8e"
+      },
+      "after": {
+        "sections": 9000,
+        "emitters": 72000,
+        "median_ms": 47.164,
+        "min_ms": 45.325,
+        "max_ms": 69.431,
+        "sha256": "dfb210fe1af32d821a15b1be10aa351d26709748f08742f1f3e14995c48a2e8e"
+      },
+      "speedup": 2.1700873547621065,
+      "median_time_reduction_percent": 53.918905715681475
+    }
+  ],
+  "first_after": [
+    {
+      "sections": 512,
+      "emitters": 65536,
+      "median_ms": 36.003,
+      "min_ms": 34.636,
+      "max_ms": 65.053,
+      "sha256": "55478c03a8cec25a80ceb5ba0ddad2eb987c4ac36d1103edb524ac313f025dbc"
+    },
+    {
+      "sections": 9000,
+      "emitters": 72000,
+      "median_ms": 45.57,
+      "min_ms": 43.856,
+      "max_ms": 59.207,
+      "sha256": "dfb210fe1af32d821a15b1be10aa351d26709748f08742f1f3e14995c48a2e8e"
+    }
+  ]
+}

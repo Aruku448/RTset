@@ -1,0 +1,41 @@
+#version 460
+// AerialPerspectiveComposite: adds the physical finite-segment solar in-scatter AOV (L) to the
+// already-composited scene color after NRD. The OFF / legacy path keeps the same entry point with
+// an `enabled` push constant: zero leaves every pixel untouched and never reads the uninitialized
+// L image. Sky pixels carry a signed near-path shadow correction, marked by AOV alpha=1;
+// their infinite scattering is already in SkyView. Finite L estimates can also be signed
+// when shadow residual sampling is enabled; keep that sign until scene composition.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D sceneColor;
+layout(set = 0, binding = 1, r32f) uniform readonly image2D fsrDepth;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D physicalAerialL;
+
+layout(push_constant) uniform AerialCompositeSettings {
+    float enabled;
+} settings;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(sceneColor)))) {
+        return;
+    }
+    if (settings.enabled < 0.5) {
+        return;
+    }
+    vec4 aerial = imageLoad(physicalAerialL, pixel);
+    bool skyCorrection = aerial.a > 0.5;
+    if (imageLoad(fsrDepth, pixel).r <= 0.0 && !skyCorrection) {
+        return;
+    }
+    vec3 color = imageLoad(sceneColor, pixel).rgb;
+    vec3 inScatter = aerial.rgb;
+    for (int channel = 0; channel < 3; channel++) {
+        if (isnan(inScatter[channel]) || isinf(inScatter[channel])) inScatter[channel] = 0.0;
+    }
+    // Respect the existing RGBA16F scene format; invalid LUT components are neutral.
+    vec3 contribution = inScatter;
+    imageStore(sceneColor, pixel, vec4(clamp(color + contribution,
+        vec3(0.0), vec3(65504.0)), 1.0));
+}

@@ -1,0 +1,1512 @@
+{
+  "cycles": [
+    {
+      "start": "21:32:06",
+      "end": "21:32:15",
+      "sections": 4248,
+      "logged_chunk_window": 9,
+      "kind": "full",
+      "duration_s_coarse": 9,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:32:18",
+      "end": "21:32:18",
+      "sections": 2,
+      "logged_chunk_window": 9,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:32:20",
+      "end": "21:32:20",
+      "sections": 66,
+      "logged_chunk_window": 9,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:32:20",
+      "end": "21:32:21",
+      "sections": 289,
+      "logged_chunk_window": 9,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:32:21",
+      "end": "21:32:22",
+      "sections": 1,
+      "logged_chunk_window": 9,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:32:23",
+      "end": "21:32:40",
+      "sections": 4242,
+      "logged_chunk_window": 9,
+      "kind": "full",
+      "duration_s_coarse": 17,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:32:40",
+      "end": "21:33:10",
+      "sections": 4273,
+      "logged_chunk_window": 9,
+      "kind": "full",
+      "duration_s_coarse": 30,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:33:10",
+      "end": "21:34:05",
+      "sections": 4273,
+      "logged_chunk_window": 9,
+      "kind": "full",
+      "duration_s_coarse": 55,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:34:05",
+      "end": "21:34:28",
+      "sections": 4134,
+      "logged_chunk_window": 9,
+      "kind": "full",
+      "duration_s_coarse": 23,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:34:56",
+      "end": "21:34:58",
+      "sections": 956,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:03",
+      "end": "21:35:17",
+      "sections": 956,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 14,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:35:17",
+      "end": "21:35:34",
+      "sections": 989,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 17,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:34",
+      "end": "21:35:39",
+      "sections": 183,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 5,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:39",
+      "end": "21:35:43",
+      "sections": 278,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 4,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:43",
+      "end": "21:35:47",
+      "sections": 256,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 4,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:47",
+      "end": "21:35:52",
+      "sections": 233,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 5,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:52",
+      "end": "21:35:55",
+      "sections": 134,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:55",
+      "end": "21:35:58",
+      "sections": 140,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:35:58",
+      "end": "21:36:01",
+      "sections": 168,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:36:01",
+      "end": "21:36:01",
+      "sections": 58,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:36:03",
+      "end": "21:36:16",
+      "sections": 1002,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 13,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:36:16",
+      "end": "21:36:19",
+      "sections": 987,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:36:19",
+      "end": "21:36:20",
+      "sections": 1003,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:36:20",
+      "end": "21:36:21",
+      "sections": 215,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:36:21",
+      "end": "21:36:21",
+      "sections": 154,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:36:34",
+      "end": "21:36:41",
+      "sections": 1020,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 7,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:36:41",
+      "end": "21:36:48",
+      "sections": 1121,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 7,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:36:48",
+      "end": "21:36:59",
+      "sections": 1126,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 11,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:36:59",
+      "end": "21:37:09",
+      "sections": 1112,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 10,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:37:09",
+      "end": "21:37:17",
+      "sections": 1112,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 8,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:37:17",
+      "end": "21:37:19",
+      "sections": 1148,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:37:19",
+      "end": "21:37:19",
+      "sections": 255,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:37:19",
+      "end": "21:37:20",
+      "sections": 399,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:37:29",
+      "end": "21:37:37",
+      "sections": 1146,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 8,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:37:37",
+      "end": "21:37:59",
+      "sections": 1132,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 22,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:37:59",
+      "end": "21:38:12",
+      "sections": 1137,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 13,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:38:12",
+      "end": "21:38:33",
+      "sections": 1147,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 21,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:38:33",
+      "end": "21:38:55",
+      "sections": 1147,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 22,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:38:55",
+      "end": "21:39:06",
+      "sections": 1004,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 11,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:39:06",
+      "end": "21:39:20",
+      "sections": 1013,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 14,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:39:20",
+      "end": "21:39:35",
+      "sections": 1130,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 15,
+      "outcome": "stale"
+    },
+    {
+      "start": "21:39:35",
+      "end": "21:39:37",
+      "sections": 1125,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:39:37",
+      "end": "21:39:37",
+      "sections": 305,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:39:37",
+      "end": "21:39:38",
+      "sections": 512,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "21:39:38",
+      "end": "21:39:39",
+      "sections": 353,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:17:54",
+      "end": "22:18:00",
+      "sections": 1139,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 6,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:18:00",
+      "end": "22:18:05",
+      "sections": 1142,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 5,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:18:05",
+      "end": "22:18:09",
+      "sections": 210,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 4,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:18:09",
+      "end": "22:18:13",
+      "sections": 178,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 4,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:18:13",
+      "end": "22:18:14",
+      "sections": 89,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:18:14",
+      "end": "22:18:16",
+      "sections": 120,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:18:16",
+      "end": "22:18:30",
+      "sections": 1099,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 14,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:18:30",
+      "end": "22:18:47",
+      "sections": 1012,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 17,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:01",
+      "end": "22:19:01",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:04",
+      "end": "22:19:05",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:05",
+      "end": "22:19:05",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:05",
+      "end": "22:19:06",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:06",
+      "end": "22:19:06",
+      "sections": 18,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:08",
+      "end": "22:19:09",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:09",
+      "end": "22:19:09",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:13",
+      "end": "22:19:13",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:13",
+      "end": "22:19:14",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:14",
+      "end": "22:19:14",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:15",
+      "end": "22:19:16",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:16",
+      "end": "22:19:17",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:17",
+      "end": "22:19:18",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:18",
+      "end": "22:19:18",
+      "sections": 18,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:18",
+      "end": "22:19:19",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:19",
+      "end": "22:19:20",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:20",
+      "end": "22:19:20",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:23",
+      "end": "22:19:25",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:25",
+      "end": "22:19:27",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:27",
+      "end": "22:19:28",
+      "sections": 18,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:34",
+      "end": "22:19:35",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:35",
+      "end": "22:19:35",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:35",
+      "end": "22:19:35",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:49",
+      "end": "22:19:51",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:51",
+      "end": "22:19:53",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:19:53",
+      "end": "22:19:55",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:55",
+      "end": "22:19:56",
+      "sections": 19,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:57",
+      "end": "22:19:59",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:19:59",
+      "end": "22:19:59",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:05",
+      "end": "22:20:08",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:08",
+      "end": "22:20:08",
+      "sections": 10,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:12",
+      "end": "22:20:15",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:15",
+      "end": "22:20:15",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:15",
+      "end": "22:20:18",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:18",
+      "end": "22:20:22",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 4,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:22",
+      "end": "22:20:22",
+      "sections": 2,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:22",
+      "end": "22:20:25",
+      "sections": 89,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:25",
+      "end": "22:20:26",
+      "sections": 17,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:26",
+      "end": "22:20:28",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:28",
+      "end": "22:20:28",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:29",
+      "end": "22:20:31",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:31",
+      "end": "22:20:32",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:32",
+      "end": "22:20:32",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:32",
+      "end": "22:20:33",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:33",
+      "end": "22:20:34",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:34",
+      "end": "22:20:36",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:36",
+      "end": "22:20:36",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:36",
+      "end": "22:20:37",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:37",
+      "end": "22:20:39",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:39",
+      "end": "22:20:39",
+      "sections": 1,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:42",
+      "end": "22:20:43",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:43",
+      "end": "22:20:44",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:44",
+      "end": "22:20:44",
+      "sections": 89,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:44",
+      "end": "22:20:44",
+      "sections": 8,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:44",
+      "end": "22:20:46",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:46",
+      "end": "22:20:47",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:47",
+      "end": "22:20:49",
+      "sections": 87,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:49",
+      "end": "22:20:50",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:50",
+      "end": "22:20:51",
+      "sections": 13,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:51",
+      "end": "22:20:51",
+      "sections": 10,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:20:51",
+      "end": "22:20:57",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 6,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:20:57",
+      "end": "22:21:00",
+      "sections": 81,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 3,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:21:00",
+      "end": "22:21:02",
+      "sections": 81,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:21:02",
+      "end": "22:21:03",
+      "sections": 81,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:03",
+      "end": "22:21:03",
+      "sections": 7,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:03",
+      "end": "22:21:03",
+      "sections": 2,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:19",
+      "end": "22:21:19",
+      "sections": 82,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:19",
+      "end": "22:21:20",
+      "sections": 10,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:20",
+      "end": "22:21:21",
+      "sections": 82,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:21",
+      "end": "22:21:21",
+      "sections": 83,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:21:21",
+      "end": "22:21:22",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:22",
+      "end": "22:21:22",
+      "sections": 13,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:22",
+      "end": "22:21:23",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:23",
+      "end": "22:21:23",
+      "sections": 6,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:26",
+      "end": "22:21:27",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:27",
+      "end": "22:21:27",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:30",
+      "end": "22:21:32",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:32",
+      "end": "22:21:32",
+      "sections": 10,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:34",
+      "end": "22:21:36",
+      "sections": 81,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:36",
+      "end": "22:21:37",
+      "sections": 13,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:37",
+      "end": "22:21:37",
+      "sections": 4,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:40",
+      "end": "22:21:41",
+      "sections": 84,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:41",
+      "end": "22:21:41",
+      "sections": 12,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:42",
+      "end": "22:21:42",
+      "sections": 87,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:42",
+      "end": "22:21:42",
+      "sections": 12,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:43",
+      "end": "22:21:43",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:43",
+      "end": "22:21:43",
+      "sections": 15,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:43",
+      "end": "22:21:44",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:21:44",
+      "end": "22:21:46",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 2,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:21:46",
+      "end": "22:21:47",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:47",
+      "end": "22:21:47",
+      "sections": 22,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:53",
+      "end": "22:21:54",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:54",
+      "end": "22:21:54",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:58",
+      "end": "22:21:59",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:21:59",
+      "end": "22:22:00",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:00",
+      "end": "22:22:01",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:22:01",
+      "end": "22:22:02",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:02",
+      "end": "22:22:03",
+      "sections": 25,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:06",
+      "end": "22:22:07",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:07",
+      "end": "22:22:07",
+      "sections": 1,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:09",
+      "end": "22:22:10",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:22:10",
+      "end": "22:22:11",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:22:11",
+      "end": "22:22:12",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:22:12",
+      "end": "22:22:13",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:13",
+      "end": "22:22:13",
+      "sections": 16,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:13",
+      "end": "22:22:13",
+      "sections": 0,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:14",
+      "end": "22:22:15",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:15",
+      "end": "22:22:15",
+      "sections": 9,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:16",
+      "end": "22:22:17",
+      "sections": 87,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:17",
+      "end": "22:22:17",
+      "sections": 12,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:17",
+      "end": "22:22:17",
+      "sections": 87,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 0,
+      "outcome": "stale"
+    },
+    {
+      "start": "22:22:17",
+      "end": "22:22:18",
+      "sections": 90,
+      "logged_chunk_window": 4,
+      "kind": "full",
+      "duration_s_coarse": 1,
+      "outcome": "applied"
+    },
+    {
+      "start": "22:22:18",
+      "end": "22:22:18",
+      "sections": 17,
+      "logged_chunk_window": 4,
+      "kind": "dirty",
+      "duration_s_coarse": 0,
+      "outcome": "applied"
+    }
+  ],
+  "counts": {
+    "total": 166,
+    "stale": 48
+  },
+  "notes": [
+    "Observed timestamps are second-resolution, not CPU compute durations.",
+    "Starts outside the requested window and unfinished cycles are not included.",
+    "Cancellation/replacement without an end record is not measured.",
+    "logged_chunk_window retains log wording; it is not assumed to be a chunk count."
+  ],
+  "requested_window": {
+    "since": "21:32:00",
+    "until": "22:22:19"
+  }
+}

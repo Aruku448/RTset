@@ -1,0 +1,17 @@
+-9dc178a86fcbbf13c94b4cd4cb046f238d26c8da external/WindowsToolchain
+ 924936d0427cb25a61169739a7660230bffa6ea6 external/cmark (924936d)
+ e0b53eaf63c6d00e0725788ef1dbb759aa321d79 external/fast_float (e0b53ea)
+-efec5db081e3aad807d0731e172ac597f6a39447 external/glm
+ d1f52c8993a501bd52d4fbd044bfeb9ecdceb9f4 external/glslang (d1f52c8)
+-8936b58fe26e8c3da834b8f60b06511d537b4c63 external/imgui
+ 3fe7be956f23385aa1950dc31e2f25127ccfc0ea external/lua (3fe7be9)
+ 7f71be01f2c6f6b2c3cddb67eef8c38eab12ffd4 external/lz4 (7f71be0)
+-a63bd172ddcba73a3d87ca32032b66ad41ddb9a6 external/metal-cpp
+ 6ef6c68f4fcbb8287aa8edf9c6670804932f41c6 external/miniz (6ef6c68)
+-a1280c1863ff19d87f8e827468a4cc906ba9032a external/optix-dev
+-29dc332e55d8b6afa2e532cbf07d98d34bd9b029 external/slang-rhi
+ 29981f65241605e08b0ede4cfeb999fe3b723c6a external/spirv-headers (29981f6)
+ b707790a898e44038547df54580022fc1cf89c3d external/spirv-tools (b707790)
+-d541711a794343de4ef5ea76f037c9fb9c127a55 external/tinyobjloader
+ 73f3cbb237e84d483afafc743f1f14ec53e12314 external/unordered_dense (73f3cbb)
+ 387259ecf4b0fe0cfac161b1d0b0a74e42796710 external/vulkan (387259e)

@@ -14,6 +14,7 @@ public final class EntityRasterFallbackContractTest {
         String mixin = source("src/main/java/com/rtest/mixin/ItemEntityCaptureMixin.java");
         String renderer = source("src/main/java/com/rtest/mixin/LevelRendererMixin.java");
         String vulkanPass = source("src/main/java/com/rtest/client/RayTracingVulkanPass.java");
+        String dynamicInstances = source("src/main/java/com/rtest/client/RayTracingDynamicInstances.java");
         String hand = source("src/main/java/com/rtest/mixin/GameRendererMixin.java");
         String modelCapture = source("src/main/java/com/rtest/mixin/PlayerModelCaptureMixin.java");
         String levelCapture = source("src/main/java/com/rtest/mixin/LevelPlayerCaptureMixin.java");
@@ -29,12 +30,15 @@ public final class EntityRasterFallbackContractTest {
         require(dynamic, "fallback++");
         require(dynamic, "DYNAMIC_MODEL_TRIANGLE_CAPACITY");
         require(dynamic, "DYNAMIC_ITEM_TRIANGLE_CAPACITY");
+        require(dynamic, "Frustum cullFrustum");
+        require(dynamic, "isInCameraFrustum(entity.getBoundingBox(), cullFrustum)");
         require(dynamic, "representedEntityIds()");
         require(dynamic, "isTransientCaptureMiss(Frame current, Frame previous)");
         require(dynamic, "representedBlockEntityIds()");
         require(mixin, "LivingEntityGeometryAdapter.beginEntity(state, camera.pos);");
         require(renderer, "featureRenderDispatcher.prepareFrame(this.submitNodeStorage)");
         require(renderer, "rtest$firstPersonCaptureStorage()");
+        require(renderer, "setFrameCullFrustum(cameraState.cullFrustum)");
         require(renderer, "firstPersonStorage.getSubmitsPerOrder().clear()");
         reject(renderer, "RayTracingProbe.finishDeferredEntityCapture()");
         require(renderer, "preparedFrame.close()");
@@ -47,10 +51,10 @@ public final class EntityRasterFallbackContractTest {
         require(dispatch, "this.topLevelUpdatePending = this.topLevelUpdatePending\n                        || (canUpdateTopLevel && dynamicTlasChanged);");
         require(dispatch, "boolean forceDynamicInstanceWrite = !this.topLevelBuilt;");
         require(dispatch, "updateDynamicInstances(effectiveDynamicFrame,\n                        forceDynamicInstanceWrite)");
-        require(vulkanPass, "this.dynamicHistoryResetPending = true;");
+        require(dynamicInstances, "this.dynamicHistoryResetPending = true;");
         require(vulkanPass, "this.fsr.requestReset();");
-        require(vulkanPass, "if (this.dynamicHistoryResetPending)");
-        require(vulkanPass, "this.dynamicHistoryResetPending = false;");
+        require(dynamicInstances, "if (this.dynamicHistoryResetPending)");
+        require(dynamicInstances, "this.dynamicHistoryResetPending = false;");
         if (dispatch.indexOf("updateDynamicInstances(effectiveDynamicFrame,")
             > dispatch.indexOf("if (!this.topLevelBuilt)")) {
             throw new AssertionError("dynamic TLAS instances are updated after TLAS construction");
@@ -64,8 +68,9 @@ public final class EntityRasterFallbackContractTest {
         require(livingCapture, "pipeline == RenderPipelines.EYES");
         require(livingCapture, "pipeline == RenderPipelines.ENTITY_TRANSLUCENT_EMISSIVE");
         require(livingCapture, "name.startsWith(\"eyes[\")");
-        require(source("src/main/java/com/rtest/client/RayTracingShaders.java"), "bool pipelineEmissive = optical.z > 0.5;");
-        require(source("src/main/java/com/rtest/client/RayTracingShaders.java"),
+        String shaderStages = source("src/main/java/com/rtest/client/RayTracingShaderStages.java");
+        require(shaderStages, "bool pipelineEmissive = optical.z > 0.5;");
+        require(shaderStages,
             "surface.z = max(surface.z, max(camera.pbrSettings.z, camera.pbrParallaxSettings.y));");
         reject(levelCapture, "LivingEntityGeometryAdapter.endWorldDraw();");
         reject(levelCapture, "BlockEntityModelGeometryAdapter.endWorldDraw();");

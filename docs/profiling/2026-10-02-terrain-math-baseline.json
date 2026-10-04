@@ -1,0 +1,215 @@
+{
+  "log_sha256": "da99c7b56ba06166ed4b36ff1e94daa4161b6248118d4d4ce2dde3d4e90024e7",
+  "requested_window": {
+    "since": "00:38:00",
+    "until": "00:40:16"
+  },
+  "sample_window": {
+    "first": "00:38:00",
+    "last": "00:40:16"
+  },
+  "scope_sample_counts": {
+    "vulkan_dispatch_cpu": 107,
+    "smoke_run_cpu": 107,
+    "gpu": 104,
+    "geometry_merge_event": 75,
+    "geometry_publish_event": 74
+  },
+  "statistics": {
+    "vulkan_dispatch_cpu": {
+      "resource_match": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "resource_rebuild": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "dynamic_update": {
+        "n": 107,
+        "mean_ms": 0.057729,
+        "median_ms": 0.058,
+        "p95_ms": 0.101,
+        "min_ms": 0.01,
+        "max_ms": 0.149
+      },
+      "pbr_sync": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 107,
+        "mean_ms": 0.089187,
+        "median_ms": 0.078,
+        "p95_ms": 0.145,
+        "min_ms": 0.061,
+        "max_ms": 0.232
+      },
+      "fence_wait_cpu": {
+        "n": 107,
+        "mean_ms": 7.046523,
+        "median_ms": 3.545,
+        "p95_ms": 29.242,
+        "min_ms": 0.004,
+        "max_ms": 44.946
+      },
+      "readback": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "smoke_run_cpu": {
+      "resource_match": {
+        "n": 107,
+        "mean_ms": 9e-06,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.001
+      },
+      "resource_rebuild": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 107,
+        "mean_ms": 0.531355,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 56.855
+      },
+      "dynamic_update": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "pbr_sync": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "fence_wait_cpu": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "readback": {
+        "n": 107,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "gpu": {
+      "rt": {
+        "n": 104,
+        "mean_ms": 6.853923,
+        "median_ms": 3.6105,
+        "p95_ms": 26.732,
+        "min_ms": 1.594,
+        "max_ms": 33.97
+      },
+      "post_rt": {
+        "n": 104,
+        "mean_ms": 1.188798,
+        "median_ms": 0.527,
+        "p95_ms": 4.848,
+        "min_ms": 0.37,
+        "max_ms": 5.419
+      },
+      "total": {
+        "n": 104,
+        "mean_ms": 8.05074,
+        "median_ms": 4.1765,
+        "p95_ms": 31.834,
+        "min_ms": 2.02,
+        "max_ms": 39.275
+      },
+      "terrain_traversal": {
+        "n": 104,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "geometry_merge_event": {
+      "duration": {
+        "n": 75,
+        "mean_ms": 363.026667,
+        "median_ms": 363.0,
+        "p95_ms": 416.0,
+        "min_ms": 317.0,
+        "max_ms": 464.0
+      }
+    },
+    "geometry_publish_event": {
+      "duration": {
+        "n": 74,
+        "mean_ms": 108.5,
+        "median_ms": 51.0,
+        "p95_ms": 263.0,
+        "min_ms": 42.0,
+        "max_ms": 1080.0
+      }
+    }
+  },
+  "notes": [
+    "All durations are milliseconds.",
+    "CPU waits overlap GPU work; do not sum CPU and GPU durations.",
+    "Zero in sampled frames does not imply a stage is free or never executed.",
+    "GPU results are asynchronous; configuration-change boundaries are ambiguous.",
+    "Select a stable resolution, denoiser and offline-mode window before comparing.",
+    "P95 uses nearest rank; sparse samples are not full-frame P95."
+  ],
+  "source": "/tmp/rtest-terrain-math-before.log"
+}

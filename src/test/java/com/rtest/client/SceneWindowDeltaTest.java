@@ -30,14 +30,11 @@ public final class SceneWindowDeltaTest {
         require(probe, "sectionOriginKeys(finished.windowOrigins())");
         require(probe, "smokeGeometry.renderDistanceChunks != renderDistanceChunks");
         require(probe, "captureGeneration != sceneGeneration");
-        require(probe, "stalePartialCapture");
-        require(probe, "cameraChunkX(camera) != activeWindowChunkX");
-        require(probe, "Updates arriving during this session remain pending for the next frame");
-        int stalePartialStart = probe.indexOf("if (stalePartialCapture)");
-        int stalePartialEnd = probe.indexOf("} else {", stalePartialStart);
-        if (stalePartialStart < 0 || stalePartialEnd < 0
-                || probe.substring(stalePartialStart, stalePartialEnd).contains("capturedWindowChunk")) {
-            throw new AssertionError("stale partial captures must not advance the published camera window");
+        require(probe, "Publish this batch, then reconcile the newer window from the");
+        require(probe, "if (completedPartial && smokeGeometry != null && activeDirtySections != null)");
+        if (probe.contains("stalePartialCapture")
+                || probe.contains("cameraChunkX(camera) == completedMerge.windowChunkX()")) {
+            throw new AssertionError("camera movement must not discard a coherent partial capture");
         }
         int renderDistanceStart = probe.indexOf("if (renderDistanceChanged)");
         int windowUpdateStart = probe.indexOf("if (smokeGeometry != null && captureSession == null", renderDistanceStart);

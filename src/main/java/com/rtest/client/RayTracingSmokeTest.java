@@ -35,8 +35,9 @@ public final class RayTracingSmokeTest {
 
     /** Keeps the last completed RT world visible during a paused GUI frame. */
     public static boolean replayLastFrame(
-        VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry) {
-        if (!hasPresentedFrameFor(device, target, blockAtlas, geometry)) {
+        VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry,
+        boolean terrainTraversalEnabled) {
+        if (!hasPresentedFrameFor(device, target, blockAtlas, geometry, terrainTraversalEnabled)) {
             return false;
         }
         activeResources.replayLastPresentationInCurrentFrame(frameTiming);
@@ -48,7 +49,8 @@ public final class RayTracingSmokeTest {
      * current target, FSR extent, atlas binding, sampler, format and Vulkan device still match.
      */
     public static boolean hasPresentedFrameFor(
-        VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry) {
+        VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry,
+        boolean terrainTraversalEnabled) {
         if (activeResources == null || activeFsr == null || !activeResources.hasPresentedFrame()
             || !activeResources.usesGeometry(geometry)
             || target == null || blockAtlas == null) {
@@ -66,7 +68,8 @@ public final class RayTracingSmokeTest {
         return activeFsrQuality == quality && activeResources.matches(
             device, extent.width(), extent.height(), target.width, target.height,
             texture.vkImage(), targetView.vkImageView(), target.getColorTexture().getFormat(),
-            geometry, atlasView.vkImageView(), atlasSampler.vkSampler(), activeFsr);
+            geometry, atlasView.vkImageView(), atlasSampler.vkSampler(), activeFsr,
+            terrainTraversalEnabled);
     }
 
     public static boolean run(
@@ -78,7 +81,8 @@ public final class RayTracingSmokeTest {
         TextureAtlas blockAtlas,
         ResourceManager resourceManager,
         RayTracingPbrMaterials pbrMaterials,
-        DynamicEntityGeometry.Frame dynamicFrame
+        DynamicEntityGeometry.Frame dynamicFrame,
+        boolean terrainTraversalEnabled
     ) {
         long start = System.nanoTime();
         long frame = ++frameCounter;
@@ -119,7 +123,8 @@ public final class RayTracingSmokeTest {
                     geometry,
                     atlasView.vkImageView(),
                     atlasSampler.vkSampler(),
-                    activeFsr
+                    activeFsr,
+                    terrainTraversalEnabled
                 );
             resourcesWereMatch = resourcesMatch;
             timing.add(RayTracingFrameTiming.Segment.RESOURCE_MATCH, resourceMatchStart);
@@ -152,7 +157,8 @@ public final class RayTracingSmokeTest {
                         pbrMaterials,
                         blasCache,
                         activeFsr,
-                        dynamicFrame
+                        dynamicFrame,
+                        terrainTraversalEnabled
                     );
                 } finally {
                     timing.add(RayTracingFrameTiming.Segment.RESOURCE_REBUILD, resourceRebuildStart);

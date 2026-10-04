@@ -19,6 +19,21 @@ final class RayTracingTangent {
         }
     }
 
+    static Vector3f geometricNormal(BakedQuad quad, int a, int b, int c) {
+        // direction() is a six-way culling tag. Crossed foliage and rotated models can
+        // have a diagonal plane, so its actual winding must define the shading frame.
+        Vector3fc p0 = quad.position(a), p1 = quad.position(b), p2 = quad.position(c);
+        float ax = p1.x() - p0.x(), ay = p1.y() - p0.y(), az = p1.z() - p0.z();
+        float bx = p2.x() - p0.x(), by = p2.y() - p0.y(), bz = p2.z() - p0.z();
+        Vector3f normal = new Vector3f(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx);
+        float lengthSquared = normal.lengthSquared();
+        if (Float.isFinite(lengthSquared) && lengthSquared > 1.0E-20F) {
+            return normal.mul(1.0F / (float)Math.sqrt(lengthSquared));
+        }
+        return new Vector3f(quad.direction().getStepX(), quad.direction().getStepY(),
+            quad.direction().getStepZ());
+    }
+
     static Frame fromBakedQuad(BakedQuad quad, int a, int b, int c,
                                float normalX, float normalY, float normalZ) {
         Vector3fc p0 = quad.position(a);

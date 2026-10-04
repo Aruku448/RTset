@@ -1,0 +1,24 @@
+{
+  "scope": "finite four-wave aerial RGB-shadow adapter, not epipolar/clipmap",
+  "gradle_tasks_passed": 60,
+  "python_tests_passed": 4,
+  "spirv_validated": "actual physical/legacy RayGen and query, aerial composite; Vulkan1.2",
+  "jar": {
+    "sha256": "a21a3d6bc25ff8db8f352c1a69b12adb469e5a226c1638d9a0a4ec375910f9f0",
+    "bytes": 48012122
+  },
+  "corresponding_source": {
+    "sha256": "c5c253696d55407ab582c9b12539252c5127917bab33fcb8e84c2c6fb9b5b746",
+    "bytes": 47879941
+  },
+  "installed_jar_sha256": "8485a2f48bc00811a50d19603191222c798586d28668d642a293e4eb14002f51",
+  "deployed": false,
+  "instance_configuration_modified": false,
+  "gpu_validation": false,
+  "notes": [
+    "Surface transmittance remains applied in RayGen; local emitter retains NRD diffuse history.",
+    "Solar in-scatter added post-NRD/raw RT and before FSR.",
+    "Fixed baseline medium: positive legacy fog-density values do not rescale physics.",
+    "No GPU performance claim; colored TLAS shadows remain per step."
+  ]
+}

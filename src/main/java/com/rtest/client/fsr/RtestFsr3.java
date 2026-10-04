@@ -34,9 +34,10 @@ public final class RtestFsr3 implements AutoCloseable {
     private final RtestVulkanImage reactive;
     private final RtestVulkanImage transparency;
     private final RtestVulkanImage displayOutput;
+    private final RtestVulkanImage physicalAerialL;
     private final RtestFsr3Upscaler upscaler;
     private final NrdDenoiser nrd;
-    private final SundialDenoiser sundial;
+    private final AerialPerspectiveComposite aerialComposite;
     private RtestFsrCamera currentCamera;
     private long currentSceneRevision;
     private long currentAtlasView;
@@ -45,22 +46,20 @@ public final class RtestFsr3 implements AutoCloseable {
     private float currentSunDirectionY = 1.0F;
     private float currentSunDirectionZ;
     private NrdDenoiser.FrameToken nrdToken;
-    private SundialDenoiser.FrameToken sundialToken;
     private boolean nrdWasEnabled;
-    private boolean sundialWasEnabled;
     private boolean denoiserModeLogged;
-    private boolean sundialHistoryReset;
-    private float previousSundialSunX = Float.NaN;
-    private float previousSundialSunY = Float.NaN;
-    private float previousSundialSunZ = Float.NaN;
+    private RtestDenoiserMode frameDenoiserMode = RtestDenoiserMode.OFF;
+    private float frameNrdStrength;
+    private boolean guideDescriptorsInitialized;
     private boolean inputsInitialized;
     private boolean closed;
 
     private RtestFsr3(RtestVulkanContext context, RtestVulkanImage sceneColor,
                      RtestVulkanImage motion, RtestVulkanImage depth,
                      RtestVulkanImage terrainHiZ, RtestVulkanImage reactive, RtestVulkanImage transparency,
-                     RtestVulkanImage displayOutput, RtestFsr3Upscaler upscaler,
-                     NrdDenoiser nrd, SundialDenoiser sundial) {
+                     RtestVulkanImage displayOutput, RtestVulkanImage physicalAerialL,
+                     RtestFsr3Upscaler upscaler, NrdDenoiser nrd,
+                     AerialPerspectiveComposite aerialComposite) {
         this.context = context;
         this.sceneColor = sceneColor;
         this.motion = motion;
@@ -69,9 +68,10 @@ public final class RtestFsr3 implements AutoCloseable {
         this.reactive = reactive;
         this.transparency = transparency;
         this.displayOutput = displayOutput;
+        this.physicalAerialL = physicalAerialL;
         this.upscaler = upscaler;
         this.nrd = nrd;
-        this.sundial = sundial;
+        this.aerialComposite = aerialComposite;
     }
 
     public static RtestFsr3 create(VulkanDevice device, int renderWidth, int renderHeight,
@@ -80,7 +80,7 @@ public final class RtestFsr3 implements AutoCloseable {
         RtestVulkanContext context = new RtestVulkanContext(device);
         List<RtestVulkanImage> created = new ArrayList<>();
         NrdDenoiser nrd = null;
-        SundialDenoiser sundial = null;
+        AerialPerspectiveComposite aerialComposite = null;
         try {
             RtestVulkanImage scene = own(created, context.createImage2D(renderWidth, renderHeight,
                     VK12.VK_FORMAT_R16G16B16A16_SFLOAT, COMMON_USAGE, "RTest FSR scene color"));
@@ -104,20 +104,20 @@ public final class RtestFsr3 implements AutoCloseable {
             RtestVulkanImage display = own(created, context.createImage2D(displayWidth, displayHeight,
                     displayFormat, DISPLAY_USAGE, "RTest FSR display output"));
             nrd = NrdDenoiser.create(context, renderWidth, renderHeight, scene, motion);
-            sundial = SundialDenoiser.create(
-                    context, renderWidth, renderHeight,
-                    nrd.noisyDiffuseView(), nrd.noisySpecularView(),
-                    nrd.normalRoughnessView(), nrd.viewZView(), nrd.motionView(),
-                    nrd.directDiffuseView(), nrd.emissionView(), scene);
+            RtestVulkanImage physicalAerialL = own(created, context.createImage2D(
+                    renderWidth, renderHeight, VK12.VK_FORMAT_R16G16B16A16_SFLOAT, COMMON_USAGE,
+                    "RTest physical aerial L"));
+            aerialComposite = AerialPerspectiveComposite.create(
+                    context, scene, depth, physicalAerialL);
             RtestFsr3Upscaler upscaler = RtestFsr3Upscaler.create(
                     context, renderWidth, renderHeight, displayWidth, displayHeight,
                     qualityMode, scene, motion, depth, reactive, transparency, display);
             return new RtestFsr3(context, scene, motion, depth, terrainHiZ, reactive, transparency,
-                    display, upscaler, nrd, sundial);
+                    display, physicalAerialL, upscaler, nrd, aerialComposite);
         } catch (RuntimeException | Error exception) {
-            if (sundial != null) {
+            if (aerialComposite != null) {
                 try {
-                    sundial.destroy();
+                    aerialComposite.destroy();
                 } catch (Throwable cleanupFailure) {
                     exception.addSuppressed(cleanupFailure);
                 }
@@ -169,6 +169,15 @@ public final class RtestFsr3 implements AutoCloseable {
         return this.depth.view();
     }
 
+    /** RayGen writes the physical solar in-scatter here; the aerial composite adds it post-NRD. */
+    public long physicalAerialLView() {
+        return this.physicalAerialL.view();
+    }
+
+    public RtestVulkanImage physicalAerialL() {
+        return this.physicalAerialL;
+    }
+
     /** Image handle used by optional compute passes that read the previous depth history. */
     public long depthImage() {
         return this.depth.image();
@@ -212,6 +221,17 @@ public final class RtestFsr3 implements AutoCloseable {
 
     public RtestFsr3Upscaler.FrameToken beginFrame(RtestFsrCamera camera, long sceneRevision,
                                                     long atlasView, long atlasSampler) {
+        // Resolve once before camera upload. RayGen and post-processing must agree
+        // on whether this frame produces guides, including zero-strength toggles.
+        this.frameNrdStrength = RayTracingClientConfig.INSTANCE.nrdStrength.get().floatValue();
+        RtestDenoiserMode nextDenoiserMode = RtestDenoiserMode.select(
+            RayTracingClientConfig.INSTANCE.nrdEnabled.get(), this.frameNrdStrength);
+        if (nextDenoiserMode != this.frameDenoiserMode) {
+            // FSR must not blend previous raw/other-denoiser output into this mode's history.
+            // Request before beginFrame snapshots the reset bit; stable modes do not reset.
+            this.upscaler.requestReset();
+        }
+        this.frameDenoiserMode = nextDenoiserMode;
         this.currentCamera = camera;
         this.currentSceneRevision = sceneRevision;
         this.currentAtlasView = atlasView;
@@ -229,16 +249,13 @@ public final class RtestFsr3 implements AutoCloseable {
         if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)) {
             throw new IllegalArgumentException("Sun direction must be finite");
         }
-        this.sundialHistoryReset = this.sundialHistoryReset
-            || Float.floatToIntBits(x) != Float.floatToIntBits(this.previousSundialSunX)
-            || Float.floatToIntBits(y) != Float.floatToIntBits(this.previousSundialSunY)
-            || Float.floatToIntBits(z) != Float.floatToIntBits(this.previousSundialSunZ);
-        this.previousSundialSunX = x;
-        this.previousSundialSunY = y;
-        this.previousSundialSunZ = z;
         this.currentSunDirectionX = x;
         this.currentSunDirectionY = y;
         this.currentSunDirectionZ = z;
+    }
+
+    public RtestDenoiserMode denoiserMode() {
+        return this.frameDenoiserMode;
     }
 
     public NrdDenoiser nrd() {
@@ -249,9 +266,9 @@ public final class RtestFsr3 implements AutoCloseable {
     public void prepareForRayTracing(VkCommandBuffer commandBuffer) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             if (!this.inputsInitialized) {
-                VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(6, stack);
+                VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(7, stack);
                 RtestVulkanImage[] images = {this.sceneColor, this.motion, this.depth,
-                        this.reactive, this.transparency, this.displayOutput};
+                        this.reactive, this.transparency, this.displayOutput, this.physicalAerialL};
                 for (int index = 0; index < images.length; index++) {
                     barriers.get(index).sType$Default()
                             .srcStageMask(VK12.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT)
@@ -284,17 +301,18 @@ public final class RtestFsr3 implements AutoCloseable {
                         VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
             }
         }
-        // RayGen always writes the NRD input AOVs, so their lifetime/layout must remain valid
-        // even while NRD is disabled. Sundial owns independent history images; do not inject
-        // barriers for them unless that denoiser is actually scheduled this frame.
-        this.nrd.prepareForRayTrace(commandBuffer);
-        if (RayTracingClientConfig.INSTANCE.sundialDenoiserEnabled.get()
-                && RayTracingClientConfig.INSTANCE.sundialDenoiserStrength.get().floatValue() > 0.0001f) {
-            this.sundial.prepareForRayTrace(commandBuffer);
+        // Keep allocated guides/descriptors alive across mode switches, but do not
+        // synchronize images that neither RayGen nor a denoiser uses in this frame.
+        if (this.frameDenoiserMode.needsGuides() || !this.guideDescriptorsInitialized) {
+            // The uniform branch does not change static descriptor usage. Put even
+            // disabled guide bindings into their declared GENERAL layout once.
+            this.nrd.prepareForRayTrace(commandBuffer);
+            this.guideDescriptorsInitialized = true;
         }
     }
 
-    public void recordAfterRayTracing(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token) {
+    public void recordAfterRayTracing(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token,
+                                      boolean aerialPerspectiveEnabled) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                     .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)
@@ -304,38 +322,23 @@ public final class RtestFsr3 implements AutoCloseable {
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
                     VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
         }
-        float sundialStrength = RayTracingClientConfig.INSTANCE.sundialDenoiserStrength.get().floatValue();
-        boolean sundialEnabled = RayTracingClientConfig.INSTANCE.sundialDenoiserEnabled.get()
-                && sundialStrength > 0.0001f;
-        float nrdStrength = RayTracingClientConfig.INSTANCE.nrdStrength.get().floatValue();
-        boolean nrdEnabled = !sundialEnabled
-                && RayTracingClientConfig.INSTANCE.nrdEnabled.get()
-                && nrdStrength > 0.0001f;
-        if (!this.denoiserModeLogged || nrdEnabled != this.nrdWasEnabled
-                || sundialEnabled != this.sundialWasEnabled) {
-            LOGGER.info("RTest denoiser scheduling: NRD={}, strength={}, Sundial={}, strength={}",
-                    nrdEnabled, nrdStrength, sundialEnabled, sundialStrength);
+        float nrdStrength = this.frameNrdStrength;
+        boolean nrdEnabled = this.frameDenoiserMode == RtestDenoiserMode.NRD;
+        if (!this.denoiserModeLogged || nrdEnabled != this.nrdWasEnabled) {
+            LOGGER.info("RTest denoiser scheduling: NRD={}, strength={}, guides={}",
+                    nrdEnabled, nrdStrength,
+                    this.frameDenoiserMode.needsGuides());
             this.denoiserModeLogged = true;
         }
         if (this.nrdToken != null) {
             this.nrd.cancel(this.nrdToken);
         }
-        if (this.sundialToken != null) {
-            this.sundial.cancel(this.sundialToken);
-        }
         this.nrdToken = null;
-        this.sundialToken = null;
-        this.sundial.cancelPending();
         try {
-            // FSR reset/camera-cut already covers scene revision and atlas identity. Sundial
-            // additionally invalidates when the sun direction changes, matching NRD's history key.
-            boolean forceRestart = token.reset() || token.cameraCut() || this.sundialHistoryReset;
-            if (sundialEnabled) {
-                this.sundialToken = this.sundial.record(commandBuffer,
-                        forceRestart || !this.sundialWasEnabled,
-                        sundialStrength,
-                        RayTracingClientConfig.INSTANCE.sundialDenoiserHistory.get());
-            } else if (nrdEnabled) {
+            // FSR reset/camera-cut covers scene revision and atlas identity. NRD owns its
+            // angular sun threshold; bit-exact sun resets would prevent temporal convergence.
+            boolean forceRestart = token.reset() || token.cameraCut();
+            if (nrdEnabled) {
                 this.nrd.prepareForDenoise(commandBuffer);
                 this.nrdToken = this.nrd.record(commandBuffer, this.currentCamera,
                         this.currentSceneRevision, this.currentAtlasView, this.currentAtlasSampler,
@@ -343,9 +346,14 @@ public final class RtestFsr3 implements AutoCloseable {
                         token.jitter().x(), token.jitter().y(),
                         forceRestart || !this.nrdWasEnabled, nrdStrength);
             }
-            this.sundialWasEnabled = sundialEnabled;
             this.nrdWasEnabled = nrdEnabled;
-            this.sundialHistoryReset = false;
+            // Both NRD and raw RT share this path. Preserve compute RAW/WAR/WAW edges
+            // from NRD's composite to aerial and from aerial to FSR; binding is not a barrier.
+            if (aerialPerspectiveEnabled) {
+                computeReadWriteBarrier(commandBuffer);
+                this.aerialComposite.record(commandBuffer, this.renderWidth(), this.renderHeight(), true);
+                computeReadWriteBarrier(commandBuffer);
+            }
             this.upscaler.record(commandBuffer, token);
         } catch (Throwable failure) {
             if (this.nrdToken != null) {
@@ -356,15 +364,19 @@ public final class RtestFsr3 implements AutoCloseable {
                 }
                 this.nrdToken = null;
             }
-            if (this.sundialToken != null) {
-                try {
-                    this.sundial.cancel(this.sundialToken);
-                } catch (Throwable cleanupFailure) {
-                    failure.addSuppressed(cleanupFailure);
-                }
-                this.sundialToken = null;
-            }
             throw failure;
+        }
+    }
+
+    private static void computeReadWriteBarrier(VkCommandBuffer commandBuffer) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                .srcStageMask(VK12.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
+                .srcAccessMask(VK12.VK_ACCESS_SHADER_READ_BIT | VK12.VK_ACCESS_SHADER_WRITE_BIT)
+                .dstStageMask(VK12.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
+                .dstAccessMask(VK12.VK_ACCESS_SHADER_READ_BIT | VK12.VK_ACCESS_SHADER_WRITE_BIT);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+                VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
         }
     }
 
@@ -374,10 +386,6 @@ public final class RtestFsr3 implements AutoCloseable {
             this.nrd.submitted(this.nrdToken);
             this.nrdToken = null;
         }
-        if (this.sundialToken != null) {
-            this.sundial.submitted(this.sundialToken);
-            this.sundialToken = null;
-        }
     }
 
     @Override
@@ -386,12 +394,13 @@ public final class RtestFsr3 implements AutoCloseable {
             return;
         }
         this.closed = true;
+        this.aerialComposite.destroy();
         this.upscaler.destroy();
-        this.sundial.destroy();
         this.nrd.destroy();
         this.displayOutput.destroy();
         this.transparency.destroy();
         this.reactive.destroy();
+        this.physicalAerialL.destroy();
         this.depth.destroy();
         this.terrainHiZ.destroy();
         this.motion.destroy();

@@ -152,6 +152,18 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
         }
     }
 
+    /** Cancels work for one node without disturbing independent hierarchy builds. */
+    public void cancel(NodeKey nodeKey) {
+        Objects.requireNonNull(nodeKey, "nodeKey");
+        synchronized (lock) {
+            Job job = current.remove(nodeKey);
+            if (job == null) return;
+            job.cancelled = true;
+            if (job.work != null) executor.getQueue().remove(job.work);
+            ready.removeIf(completed -> completed.request.nodeKey().equals(nodeKey));
+        }
+    }
+
     /** Polls only completed work that is still the current request for its node. */
     public List<Result<T>> poll(int resultBudget) {
         return pollInternal(resultBudget, null, null, null);

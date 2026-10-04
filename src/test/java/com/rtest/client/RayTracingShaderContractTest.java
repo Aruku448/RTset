@@ -25,16 +25,83 @@ public final class RayTracingShaderContractTest {
                 Shaderc.shaderc_glsl_anyhit_shader);
             compile(compiler, options, "shadow any hit", RayTracingShaders.SHADOW_ANY_HIT_SHADER,
                 Shaderc.shaderc_glsl_anyhit_shader);
+            compile(compiler, options, "sky CDF miss", SkyImportanceShader.MISS, Shaderc.shaderc_glsl_miss_shader);
+            compile(compiler, options, "sky CDF hit", SkyImportanceShader.HIT, Shaderc.shaderc_glsl_closesthit_shader);
             assertRayBudgetContract();
             assertTemporalEnvironmentContract();
             assertPbrMaterialContract();
             assertPhysicalLightingContract();
             assertCutoutSamplingContract();
+            assertOpaqueHitFastPaths();
+            assertBsdfEnergyReuseContract();
         } finally {
             Shaderc.shaderc_compile_options_release(options);
             Shaderc.shaderc_compiler_release(compiler);
         }
+        RayTracingParallaxOptimizationTest.main(args);
+        RayTracingRenderMathTest.main(args);
+        SkyImportanceTableTest.main(args);
+        SkyCdfGeometryTest.main(args);
+        RayTracingDenoiserOptimizationTest.main(args);
+        RayTracingSignalQualityTest.main(args);
+        RayTracingCleanupTest.main(args);
         System.out.println("Ray-tracing shader contract passed");
+    }
+
+    private static void assertBsdfEnergyReuseContract() {
+        String shader = RayTracingShaders.RAYGEN_SHADER;
+        int function = shader.indexOf("BsdfValue evaluateBsdf(");
+        int open = shader.indexOf('{', function);
+        int depth = 1, end = open + 1;
+        while (depth > 0 && end < shader.length()) {
+            char c = shader.charAt(end++);
+            if (c == '{') depth++;
+            if (c == '}') depth--;
+        }
+        String body = shader.substring(open, end);
+        require(body, "diffuseEnergy = directionalEnergy.y / resolvedEnergy;");
+        require(body, "specularEnergy = 1.0 / resolvedEnergy;");
+        reject(body, "primeDefaultDiffuseEnergy(");
+        reject(body, "primeDefaultGgxDirectionalEnergy(");
+        require(shader, "vec2 receiverEnergy = prepareBsdfDirectionalEnergy(normal, viewDirection, roughness, metallic);");
+        require(shader, "sunDiffuseProbability, sunSpecularProbability, receiverEnergy);");
+        require(shader, "diffuseProbability, specularProbability, receiverEnergy);");
+        require(shader, "roughness, metallic, reflectivity, areaSample, receiverEnergy, true);");
+        int sunSource = shader.indexOf("vec3 sunResponse =", shader.indexOf("for (int sunIndex"));
+        int sunZero = shader.indexOf("all(equal(sunResponse, vec3(0.0)))", sunSource);
+        int sunTrace = shader.indexOf("traceRayEXT(", sunSource);
+        if (!(sunSource >= 0 && sunZero > sunSource && sunTrace > sunZero)) {
+            throw new AssertionError("Zero solar sources must bypass the visibility ray");
+        }
+        int area = shader.indexOf("AreaDirectSplit estimateAreaDirect(");
+        int emitter = shader.indexOf("vec3 sourceRadiance = evaluateEmitter(", area);
+        int areaZero = shader.indexOf("all(equal(sourceRadiance, vec3(0.0)))", emitter);
+        int areaTrace = shader.indexOf("traceEmitterVisibility(", area);
+        if (!(emitter > area && areaZero > emitter && areaTrace > areaZero)) {
+            throw new AssertionError("Zero local sources must bypass the visibility ray");
+        }
+
+    }
+
+    private static void assertOpaqueHitFastPaths() {
+        String primary = RayTracingShaders.ANY_HIT_SHADER;
+        int primaryReturn = primary.indexOf("if (uv2.z <= 0.5) return;");
+        int primaryUv = primary.indexOf("vec2 uv =");
+        if (!(primaryReturn >= 0 && primaryUv > primaryReturn)) {
+            throw new AssertionError("Non-cutout primary hits must bypass texture coverage work");
+        }
+        String shadow = RayTracingShaders.SHADOW_ANY_HIT_SHADER;
+        int fast = shadow.indexOf("if (uv2.z <= 0.5 && !transmissive)");
+        int end = shadow.indexOf("return;", fast);
+        int uv = shadow.indexOf("vec2 uv =");
+        if (!(fast >= 0 && end > fast && uv > end)
+                || !shadow.substring(fast, end).contains("shadowDynamicOccluder = 1u")) {
+            throw new AssertionError("Opaque shadow hits must bypass textures and retain dynamic identity");
+        }
+        require(shadow, "if (transmissive)");
+        require(shadow, "shadowTransmittance *= transmissionFilter;");
+        require(shadow, "textureSample.a < ALPHA_CUTOFF");
+        require(RayTracingShaders.SHADOW_CLOSEST_HIT_SHADER, "shadowTransmittance = vec3(0.0)");
     }
 
     private static void assertCutoutSamplingContract() {
@@ -50,17 +117,17 @@ public final class RayTracingShaderContractTest {
 
     private static void assertRayBudgetContract() {
         String shader = RayTracingShaders.RAYGEN_SHADER;
-        require(shader, "const uint PRIMARY_RAY_MASK = 0x7fu;");
-        require(shader, "const uint SECONDARY_RAY_MASK = 0xfeu;");
+        require(shader, "const uint PRIMARY_RAY_MASK = 0x3fu;");
+        require(shader, "const uint SECONDARY_RAY_MASK = 0x7eu;");
         require(shader, "(bounce == 0 ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK)");
         require(shader, "SECONDARY_RAY_MASK,\n");
         require(shader, "int giBounces = clamp(int(camera.parameters.w + 0.5), 1, 4);");
-        require(shader, "int maxPathSegments = DIRECT_SUN_ONLY ? 1 : 1 + giBounces;");
+        require(shader, "int maxPathSegments = 1 + giBounces;");
         require(shader, "for (int bounce = 0; bounce < 5; bounce++) {");
         require(shader, "floatBitsToUint(camera.random.x)");
         require(shader, "floatBitsToUint(camera.random.y)");
         reject(shader, "gl_LaunchIDEXT.xy, 0u, 0u, 0u, 0u");
-        require(shader, "sampleBase.sampleIndex = floatBitsToUint(camera.random.x) * 4u + uint(bounce);");
+        require(shader, "sampleBase.sampleIndex = floatBitsToUint(camera.random.x);");
         reject(shader, "float survivalProbability = clamp(max(max(baseColor.r, baseColor.g), baseColor.b), 0.25, 0.9);");
         require(shader, "float betaLuminance = dot(max(throughput, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));");
         require(shader, "throughput *= sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);");
@@ -73,16 +140,17 @@ public final class RayTracingShaderContractTest {
         require(shader, "if (rouletteSample > survivalProbability)");
         require(shader, "throughput /= survivalProbability;");
         require(shader, "layout(set = 0, binding = 19, std430) readonly buffer DynamicMotionMetadata");
-        require(shader, "layout(location = 1) rayPayloadEXT vec3 shadowTransmittance;");
-        require(shader, "layout(location = 2) rayPayloadEXT uint shadowDynamicOccluder;");
+        require(shader, "layout(location = 1) rayPayloadEXT ShadowPayload shadowPayload;");
+        require(shader, "#define shadowDynamicOccluder shadowPayload.dynamicOccluder");
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER,
-            "layout(location = 2) rayPayloadInEXT uint shadowDynamicOccluder;");
+            "layout(location = 1) rayPayloadInEXT ShadowPayload shadowPayload;");
+        require(RayTracingShaders.SHADOW_ANY_HIT_SHADER, "shadowExcludeDynamic != 0u");
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER,
             "uint dynamicStart = uint(max(camera.dynamicParameters.x, 0.0) + 0.5);");
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER,
             "shadowDynamicOccluder = 1u;");
         require(shader, "primaryDynamicShadow = primaryDynamicShadow || areaDirect.dynamicOccluder;");
-        require(shader, "primaryDynamicShadow = primaryDynamicShadow || sunDynamicOccluder;");
+        require(shader, "primaryDynamicShadow = primaryDynamicShadow || sunDynamicOccluder || moonDynamicOccluder;");
         require(shader, "layout(set = 0, binding = 20, rgba16f) uniform writeonly image2D nrdMaterial;");
         require(RayTracingShaders.ANY_HIT_SHADER, "ignoreIntersectionEXT;");
         require(shader, "layout(set = 0, binding = 21, rgba16f) uniform writeonly image2D nrdDirectDiffuse;");
@@ -90,18 +158,22 @@ public final class RayTracingShaderContractTest {
         require(shader, "layout(set = 0, binding = 23, rgba16f) uniform writeonly image2D nrdEmission;");
         require(shader, "layout(set = 0, binding = 24, rgba32f) uniform writeonly image2D nrdPrimaryPosition;");
         require(shader, "layout(set = 0, binding = 25, rgba16f) uniform writeonly image2D nrdSpecularMaterial;");
-        require(shader, "bool nrdSignalMode = camera.dynamicParameters.w > 0.5;");
+        require(shader, "if (camera.dynamicParameters.w >= 0.0)");
         require(shader, "vec4(nrdDiffuseRadiance, diffuseGeneratorHitDistance)");
         require(shader, "vec4(nrdSpecularRadiance, specularGeneratorHitDistance)");
         require(shader, "vec3 filteredDiffuseRadiance = directDiffuseRadiance");
-        require(shader, "+ indirectDiffuseRadiance + areaDirectDiffuseRadiance;");
+        require(shader, "+ indirectDiffuseRadiance + areaDirectDiffuseRadiance - dynamicDiffuseDelta;");
+        require(shader, "+ areaDirectSpecularRadiance - dynamicSpecularDelta;");
+        require(shader, "vec3 directAovRadiance = dynamicDiffuseDelta + dynamicSpecularDelta;");
+        require(shader, "diffuseSignalDistance = primaryDirectDistance;");
+        require(shader, "specularSignalDistance = primaryDirectDistance;");
         require(shader, "vec3 nrdDiffuseRadiance = filteredDiffuseRadiance;");
         require(shader, "vec3 nrdSpecularRadiance = directSpecularRadiance");
         require(shader, "+ specularRadiance + transmissionRadiance");
         require(shader,
             "vec3 unfilteredRadiance = emissionRadiance;");
-        require(shader, "directDiffuseRadiance += throughput * sunDiffuseContribution;");
-        require(shader, "directSpecularRadiance += throughput * sunSpecularContribution;");
+        require(shader, "directDiffuseRadiance += throughput * (sunDiffuseContribution + moonDiffuseContribution\n                    + skyDirectDiffuseContribution);");
+        require(shader, "directSpecularRadiance += throughput * (sunSpecularContribution + moonSpecularContribution\n                    + skyDirectSpecularContribution);");
         require(shader, "areaDirectDiffuseRadiance += throughput * areaDirect.diffuse;");
         require(shader, "areaDirectSpecularRadiance += throughput * areaDirect.specular;");
         require(shader, "vec4(directAovRadiance, primaryDynamicShadow ? 1.0 : 0.0)");
@@ -110,9 +182,10 @@ public final class RayTracingShaderContractTest {
         require(shader, "primaryDynamicSlot = pathDynamicSlot;");
         require(shader, "primaryDynamicFlags = floatBitsToUint(dynamicMotion.values[metadataBase + 6u].x);");
         require(shader, "if (bounce + 1 >= maxPathSegments) {");
-        require(shader, "float diffuseSignalActive = primaryHit &&");
-        require(shader, "vec3 nrdDiffuse = primaryHit ? vec3(");
-        require(shader, "vec3 nrdSpecular = primaryHit ? vec3(");
+        require(shader, "float nrdDiffuseSignalActive = primaryHit");
+        require(shader, "float nrdSpecularSignalActive = primaryHit");
+        require(shader, "float diffuseGeneratorHitDistance = nrdDiffuseSignalActive > 0.5");
+        require(shader, "float specularGeneratorHitDistance = nrdSpecularSignalActive > 0.5");
         if (shader.contains("clamp(int(camera.parameters.w + 0.5), 3, 4)")) {
             throw new AssertionError("RayGen still counts primary ray in the giBounces range");
         }
@@ -150,7 +223,7 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER,
             "float diffuseSamplingProbability, float specularSamplingProbability)");
         require(RayTracingShaders.RAYGEN_SHADER,
-            "result.f = diffuseMaterialWeight * baseColor * (vec3(1.0) - F)");
+            "result.diffuse = diffuseMaterialWeight * baseColor * (vec3(1.0) - F)");
         require(RayTracingShaders.RAYGEN_SHADER,
             "result.pdf = diffuseSamplingProbability * nDotO / BSDF_PI + specularSamplingProbability * specPdf;");
         reject(RayTracingShaders.RAYGEN_SHADER, "diffuseWeight * baseColor / BSDF_PI");
@@ -165,7 +238,7 @@ public final class RayTracingShaderContractTest {
         int transmissionBranch = RayTracingShaders.RAYGEN_SHADER.indexOf(
             "if (canTransmit && choice < transmissionProbability)");
         int transmissionAovClass = RayTracingShaders.RAYGEN_SHADER.indexOf(
-            "selectedSpecularPath = true;", transmissionBranch);
+            "selectedTransmissionPath = true;", transmissionBranch);
         int specularBranch = RayTracingShaders.RAYGEN_SHADER.indexOf(
             "} else if (choice < transmissionProbability + specularProbability)", transmissionBranch);
         if (transmissionBranch < 0 || transmissionAovClass < transmissionBranch
@@ -176,9 +249,10 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER,
             "bool transmission = pathMaterial.w > 0.5 || pathOpticalLighting.x > 1.001;");
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER,
-            "if (surface.w > 1.0 || optical.w > 1.001)");
+            "bool transmissive = surface.w > 1.0 || optical.w > 1.001;");
         require(RayTracingShaders.RAYGEN_SHADER, "bool canTransmit = transmission");
-        require(RayTracingShaders.RAYGEN_SHADER, "vec3 mediumAbsorption = vec3(0.0);");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 mediumAbsorption = cameraInWater ? vec3(0.09, 0.045, 0.015) : vec3(0.0);");
+        require(RayTracingShaders.RAYGEN_SHADER, "&& !cameraInWater");
         require(RayTracingShaders.RAYGEN_SHADER, "bool enteringMedium = !insideMedium;");
         require(RayTracingShaders.RAYGEN_SHADER, "throughput *= exp(-mediumAbsorption * mediumDistance);");
         require(RayTracingShaders.RAYGEN_SHADER, "float eta = interfaceEntering ? 1.0 / ior : ior;");
@@ -190,9 +264,9 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER, "float primeRcDispersionIor(float nd, float vd, float scale, float lambda)");
         require(RayTracingShaders.RAYGEN_SHADER, "const vec3 SPECTRAL_WAVELENGTHS_NM = vec3(610.0, 550.0, 450.0);");
         require(RayTracingShaders.RAYGEN_SHADER, "throughput *= spectralHeroWeight(spectralChannel);");
-        require(RayTracingShaders.RAYGEN_SHADER, "const float SUN_ANGULAR_RADIUS_RADIANS = 0.00471;");
+        require(RayTracingShaders.RAYGEN_SHADER, "float sunAngularRadius()");
         require(RayTracingShaders.RAYGEN_SHADER,
-            "return 2.0 * BSDF_PI * (1.0 - cos(SUN_ANGULAR_RADIUS_RADIANS));");
+            "return 4.0 * BSDF_PI * halfSin * halfSin;");
         require(RayTracingShaders.RAYGEN_SHADER, "float sunSolidAngle()");
         require(RayTracingShaders.RAYGEN_SHADER, "layout(set = 0, binding = 26, std430) readonly buffer LightData");
         require(RayTracingShaders.RAYGEN_SHADER,
@@ -213,25 +287,28 @@ public final class RayTracingShaderContractTest {
             "pbrEmission * camera.pbrSettings.z");
         require(RayTracingShaders.RAYGEN_SHADER, "float emitterSelectionPdf(vec3 point, uint emitterIndex)");
         require(RayTracingShaders.RAYGEN_SHADER, "float powerHeuristic(float firstPdf, float secondPdf)");
-        require(RayTracingShaders.RAYGEN_SHADER, "AREA_SAMPLE_EFFECT");
-        require(RayTracingShaders.RAYGEN_SHADER, "evaluateHitEmitter");
+        require(RayTracingShaders.RAYGEN_SHADER, "PRIME_SAMPLE_EFFECT_DIRECT_AREA_LIGHT");
+        require(RayTracingShaders.RAYGEN_SHADER, "result.selectionPdf = selectionPdf;");
         require(RayTracingShaders.RAYGEN_SHADER, "bool sunDiskHit(vec3 rayDirection, vec3 sunDirection)");
         require(RayTracingShaders.RAYGEN_SHADER, "bool sunDiskIsHit = sunIsValid && sunDiskHit(rayDirection, camera.sun.xyz);");
         require(RayTracingShaders.RAYGEN_SHADER, "camera.settings.x / max(sunSolidAngle(), 1.0e-8)");
         require(RayTracingShaders.RAYGEN_SHADER, "skyRadiance += throughput * vec3(camera.settings.x / max(sunSolidAngle(), 1.0e-8))");
         require(RayTracingShaders.RAYGEN_SHADER, "* daylight * weatherVisibility;");
-        require(RayTracingShaders.RAYGEN_SHADER, "if (!DIRECT_SUN_ONLY)");
+        require(RayTracingShaders.RAYGEN_SHADER, "skyRadiance = throughput * skySrgbToWorking(");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmosphereSky(rayDirection, camera.sun.xyz)");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmosphereSunTransmittance(rayDirection)");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmosphereSunTransmittance(sampledSunDirection)");
         reject(RayTracingShaders.RAYGEN_SHADER, "emissionRadiance += throughput * vec3(camera.settings.x / max(sunSolidAngle(), 1.0e-8))");
         require(RayTracingShaders.RAYGEN_SHADER, "vec3 sampleSunDirection(vec3 sunDirection, vec2 sampleValue)");
-        require(RayTracingShaders.RAYGEN_SHADER, "const uint SUN_SAMPLE_EFFECT");
+        require(RayTracingShaders.RAYGEN_SHADER, "const uint PRIME_SAMPLE_EFFECT_DIRECT_SUN");
         require(RayTracingShaders.RAYGEN_SHADER, "vec2 sunSample = primeSobolSample2D(");
         require(RayTracingShaders.RAYGEN_SHADER, "PRIME_SAMPLE_EFFECT_DIRECT_SUN");
         require(RayTracingShaders.RAYGEN_SHADER, "const uint PRIME_SOBOL_INDEX_MASK = 0xffff0000u;");
         require(RayTracingShaders.RAYGEN_SHADER, "uint primeReversedBitOwen(uint value, uint seed)");
         require(RayTracingShaders.RAYGEN_SHADER, "vec3 primeSobolSample3D(PrimeSampleBase base");
-        require(RayTracingShaders.RAYGEN_SHADER, "vec3 sampledSunDirection = sampleSunDirection(camera.sun.xyz, sunSample);");
+        require(RayTracingShaders.RAYGEN_SHADER, ": sampleSunDirection(camera.sun.xyz, sunSample);");
         require(RayTracingShaders.RAYGEN_SHADER, "float directCosine = max(dot(normal, sampledSunDirection), 0.0);");
-        require(RayTracingShaders.RAYGEN_SHADER, "sampledSunDirection,\n                camera.sun.w");
+        require(RayTracingShaders.RAYGEN_SHADER, "sampledSunDirection, camera.sun.w");
         require(RayTracingShaders.RAYGEN_SHADER, "evaluateBsdf(normal, viewDirection, sampledSunDirection, baseColor,");
         reject(RayTracingShaders.RAYGEN_SHADER, "vec3 lightDirection = normalize(camera.sun.xyz);");
         // RR must be structurally after the scatter update, not merely use a renamed beta.
@@ -260,7 +337,7 @@ public final class RayTracingShaderContractTest {
             "vec3 volumeSunDirection = camera.sun.xyz;");
         reject(RayTracingShaders.RAYGEN_SHADER,
             "vec3 primarySunDirection =");
-        require(RayTracingShaders.RAYGEN_SHADER, "vec3 atmosphereVolumePosition = camera.origin.xyz");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 volumePosition = camera.origin.xyz");
         require(RayTracingShaders.RAYGEN_SHADER, "vec3 volumeEmitterInscatter = vec3(0.0);");
         require(RayTracingShaders.RAYGEN_SHADER,
             "indirectDiffuseRadiance = indirectDiffuseRadiance * atmosphereTransmittance");
@@ -273,14 +350,15 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER, "primaryAreaLight = areaDirect.light;");
         require(RayTracingShaders.RAYGEN_SHADER, "primaryAreaVisibility = areaDirect.visibility;");
         require(RayTracingShaders.RAYGEN_SHADER, "AreaLightSample light, vec3 visibility");
-        reject(RayTracingShaders.RAYGEN_SHADER,
-            "sampleVolumeEmitter(\n                        atmosphereVolumePosition,\n                        primaryRayDirection,\n                        primeSobolSample3D");
+        require(RayTracingShaders.RAYGEN_SHADER, "volumeEmitterInscatter = samplePhysicalVolumeEmitter(");
+        require(RayTracingShaders.RAYGEN_SHADER, "primaryDynamicShadow = primaryDynamicShadow || volumeDynamicOccluder;");
+        require(RayTracingShaders.RAYGEN_SHADER, "volumeEmitterInscatter = volumeEmitter * fogWeight * 0.25;");
         reject(RayTracingShaders.RAYGEN_SHADER, "float surfaceSunVisibility");
         require(RayTracingShaders.RAYGEN_SHADER,
             "directDiffuseRadiance *= atmosphereTransmittance;");
         require(RayTracingShaders.RAYGEN_SHADER,
-            "emissionRadiance = emissionRadiance * atmosphereTransmittance");
-        require(RayTracingShaders.RAYGEN_SHADER, "+ atmosphereInscatter;");
+            "emissionRadiance *= atmosphereTransmittance;");
+        require(RayTracingShaders.RAYGEN_SHADER, "emissionRadiance += atmosphereInscatter;");
         reject(RayTracingShaders.RAYGEN_SHADER,
             "indirectDiffuseRadiance *= atmosphereTransmittance;");
         require(RayTracingShaders.RAYGEN_SHADER,
@@ -293,19 +371,22 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER,
             "outputRadiance = outputRadiance * atmosphereTransmittance");
         require(RayTracingShaders.RAYGEN_SHADER,
-            "+ atmosphereInscatter + volumeEmitterInscatter;");
-        require(RayTracingShaders.RAYGEN_SHADER, "vec3 localRadiance = throughput * (localDiffuse + localSpecular + emissiveContribution);");
+            "outputRadiance += atmosphereInscatter;");
+        require(RayTracingShaders.RAYGEN_SHADER,
+            "+ volumeEmitterInscatter;");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 localRadiance = throughput * (directDiffuseContribution");
+        require(RayTracingShaders.RAYGEN_SHADER, "+ directSpecularContribution + emissiveContribution);");
         require(RayTracingShaders.RAYGEN_SHADER, "emissionRadiance += throughput * emissiveContribution;");
-        require(RayTracingShaders.RAYGEN_SHADER, "diffuseRadiance += localRadiance;");
-        require(RayTracingShaders.RAYGEN_SHADER, "indirectDiffuseRadiance += localRadiance;");
-        require(RayTracingShaders.RAYGEN_SHADER, "directSpecularRadiance += throughput * sunSpecularContribution;");
+        require(RayTracingShaders.RAYGEN_SHADER, "diffuseRadiance += localRadiance * primaryDiffuseShare;");
+        require(RayTracingShaders.RAYGEN_SHADER, "indirectDiffuseRadiance += localRadiance * primaryDiffuseShare;");
+        require(RayTracingShaders.RAYGEN_SHADER, "directSpecularRadiance += throughput * (sunSpecularContribution + moonSpecularContribution\n                    + skyDirectSpecularContribution);");
         reject(RayTracingShaders.RAYGEN_SHADER, "diffuseRadiance += throughput * localRadiance;");
-        require(RayTracingShaders.RAYGEN_SHADER, "specularRadiance += localRadiance;");
+        require(RayTracingShaders.RAYGEN_SHADER, "specularRadiance += localRadiance * (vec3(1.0) - primaryDiffuseShare);");
         require(RayTracingShaders.RAYGEN_SHADER,
             "if (bounce == 0) {\n            // Only directly visible emission is deterministic and bypasses NRD.\n            emissionRadiance += throughput * emissiveContribution;");
         require(RayTracingShaders.CLOSEST_HIT_SHADER, "samplePbr(pbrMapIndex, uv, tangentNormal");
         require(RayTracingShaders.CLOSEST_HIT_SHADER, "bool transmissiveMaterial = surface.w > 1.0 || optical.w > 1.001;");
-        require(RayTracingShaders.CLOSEST_HIT_SHADER, "transmissiveMaterial ? transmissionSide : 0.0");
+        require(RayTracingShaders.CLOSEST_HIT_SHADER, "transmissiveMaterial ? transmissionSide : -materials.entries[materialIndex + 1u].w");
         require(RayTracingShaders.CLOSEST_HIT_SHADER, "localPosition.w carries atlas coverage/opacity as transmission opacity");
         require(RayTracingShaders.CLOSEST_HIT_SHADER,
             "(uv2.w > 0.5 ? textureSample.a : 1.0) * tint.a, 0.0, 1.0);");
@@ -314,6 +395,20 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER, "shadowTransmittance *= transmissionFilter");
         require(RayTracingShaders.SHADOW_ANY_HIT_SHADER, "vec3 transmissionFilter = materialTransmissionColor(");
         require(RayTracingShaders.RAYGEN_SHADER, "shadowTransmittance = vec3(1.0);");
+        // Physical finite-segment aerial perspective: faithful transport, not the legacy RGB
+        // approximation. Direct spectral -> Rec.2020 -> per-step TLAS RGB shadow; multiple stays
+        // unshadowed; L is added post-NRD by AerialPerspectiveComposite; surface T stays in RayGen.
+        require(RayTracingShaders.RAYGEN_SHADER, "void integratePhysicalAtmosphereSegment(");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmRec2020Transmittance(spectralTransmittance)");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmIndirect(");
+        require(RayTracingShaders.RAYGEN_SHADER,
+            "layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D physicalAerialL;");
+        require(RayTracingShaders.RAYGEN_SHADER,
+            "layout(set = 0, binding = 31, std430) readonly buffer PrimeAtmData");
+        require(RayTracingShaders.RAYGEN_SHADER, "imageStore(physicalAerialL, ivec2(gl_LaunchIDEXT.xy),");
+        require(RayTracingShaders.RAYGEN_SHADER, "directStep * rgbShadow * shadowWeight + multipleStep");
+        require(RayTracingShaders.RAYGEN_SHADER, "physicalAtmLinearRec2020FromSpectral(value)");
+        require(RayTracingShaders.RAYGEN_SHADER, "lessThan(tau, vec4(0.001))");
         assertEnergyAndMisContract();
         reject(RayTracingShaders.SHADOW_MISS_SHADER, "shadowTransmittance = vec3(1.0);");
         require(RayTracingShaders.SHADOW_MISS_SHADER, "ignored transparent any-hit intersections have already accumulated their");
@@ -344,9 +439,12 @@ public final class RayTracingShaderContractTest {
         require(raygen, "&& pathEmitterIndex != LIGHT_NO_EMITTER;");
         require(raygen, "vec3 emissiveContribution = bsdfSampledEmitter ? vec3(0.0) : baseColor * emission;");
         reject(raygen, "* directLight / max(directCosine, 1.0e-6);");
-        require(raygen, "float sunDiffuseEnergy = primeDefaultDiffuseEnergy(");
-        require(raygen, "vec3 sunDiffuseBrdf = diffuseMaterialWeight * baseColor");
-        require(raygen, "vec3 sunSpecularContribution = max(sunBsdf.f - sunDiffuseBrdf, vec3(0.0))");
+        require(raygen, "sunDiffuseContribution += sunBsdf.diffuse * directLight;");
+        require(raygen, "sunSpecularContribution += max(sunBsdf.f - sunBsdf.diffuse, vec3(0.0))");
+        require(raygen, "result.diffuse = scale * bsdf.diffuse;");
+        require(raygen, "* weatherVisibility * shadowFactor / float(sunSampleCount);");
+        require(raygen, "powerHeuristic(float(sunSampleCount) * sunPdf, sunBsdf.pdf)");
+        require(raygen, "float(previousSunNeeSamples) / max(sunSolidAngle(), 1.0e-8)");
         require(raygen, "vec3 directDiffuseContribution = sunDiffuseContribution");
         reject(raygen, "float sunSpecularProbability = metallic >= 0.999");
         reject(raygen, "bool applyMis");
@@ -364,8 +462,8 @@ public final class RayTracingShaderContractTest {
         require(shader, "porosity = blue;");
         require(shader, "emission = green;");
         require(shader, "pbrPredefinedMetalF0");
-        require(shader, "float pbrHeight(uint offset, uint width, uint height, float u, float v)");
-        require(shader, "float pbrHeightTexel(uint offset, uint width, uint height, int x, int y)");
+        require(shader, "float pbrHeightPrepared(uint offset, uint width, uint height, float u, float v, vec2 animation)");
+        require(shader, "float pbrHeightWrappedTexel(uint offset, uint width, uint x, uint y)");
         require(shader, "return mix(mix(h00, h10, blend.x), mix(h01, h11, blend.x), blend.y);");
         require(shader, "vec2 pbrWrapCoord(vec2 coord)");
         require(shader, "vec2 coord = pbrWrapCoord((atlasUv - vec2(u0, v0)) / span);");
@@ -377,8 +475,8 @@ public final class RayTracingShaderContractTest {
         require(shader, "const int PBR_PARALLAX_REFINEMENTS = 5;");
         require(shader, "vec2 parallaxDirection = viewTangent.xy / viewTangent.z");
         require(shader, "for (int stepIndex = 0; stepIndex < PBR_PARALLAX_STEPS; stepIndex++)");
-        require(shader, "sampledHeight = pbrHeight(heightOffset, width, height,");
-        require(shader, "currentSampleCoord.x, currentSampleCoord.y);");
+        require(shader, "sampledHeight = pbrHeightPrepared(heightOffset, width, height,");
+        require(shader, "currentSampleCoord.x, currentSampleCoord.y, heightAnimation);");
         require(shader, "for (int refinement = 0; refinement < PBR_PARALLAX_REFINEMENTS; refinement++)");
         require(shader, "vec3 pbrTangent(vec3 faceNormal, float tangentAngle, float tangentHandedness)");
         require(shader, "lighting.x, lighting.z,");
@@ -403,7 +501,8 @@ public final class RayTracingShaderContractTest {
     }
 
     private static void require(String source, String fragment) {
-        if (!source.contains(fragment)) {
+        if (!source.contains(fragment)
+            && !source.replaceAll("\\s+", " ").contains(fragment.replaceAll("\\s+", " "))) {
             throw new AssertionError("Ray budget contract is missing: " + fragment);
         }
     }

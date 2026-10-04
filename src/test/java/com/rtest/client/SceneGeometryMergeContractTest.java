@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Contract for one-pass CPU merging of captured Section geometry. */
+/** Contract for section-backed CPU geometry snapshots and incremental merging. */
 public final class SceneGeometryMergeContractTest {
     private SceneGeometryMergeContractTest() {
     }
@@ -17,11 +17,14 @@ public final class SceneGeometryMergeContractTest {
                 "src/main/java/com/rtest/client/CompiledSectionMeshCache.java")).replace("\r\n", "\n");
         String probeSource = Files.readString(Path.of(
                 "src/main/java/com/rtest/client/RayTracingProbe.java")).replace("\r\n", "\n");
+        String materialBufferSource = Files.readString(Path.of(
+                "src/main/java/com/rtest/client/RayTracingMaterialBuffer.java")).replace("\r\n", "\n");
         assertEmissionCalibration();
-        require(source, "containsEmitter = containsEmissiveBlock(this.level, origin);");
+        require(source, "&& containsEmissiveBlock(capturedSection);");
         require(source, "section.maybeHas(state -> state.getLightEmission() > 0)");
-        require(source, "containsFluid || hasGlass || containsEmitter\n                        ? null : compiled");
-        require(source, "boolean hasGlass = !pbrNeedsSpriteCapture && containsGlass(this.level, origin);");
+        require(source, "containsFluid || hasGlass || containsEmitter || containsVegetation\n                        ? null : compiled");
+        require(source, "&& containsGlass(capturedSection);");
+        require(source, "BlockState state = capturedSection.getBlockState(localX, localY, localZ);");
         require(source, "this.lightTree = RayTracingLightTree.build");
         require(Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingLightTree.java")),
             "power-weighted binary light tree");
@@ -36,19 +39,29 @@ public final class SceneGeometryMergeContractTest {
             throw new AssertionError("SceneGeometry.replaceSections contract is missing");
         }
         String merge = source.substring(start, end);
-        require(merge, "int vertexLength = 0;");
-        require(merge, "int materialLength = 0;");
-        require(merge, "vertices = new float[vertexLength];");
-        require(merge, "materials = new float[materialLength];");
-        require(merge, "System.arraycopy(section.vertices, 0, vertices, vertexOffset, section.vertices.length);");
-        require(merge, "System.arraycopy(section.materialData, 0, materials, materialOffset, section.materialData.length);");
-        require(merge, "addFallbackGeometry(mergedSections, fallbackVertices, fallbackMaterials, cameraPosition);");
+        require(merge, "addFallbackGeometry(mergedSections, cameraPosition);");
+        require(merge, "sectionTriangleCount(mergedSections)");
+        reject(merge, "vertices = new float[vertexLength];");
+        reject(merge, "materials = new float[materialLength];");
+        require(source, "this.materialData = new float[0];");
+        require(materialBufferSource, "for (SceneGeometry.SectionGeometry section : geometry.sections)");
         assertFallbackMaterialArity(source);
         assertNoFloatBoxing(source);
         assertVanillaFaceCulling(source);
+        assertCaptureTransfersOwnedArrays(source);
         assertReusedCaptureScratch(source);
         require(merge, "false,\n                this.revision");
-        require(probeSource, "private static final int SECTIONS_PER_TRANSACTION = 8;");
+        require(probeSource, "private static final int SECTIONS_PER_TRANSACTION = 512;");
+        require(probeSource, "private static final int INITIAL_CAPTURE_SECTIONS_PER_FRAME = 4;");
+        require(probeSource, "TERRAIN_DIRTY_IDLE_FLUSH_NANOS = 250_000_000L;");
+        require(probeSource, "TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS = 2_000_000_000L;");
+        require(probeSource, "pendingDirtySections.size() >= SECTIONS_PER_TRANSACTION");
+        require(probeSource, "notePendingDirtyEvents();");
+        require(probeSource, "MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 10_000_000;");
+        require(probeSource, "if (renderGeometry.triangleCount() > MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY)");
+        require(probeSource, "if (smokeGeometry.triangleCount() <= MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY)");
+        require(probeSource,
+            "int sectionBudget = smokeGeometry == null\n                ? INITIAL_CAPTURE_SECTIONS_PER_FRAME\n                : SECTIONS_PER_FRAME;");
         require(probeSource, "if (activeDirtySections.size() >= SECTIONS_PER_TRANSACTION)");
         require(probeSource, "private static final ExecutorService GEOMETRY_MERGE_EXECUTOR");
         require(probeSource, "CompletableFuture.supplyAsync");
@@ -61,13 +74,28 @@ public final class SceneGeometryMergeContractTest {
         require(probeSource, "RayTracingScene.SceneGeometry geometry = session.build();");
         require(probeSource, "finally {\n                session.close();\n            }");
         require(probeSource, "previous.replaceSections(");
-        require(probeSource, "completedMerge.generation() == sceneGeneration");
+        reject(probeSource, "cameraChunkX(camera) == completedMerge.windowChunkX()");
+        reject(probeSource, "cameraChunkZ(camera) == completedMerge.windowChunkZ()");
+        require(probeSource, "private static boolean queuedWindowValid;");
+        require(probeSource, "if (!windowMoved) {");
         require(probeSource, "completedMerge.level() == capturedLevel");
         require(probeSource, "&& !fullCaptureRequested");
         require(probeSource, "pendingDirtySections.addAll(completedMerge.dirtySections())");
         require(probeSource, "smokeGeometry = completedMerge.geometry();");
+        require(probeSource, "updateTerrainLodInputsIncrementally(terrainLodSourceGeometry, smokeGeometry,");
+        require(probeSource, "smokeGeometry.revision() != terrainLodSourceGeometry.revision()");
+        require(probeSource, "terrainLodWindowGeneration = terrainLodSourceGeneration;");
+        require(probeSource, "terrainLodScheduler.cancel(schedulerKey)");
+        require(probeSource, "terrainLodWorkerTokens.put(id, request.token())");
+        int windowChangedStart = probeSource.indexOf("if (windowChanged) {");
+        int windowChangedEnd = probeSource.indexOf("for (RayTracingTerrainLodScheduler.Result", windowChangedStart);
+        if (windowChangedStart < 0 || windowChangedEnd < 0
+                || probeSource.substring(windowChangedStart, windowChangedEnd).contains("cancelAll()")
+                || probeSource.substring(windowChangedStart, windowChangedEnd).contains("terrainLodPending.clear()")) {
+            throw new AssertionError("camera movement must preserve independent terrain LOD work");
+        }
         reject(probeSource, "smokeGeometry = smokeGeometry.replaceSections");
-        require(probeSource, "boolean stalePartialCapture = completedPartial && cameraMovedDuringCapture;");
+        reject(probeSource, "stalePartialCapture");
         if (merge.contains("FloatAccumulator vertices =") || merge.contains("FloatAccumulator materials =")) {
             throw new AssertionError("CPU Section merge must not use growing FloatAccumulator arrays");
         }
@@ -121,10 +149,19 @@ public final class SceneGeometryMergeContractTest {
         reject(source, "level.getBlockState(position.relative(direction)).isSolidRender()");
     }
 
-    /** Section capture must reuse one mutable position and one RandomSource per Section. */
+    /** Fresh CPU capture arrays transfer into the immutable section without another full copy. */
+    private static void assertCaptureTransfersOwnedArrays(String source) {
+        require(source, "return SectionGeometry.takeOwnership(");
+        require(source, "copyArrays ? vertices.clone() : vertices");
+    }
+
+    /** Section capture must reuse block/neighbor positions and one RandomSource per Section. */
     private static void assertReusedCaptureScratch(String source) {
         require(source, "BlockPos.MutableBlockPos position = new BlockPos.MutableBlockPos();");
+        require(source, "BlockPos.MutableBlockPos neighborPosition = new BlockPos.MutableBlockPos();");
+        require(source, "neighborPosition.set(x + direction.getStepX()");
         require(source, "random.setSeed(state.getSeed(position));");
+        reject(source, "position.relative(direction)");
         reject(source, "RandomSource.create(state.getSeed(position))");
     }
 

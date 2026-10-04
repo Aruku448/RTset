@@ -132,8 +132,17 @@ public final class RayTracingSettingsScreen extends Screen {
     private List<SettingsEntry> lightingEntries() {
         return List.of(
             slider("screen.rtest.settings.sunIntensity", "screen.rtest.settings.sunIntensity.tip",
-                "1.0", 0.0D, 2.0D, RayTracingClientConfig.INSTANCE.sunIntensity.get(),
+                "1.0", 0.0D, 16.0D, RayTracingClientConfig.INSTANCE.sunIntensity.get(),
                 value -> RayTracingClientConfig.INSTANCE.sunIntensity.set(value)),
+            slider("screen.rtest.settings.sunAngularRadiusDegrees", "screen.rtest.settings.sunAngularRadiusDegrees.tip",
+                "0.27", 0.05D, 5.0D, RayTracingClientConfig.INSTANCE.sunAngularRadiusDegrees.get(),
+                value -> RayTracingClientConfig.INSTANCE.sunAngularRadiusDegrees.set(value)),
+            cycle("screen.rtest.settings.sunShadowSamples", "screen.rtest.settings.sunShadowSamples.tip", "4",
+                CycleButton.builder(value -> Component.literal(Integer.toString(value)),
+                        RayTracingClientConfig.INSTANCE.sunShadowSamples.get())
+                    .withValues(1, 2, 4, 8, 16)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.sunShadowSamples"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.sunShadowSamples.set(value))),
             slider("screen.rtest.settings.sunColorTemperature", "screen.rtest.settings.sunColorTemperature.tip",
                 "6500", 1000.0D, 20000.0D, RayTracingClientConfig.INSTANCE.sunColorTemperature.get(),
                 value -> RayTracingClientConfig.INSTANCE.sunColorTemperature.set(value)),
@@ -143,6 +152,36 @@ public final class RayTracingSettingsScreen extends Screen {
             slider("screen.rtest.settings.shadowStrength", "screen.rtest.settings.shadowStrength.tip",
                 "1.0", 0.0D, 1.0D, RayTracingClientConfig.INSTANCE.shadowStrength.get(),
                 value -> RayTracingClientConfig.INSTANCE.shadowStrength.set(value)),
+            cycle("screen.rtest.settings.skyboxTextureEnabled", "screen.rtest.settings.skyboxTextureEnabled.tip", "on",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.skyboxTextureEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.skyboxTextureEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.skyboxTextureEnabled.set(value))),
+            cycle("screen.rtest.settings.skyboxDaylightOpacityEnabled", "screen.rtest.settings.skyboxDaylightOpacityEnabled.tip", "on",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.skyboxDaylightOpacityEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.skyboxDaylightOpacityEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.skyboxDaylightOpacityEnabled.set(value))),
+            slider("screen.rtest.settings.skyboxTextureOpacity", "screen.rtest.settings.skyboxTextureOpacity.tip",
+                "0.25", 0.0D, 1.0D, RayTracingClientConfig.INSTANCE.skyboxTextureOpacity.get(),
+                value -> RayTracingClientConfig.INSTANCE.skyboxTextureOpacity.set(value)),
+            cycle("screen.rtest.settings.moonEnabled", "screen.rtest.settings.moonEnabled.tip", "on",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.moonEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.moonEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.moonEnabled.set(value))),
+            slider("screen.rtest.settings.moonIntensity", "screen.rtest.settings.moonIntensity.tip",
+                "0.06", 0.0D, 1.0D, RayTracingClientConfig.INSTANCE.moonIntensity.get(),
+                value -> RayTracingClientConfig.INSTANCE.moonIntensity.set(value)),
+            cycle("screen.rtest.settings.primeAtmosphereEnabled", "screen.rtest.settings.primeAtmosphereEnabled.tip", "off",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.primeAtmosphereEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.primeAtmosphereEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.primeAtmosphereEnabled.set(value))),
             cycle("screen.rtest.settings.volumetricLightingEnabled", "screen.rtest.settings.volumetricLightingEnabled.tip", "on",
                 CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
                         RayTracingClientConfig.INSTANCE.volumetricLightingEnabled.get())
@@ -153,14 +192,23 @@ public final class RayTracingSettingsScreen extends Screen {
                 "1.0", 0.0D, 2.0D, RayTracingClientConfig.INSTANCE.volumetricLightingStrength.get(),
                 value -> RayTracingClientConfig.INSTANCE.volumetricLightingStrength.set(value)),
             slider("screen.rtest.settings.volumetricFogDensity", "screen.rtest.settings.volumetricFogDensity.tip",
-                "1.0", 0.0D, 2.0D, RayTracingClientConfig.INSTANCE.volumetricFogDensity.get(),
+                "1.0", 0.0D, 16.0D, RayTracingClientConfig.INSTANCE.volumetricFogDensity.get(),
                 value -> RayTracingClientConfig.INSTANCE.volumetricFogDensity.set(value)),
+            slider("screen.rtest.settings.atmosphereAltitudeOffsetMeters", "screen.rtest.settings.atmosphereAltitudeOffsetMeters.tip",
+                "300", 0.0D, 10000.0D, RayTracingClientConfig.INSTANCE.atmosphereAltitudeOffsetMeters.get(),
+                value -> RayTracingClientConfig.INSTANCE.atmosphereAltitudeOffsetMeters.set((int)Math.round(value))),
             cycle("screen.rtest.settings.volumetricLightingQuality", "screen.rtest.settings.volumetricLightingQuality.tip", "2",
                 CycleButton.builder(value -> Component.translatable("screen.rtest.settings.volumetricLightingQuality.value." + value),
                         RayTracingClientConfig.INSTANCE.volumetricLightingQuality.get())
                     .withValues(1, 2, 3)
                     .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.volumetricLightingQuality"),
                         (button, value) -> RayTracingClientConfig.INSTANCE.volumetricLightingQuality.set(value))),
+            cycle("screen.rtest.settings.atmosphereDiagnostic", "screen.rtest.settings.atmosphereDiagnostic.tip", "0",
+                CycleButton.builder(value -> Component.translatable("screen.rtest.settings.atmosphereDiagnostic.value." + value),
+                        RayTracingClientConfig.INSTANCE.debugView.get())
+                    .withValues(0, 10, 11)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.atmosphereDiagnostic"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.debugView.set(value))),
             slider("screen.rtest.settings.sunAngleOffset", "screen.rtest.settings.sunAngleOffset.tip",
                 "0.0", -180.0D, 180.0D, RayTracingClientConfig.INSTANCE.sunAngleOffset.get(),
                 value -> RayTracingClientConfig.INSTANCE.sunAngleOffset.set(value)),
@@ -423,22 +471,7 @@ public final class RayTracingSettingsScreen extends Screen {
                 value -> RayTracingClientConfig.INSTANCE.nrdConvergencePercent.set(value)),
             slider("screen.rtest.settings.nrdDenoisingRange", "screen.rtest.settings.nrdDenoisingRange.tip",
                 "60000", 256.0D, 60000.0D, RayTracingClientConfig.INSTANCE.nrdDenoisingRange.get(),
-                value -> RayTracingClientConfig.INSTANCE.nrdDenoisingRange.set(value)),
-            cycle("screen.rtest.settings.sundialDenoiserEnabled", "screen.rtest.settings.sundialDenoiserEnabled.tip", "off",
-                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
-                        RayTracingClientConfig.INSTANCE.sundialDenoiserEnabled.get())
-                    .withValues(true, false)
-                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.sundialDenoiserEnabled"),
-                        (button, value) -> RayTracingClientConfig.INSTANCE.sundialDenoiserEnabled.set(value))),
-            slider("screen.rtest.settings.sundialDenoiserStrength", "screen.rtest.settings.sundialDenoiserStrength.tip",
-                "0.75", 0.0D, 1.0D, RayTracingClientConfig.INSTANCE.sundialDenoiserStrength.get(),
-                value -> RayTracingClientConfig.INSTANCE.sundialDenoiserStrength.set(value)),
-            cycle("screen.rtest.settings.sundialDenoiserHistory", "screen.rtest.settings.sundialDenoiserHistory.tip", "48",
-                CycleButton.builder(value -> Component.literal(Integer.toString(value)),
-                        RayTracingClientConfig.INSTANCE.sundialDenoiserHistory.get())
-                    .withValues(8, 16, 24, 32, 48, 64, 96, 128)
-                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.sundialDenoiserHistory"),
-                        (button, value) -> RayTracingClientConfig.INSTANCE.sundialDenoiserHistory.set(value)))
+                value -> RayTracingClientConfig.INSTANCE.nrdDenoisingRange.set(value))
         );
     }
 

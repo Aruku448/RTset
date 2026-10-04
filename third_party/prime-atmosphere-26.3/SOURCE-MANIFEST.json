@@ -1,0 +1,27 @@
+{
+  "upstream_commit": "3ab5f75e33de3f6947e96f4a4dd1406588e9e98b",
+  "files": {
+    "shaders/abi.json": "f41de99dda3b34d6421ebb76f42d0e6e82bcf83cb1d7f3bc9061043c230bb1a6",
+    "shaders/contract/atmosphere/solve.slang": "3c0e635075ad8b68d08bcec4a86b3effb813a5a72bcdfcb617854b327c408cd8",
+    "shaders/entry/atmosphere/atmosphere_directions.compute.slang": "cc309967ad738ee35d5d38ba6e3ec084a78d11b0338ec9012b164d296c891380",
+    "shaders/entry/atmosphere/atmosphere_ground.compute.slang": "b0e35511cba5ecfc2459eafc29a0a17eaa4ea964c4e5cb8ffa60ff91a0199297",
+    "shaders/entry/atmosphere/atmosphere_incident.compute.slang": "cfc628df7158abde3c3523b13480e880fb34fb626cdcd422077d0955fc4637ac",
+    "shaders/entry/atmosphere/atmosphere_moments.compute.slang": "8d30c6ccf8c612d52661bbcb79fe053140f2ca31f803c9e577bcb214d72c06b4",
+    "shaders/entry/atmosphere/atmosphere_multi_scattering.compute.slang": "c93938b64408154558e37db5e803ca3614e0fb96b76547cada662a21cc1c7d21",
+    "shaders/entry/atmosphere/atmosphere_sky.compute.slang": "c285be389f313c862e1b56fbcb77f54373b5078dda6de03692f075b148ebc4e0",
+    "shaders/entry/atmosphere/atmosphere_transmittance.compute.slang": "4c921b1e4f162ea46125784554510e0c0ad4b456c40756838d9f3c4524fd64c6",
+    "shaders/math/atmosphere_direction.slang": "d1c6ede31ec3f128736f13f6ca47b7e5156064ced9c5841a981da04b705dd9bd",
+    "shaders/model/atmosphere/constants.slang": "d9563e30f4fcd17c866acdca5a150489558d12c841080ed709f76fb86c62f6b4",
+    "shaders/model/atmosphere/geometry.slang": "efeb0de863a2f8dd53b1c18dafc9cb82aa554ff8d5ceed26a09a22156155e7b2",
+    "shaders/model/atmosphere/integrate.slang": "ee8212a173e3aa0673cfaf64209cbdcbafc0c2f44cfe8ab5456b9d32f0a32800",
+    "shaders/model/atmosphere/optical_depth.slang": "c5d106d87562d78c8d1281b652c79680f3c870205d48b2c4b970bcc9a50bbd14",
+    "shaders/model/atmosphere/optical_mapping.slang": "1c3ea416063c0e9ba28b9d3a85499045d9bd8c3e5f2fd908ba52030df3f60754",
+    "shaders/model/atmosphere/parameters.slang": "07ed4614e34c537f5e2b493689f9919e6edd462e40f485200dce95c49090c949",
+    "shaders/model/atmosphere/sky.slang": "c3e2387bc06aedd99519cf461232adacb1e545835ac7110d0b7f9b2d729afe07",
+    "shaders/model/atmosphere/sky_rows.slang": "b9c8cfe2d6e4862f61cd89354a8b9a4583dbdc81b75491099478c12c5b348236",
+    "shaders/model/atmosphere/sky_view.slang": "ee478428f871542de6ad932c20923314d2ac2c5c798acaaab327fe8fe6f3abe8",
+    "shaders/model/atmosphere/source.slang": "e57ffb7b1d6d1822cb8dd8dec1acb249b13af90b04c9cfdf031d2f2757b6667d",
+    "shaders/model/atmosphere/spectrum.slang": "e78c753180881ff54b8218cf427fa39eeda5e9fe0ff8af4d46fd5d1ee6535950",
+    "shaders/model/atmosphere/transmittance.slang": "0160b4c27a1b7c6f725b5d4062c5822490ae8442c51d33dbed887b2e3442917a"
+  }
+}

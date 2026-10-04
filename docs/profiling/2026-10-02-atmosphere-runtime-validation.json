@@ -1,0 +1,49 @@
+{
+  "scope": "Prime 26.3 stage-one runtime wiring; not GPU/pixel/FPS validation",
+  "checks": {
+    "gradle_test_jar_correspondingSource_tasks": 61,
+    "python_tests_passed": 4,
+    "exact_kernels_compiled_validated": 7,
+    "query_raygen_variants_compiled_validated": 4,
+    "packaged_hash_negative_case": "rejected copied kernel with one-byte corruption",
+    "jar_license_notices_kernel_hashes": "verified",
+    "corresponding_source_current_files": "verified",
+    "git_diff_check": "passed"
+  },
+  "build_jar": {
+    "bytes": 48016940,
+    "sha256": "8cc7150281ed1b1ce149d1e576a7431d69d93a3f25bb50652cfdfb24eb42dee2"
+  },
+  "corresponding_source": {
+    "bytes": 47882232,
+    "sha256": "d202d5a9a3a012b32151e1a991be10f09f5519e0c7b97811ec3b829faf7674d3"
+  },
+  "query_spirv": {
+    "actual_raygen_legacy.spv": {
+      "bytes": 144396,
+      "sha256": "471a5fd8cee5ae2174567899e52852ae829b4851a1891f4715dfdd7a76efef15"
+    },
+    "actual_raygen_physical.spv": {
+      "bytes": 166676,
+      "sha256": "fb2e5f74082c0ba89acd0802af8eb9f8128e071e0497cf34c884bed8c6707352"
+    },
+    "atmosphere_query_legacy.spv": {
+      "bytes": 2936,
+      "sha256": "dc34c6d419d883d4276ebc8d3f2cc84024af0be08caad535f1b18de1641a0105"
+    },
+    "atmosphere_query_physical.spv": {
+      "bytes": 25628,
+      "sha256": "43b4b35d5f7c6bc9f681e11eb524624e8e2cc2fa9eb3aa744168990267ca6739"
+    }
+  },
+  "runtime_default_enabled": false,
+  "deployed": false,
+  "gpu_executed": false,
+  "installed_jar_sha256": "8fca869406606438ecc2cf161be01cef4574fb6bebdee0cf4449d21e0a1696e0",
+  "notes": [
+    "Instance configuration is changing externally; never restore an earlier snapshot.",
+    "Retirement failure handling was source-reviewed, not native failure-injected.",
+    "Window resize device loss remains unresolved.",
+    "Follow-up source review confirmed unretired-work handling; waitIdle device loss now explicitly prohibits fallback while permitting cleanup. No native fault injection."
+  ]
+}

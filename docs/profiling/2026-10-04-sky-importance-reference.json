@@ -1,0 +1,68 @@
+{
+  "method": "approximate unoccluded diffuse cubemap quadrature; no GPU measurement",
+  "mixture": 0.5,
+  "proposal_side": 32,
+  "evaluation_side": 128,
+  "results": [
+    {
+      "normal": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "baseline_variance": 0.11924312393411285,
+      "new_variance": 0.034145613179680234,
+      "variance_ratio": 0.2863528902391656
+    },
+    {
+      "normal": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "baseline_variance": 0.09264434441915392,
+      "new_variance": 0.02651380769979772,
+      "variance_ratio": 0.28618916638710734
+    },
+    {
+      "normal": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "baseline_variance": 0.07591693795075594,
+      "new_variance": 0.021347472835691272,
+      "variance_ratio": 0.2811951247235296
+    },
+    {
+      "normal": [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      "baseline_variance": 0.05332447163995491,
+      "new_variance": 0.010244773618176606,
+      "variance_ratio": 0.19212142761299134
+    },
+    {
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "baseline_variance": 0.11108200486298869,
+      "new_variance": 0.034766330416925784,
+      "variance_ratio": 0.3129789605418757
+    },
+    {
+      "normal": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "baseline_variance": 0.11571963298841192,
+      "new_variance": 0.031305698164185936,
+      "variance_ratio": 0.2705305690635993
+    }
+  ]
+}

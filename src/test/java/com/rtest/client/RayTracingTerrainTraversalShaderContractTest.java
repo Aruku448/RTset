@@ -21,7 +21,8 @@ public final class RayTracingTerrainTraversalShaderContractTest {
         require(shader, "vec4 boundsMinAndLodError");
         require(shader, "uvec4 hierarchy");
         require(shader, "uvec4 draw");
-        require(shader, "TERRAIN_INSTANCE_MASK = 0xffu");
+        require(shader, "TERRAIN_INSTANCE_MASK = 0x3fu");
+        require(shader, "UNTRACED_INSTANCE_MASK = 0x80u");
         require(shader, "node.draw.y & 0x00ffffffu");
         require(shader, "FACING_CULL_DISABLE << 24u");
         require(shader, "completeChildren");

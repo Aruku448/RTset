@@ -7,6 +7,8 @@ import java.nio.file.Path;
 /** Verifies stable PBR slots and append-only GPU update policy. */
 public final class RayTracingPbrMaterialsTest {
     public static void main(String[] args) throws IOException {
+        assertVegetationClassification();
+        assertSlantedSurfaceNormals();
         assertEmissionDecode();
         assertEmissionOverrideContract();
         assertSampleEmissionContract();
@@ -18,6 +20,50 @@ public final class RayTracingPbrMaterialsTest {
         assertVulkanPassUsesInPlacePbrUpdates();
         assertReloadGenerationContract();
         System.out.println("PBR append-only upload policy contract passed");
+    }
+
+    private static void assertVegetationClassification() {
+        for (String path : new String[] {"short_grass", "tall_grass", "fern", "large_fern", "short_dry_grass"}) {
+            if (RayTracingVegetation.kind(path, false) != 1) throw new AssertionError("Missing thin grass: " + path);
+        }
+        if (RayTracingVegetation.kind("custom_foliage", true) != 2
+                || RayTracingVegetation.kind("oak_leaves", false) != 2) {
+            throw new AssertionError("Leaves tag/path must select leaf response");
+        }
+        for (String path : new String[] {"grass_block", "moss_block", "oak_log", "glass", "water", "stone"}) {
+            if (RayTracingVegetation.kind(path, false) != 0) throw new AssertionError("Wrong foliage: " + path);
+        }
+    }
+
+    private static void assertSlantedSurfaceNormals() {
+        var p0 = new org.joml.Vector3f(0, 0, 0);
+        var p1 = new org.joml.Vector3f(1, 0, 1);
+        var p2 = new org.joml.Vector3f(1, 1, 1);
+        var p3 = new org.joml.Vector3f(0, 1, 0);
+        var quad = new net.minecraft.client.resources.model.geometry.BakedQuad(
+            p0, p1, p2, p3, 0L, 0L, 0L, 0L, net.minecraft.core.Direction.WEST, null,
+            net.neoforged.neoforge.client.model.quad.BakedNormals.UNSPECIFIED,
+            net.neoforged.neoforge.client.model.quad.BakedColors.DEFAULT);
+        var normal = RayTracingTangent.geometricNormal(quad, 0, 1, 2);
+        var edge = new org.joml.Vector3f(p1).sub(p0);
+        if (Math.abs(normal.dot(edge)) > 1e-6F || Math.abs(normal.length() - 1) > 1e-6F) {
+            throw new AssertionError("Slanted grass plane must store its actual perpendicular normal, not a cardinal face tag");
+        }
+        // Both rays see the same side of the diagonal plane. A cardinal X normal instead
+        // flips at ray.x=0 and introduces the reported world-axis brightness boundary.
+        float left = normal.dot(new org.joml.Vector3f(-0.2F, 0, -1));
+        float right = normal.dot(new org.joml.Vector3f(0.2F, 0, -1));
+        if (!(left < 0 && right < 0)) {
+            throw new AssertionError("Crossing world X must not flip the side of the same grass plane");
+        }
+        if (!(normal.dot(new org.joml.Vector3f(1, 0, -0.2F)) < 0
+                && normal.dot(new org.joml.Vector3f(1, 0, 0.2F)) < 0)) {
+            throw new AssertionError("Crossing world Z must not flip the side of the same grass plane");
+        }
+        var reverse = RayTracingTangent.geometricNormal(quad, 0, 2, 1);
+        if (normal.dot(reverse) > -0.99999F) {
+            throw new AssertionError("Geometric normal must follow the triangle's final winding");
+        }
     }
 
     private static void assertStableGpuLayout() {
