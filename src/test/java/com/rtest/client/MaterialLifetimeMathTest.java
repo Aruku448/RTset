@@ -16,10 +16,36 @@ public final class MaterialLifetimeMathTest {
             benchmark();
             return;
         }
+        String pass = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/java/com/rtest/client/RayTracingVulkanPass.java"));
+        if (!pass.contains("RayTracingMaterialBuffer.allocationBytes(nextMaterialFloatCount * Float.BYTES, this.materialBuffer.size)")
+                || !pass.contains(".buffer(materialBuffer.buffer).offset(0).range(materialFloatCount * Float.BYTES)"))
+            throw new AssertionError("GPU capacity growth/live descriptor range not wired");
+        verifyAllocationGrowth();
         preservesFreedHolesAcrossLifetimes();
         joinsAdjacentFreeSpans();
         bitmapDifferential();
         System.out.println("Material lifetime interval math passed (not GPU release validation)");
+    }
+
+    private static void verifyAllocationGrowth() {
+        long capacity = 0;
+        int allocations = 0;
+        for (int mib = 1; mib <= 256; mib++) {
+            long required = mib * 1024L * 1024;
+            long next = RayTracingMaterialBuffer.allocationBytes(required, capacity);
+            if (next < required || next < capacity || next - required > 64L * 1024 * 1024)
+                throw new AssertionError("Invalid bounded allocation capacity");
+            if (next != capacity) allocations++;
+            capacity = next;
+        }
+        if (allocations >= 20) throw new AssertionError("Growth still causes frequent allocations: " + allocations);
+        if (RayTracingMaterialBuffer.allocationBytes(100, 1000) != 1000)
+            throw new AssertionError("Existing allocation shrank");
+        long edge = Integer.MAX_VALUE - 15L;
+        if (RayTracingMaterialBuffer.allocationBytes(edge - 100, 0) != edge)
+            throw new AssertionError("Growth must respect host mapping address limit");
+        System.out.println("1–256 MiB growth: " + allocations + " allocations versus 256 exact allocations (synthetic)");
     }
 
     private static void preservesFreedHolesAcrossLifetimes() throws Exception {

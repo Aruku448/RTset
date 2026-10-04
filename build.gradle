@@ -431,3 +431,12 @@ publishing {
         }
     }
 }
+
+def gpuLightTreeMathTest = tasks.register('gpuLightTreeMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.GpuLightTreeMathTest'
+    maxHeapSize = '1g'
+    if (project.hasProperty('gpu_tree_bench')) args 'bench'
+    if (project.hasProperty('gpu_tree_dump')) args 'dump', project.property('gpu_tree_dump'), (project.findProperty('gpu_tree_dump_count') ?: '5003')
+}
+tasks.named('test') { dependsOn gpuLightTreeMathTest }

@@ -1,0 +1,65 @@
+#version 460
+layout(local_size_x = 128) in;
+layout(set = 0, binding = 0, std430) buffer LightData { uint values[]; } tree;
+layout(push_constant) uniform Build { uint first; uint count; uint fused; } build;
+shared vec4 topMinimumPower[255];
+shared vec4 topMaximum[255];
+float readFloat(uint offset) { return uintBitsToFloat(tree.values[offset]); }
+void buildNode(uint n, uint node) {
+        uint b = 8u + node * 8u;
+        vec3 lo, hi;
+        float power;
+        if (node >= n - 1u) {
+            uint packed = node - (n - 1u);
+            uint e = tree.values[4] + packed * 16u;
+            vec3 p = vec3(readFloat(e), readFloat(e+1u), readFloat(e+2u));
+            vec3 q = p + vec3(readFloat(e+4u), readFloat(e+5u), readFloat(e+6u));
+            vec3 r = p + vec3(readFloat(e+8u), readFloat(e+9u), readFloat(e+10u));
+            lo = min(p, min(q,r)); hi = max(p, max(q,r)); power = readFloat(e+11u);
+            tree.values[tree.values[2]+node] = packed | 0x80000000u;
+            tree.values[tree.values[7]+packed] = node;
+        } else {
+            uint left = 2u * node + 1u, right = left + 1u;
+            uint l = 8u + left * 8u, r = 8u + right * 8u;
+            if (build.fused != 0u && right < 255u) {
+                lo = min(topMinimumPower[left].xyz, topMinimumPower[right].xyz);
+                hi = max(topMaximum[left].xyz, topMaximum[right].xyz);
+                power = topMinimumPower[left].w + topMinimumPower[right].w;
+            } else {
+                lo = min(vec3(readFloat(l), readFloat(l+1u), readFloat(l+2u)),
+                         vec3(readFloat(r), readFloat(r+1u), readFloat(r+2u)));
+                hi = max(vec3(readFloat(l+4u), readFloat(l+5u), readFloat(l+6u)),
+                         vec3(readFloat(r+4u), readFloat(r+5u), readFloat(r+6u)));
+                power = readFloat(l+3u) + readFloat(r+3u);
+            }
+            tree.values[tree.values[2]+node] = left;
+        }
+        if (build.fused != 0u) {
+            topMinimumPower[node] = vec4(lo, power);
+            topMaximum[node] = vec4(hi, 0.0);
+        }
+        for (uint a=0u; a<3u; a++) {
+            tree.values[b+a] = floatBitsToUint(lo[a]);
+            tree.values[b+4u+a] = floatBitsToUint(hi[a]);
+        }
+        tree.values[b+3u] = floatBitsToUint(power);
+        tree.values[b+7u] = floatBitsToUint(0.25);
+        tree.values[tree.values[3]+node] = node == 0u ? 0xffffffffu : (node-1u)/2u;
+}
+void main() {
+    uint n = tree.values[1];
+    if (build.fused != 0u) {
+        // Exactly one workgroup. All lanes reach every barrier, including idle lanes.
+        uint first = build.first;
+        for (;;) {
+            if (gl_LocalInvocationID.x <= first) buildNode(n, first + gl_LocalInvocationID.x);
+            // Shared values carry dependencies; no repeated SSBO reads/flushes.
+            barrier();
+            if (first == 0u) break;
+            first = (first - 1u) / 2u;
+        }
+    } else {
+        for (uint i = gl_GlobalInvocationID.x; i < build.count; i += gl_NumWorkGroups.x * 128u)
+            buildNode(n, build.first + i);
+    }
+}

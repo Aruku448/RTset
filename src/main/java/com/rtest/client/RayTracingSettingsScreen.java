@@ -134,6 +134,15 @@ public final class RayTracingSettingsScreen extends Screen {
             slider("screen.rtest.settings.sunIntensity", "screen.rtest.settings.sunIntensity.tip",
                 "1.0", 0.0D, 16.0D, RayTracingClientConfig.INSTANCE.sunIntensity.get(),
                 value -> RayTracingClientConfig.INSTANCE.sunIntensity.set(value)),
+            cycle("screen.rtest.settings.sunDaylightIntensityEnabled", "screen.rtest.settings.sunDaylightIntensityEnabled.tip", "on",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.sunDaylightIntensityEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.sunDaylightIntensityEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.sunDaylightIntensityEnabled.set(value))),
+            slider("screen.rtest.settings.sunDaylightPeakIntensity", "screen.rtest.settings.sunDaylightPeakIntensity.tip",
+                "16.0", 3.0D, 16.0D, RayTracingClientConfig.INSTANCE.sunDaylightPeakIntensity.get(),
+                value -> RayTracingClientConfig.INSTANCE.sunDaylightPeakIntensity.set(value)),
             slider("screen.rtest.settings.sunAngularRadiusDegrees", "screen.rtest.settings.sunAngularRadiusDegrees.tip",
                 "0.27", 0.05D, 5.0D, RayTracingClientConfig.INSTANCE.sunAngularRadiusDegrees.get(),
                 value -> RayTracingClientConfig.INSTANCE.sunAngularRadiusDegrees.set(value)),

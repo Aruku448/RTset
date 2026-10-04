@@ -8,9 +8,10 @@ import java.util.List;
 /**
  * Prime-compatible emissive-triangle sampler for the RT scene.
  *
- * <p>The scene is flat on the GPU, so this is the same power-weighted binary light tree as
- * Prime's section/world trees, with the two levels collapsed into one tree. Each leaf is one
- * constant-radiance triangle; a separate material-to-emitter table makes reverse MIS O(1).</p>
+ * <p>This power-weighted binary light tree has one constant-radiance triangle per leaf.
+ * The CPU path partitions along the longest
+ * axis; the GPU path reduces a Morton-ordered binary heap. Both share the same distance/power
+ * sampling contract and reverse MIS lookup ABI.</p>
  */
 final class RayTracingLightTree {
     private static final int MATERIAL_STRIDE = 28;
@@ -31,28 +32,32 @@ final class RayTracingLightTree {
     private RayTracingLightTree() {
     }
 
-    /** Snapshot-local reuse only: identical ordered scalar inputs imply identical packed words. */
+    /** Reuse an identical emitter hierarchy; resize its material lookup when only dark spans change. */
     static Data buildOrReuse(RayTracingScene.SceneGeometry previous,
                             List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
                             double originX, double originY, double originZ,
                             RayTracingMaterialBuffer.Layout materialLayout) {
-        if (previous != null && sameLightInputs(previous, sections, originX, originY, originZ, materialLayout)) {
-            return previous.lightTree;
+        boolean gpuRequested = RayTracingClientConfig.SPEC.isLoaded()
+            && RayTracingClientConfig.INSTANCE.gpuLightTreeEnabled.get();
+        if (previous != null
+                && previous.lightTree.gpuBuild() == (gpuRequested && previous.lightTree.emitterCount() >= 1024)
+                && sameLightInputs(previous, sections, originX, originY, originZ, materialLayout)) {
+            return previous.lightTree.withMaterialMapLength(materialLayout.highWaterTriangle());
         }
-        return build(sections, originX, originY, originZ, materialLayout);
+        return build(sections, originX, originY, originZ, materialLayout,
+            gpuRequested);
     }
 
     private static final int[] LIGHT_MATERIAL_INPUTS = {0, 1, 2, 4, 5, 6, 15, 22};
 
-    private static boolean sameLightInputs(RayTracingScene.SceneGeometry previous,
+    static boolean sameLightInputs(RayTracingScene.SceneGeometry previous,
                                           List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
                                           double originX, double originY, double originZ,
                                           RayTracingMaterialBuffer.Layout layout) {
         if (Double.doubleToRawLongBits(previous.originX) != Double.doubleToRawLongBits(originX)
                 || Double.doubleToRawLongBits(previous.originY) != Double.doubleToRawLongBits(originY)
                 || Double.doubleToRawLongBits(previous.originZ) != Double.doubleToRawLongBits(originZ)
-                || previous.materialLayout.highWaterTriangle() != layout.highWaterTriangle()
-                || previous.lightTree.words()[5] != layout.highWaterTriangle()) return false;
+                || previous.lightTree.words()[5] != previous.materialLayout.highWaterTriangle()) return false;
         int oldIndex = 0;
         for (RayTracingScene.SceneGeometry.SectionGeometry next : sections) {
             if (next.emissiveTriangles.length == 0) continue;
@@ -96,9 +101,17 @@ final class RayTracingLightTree {
     static Data build(List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
                       double originX, double originY, double originZ,
                       RayTracingMaterialBuffer.Layout materialLayout) {
+        return build(sections, originX, originY, originZ, materialLayout, false);
+    }
+
+    static Data build(List<RayTracingScene.SceneGeometry.SectionGeometry> sections,
+                      double originX, double originY, double originZ,
+                      RayTracingMaterialBuffer.Layout materialLayout, boolean gpu) {
         List<Emitter> emitters = new ArrayList<>();
-        int[] materialToEmitter = new int[materialLayout.highWaterTriangle()];
-        Arrays.fill(materialToEmitter, -1);
+        // GPU packing writes the final material lookup directly; do not allocate and
+        // initialize an equally large intermediate table for that path.
+        int[] materialToEmitter = gpu ? null : new int[materialLayout.highWaterTriangle()];
+        if (materialToEmitter != null) Arrays.fill(materialToEmitter, -1);
         for (RayTracingScene.SceneGeometry.SectionGeometry section : sections) {
             int materialBase = materialLayout.baseTriangle(section);
             float[] sectionMaterials = section.materialData;
@@ -167,10 +180,17 @@ final class RayTracingLightTree {
                         emitters.add(new Emitter(ax, ay, az, e1x, e1y, e1z, e2x, e2y, e2z,
                             emitterNormalX, emitterNormalY, emitterNormalZ, area, emitterEmission, power,
                             materialIndex, emitterIndex));
-                        materialToEmitter[materialIndex] = emitterIndex;
+                        if (materialToEmitter != null) materialToEmitter[materialIndex] = emitterIndex;
                     }
                 }
             }
+        }
+        if (gpu && emitters.size() >= 1024)
+            return Data.createGpu(emitters, materialLayout.highWaterTriangle());
+        if (materialToEmitter == null) {
+            materialToEmitter = new int[materialLayout.highWaterTriangle()];
+            Arrays.fill(materialToEmitter, -1);
+            for (Emitter emitter : emitters) materialToEmitter[emitter.materialIndex] = emitter.sourceIndex;
         }
         return Data.create(emitters, materialToEmitter);
     }
@@ -220,10 +240,16 @@ final class RayTracingLightTree {
     static final class Data {
         private final int[] words;
         private final int emitterCount;
+        private final boolean gpuBuild;
 
         private Data(int[] words, int emitterCount) {
+            this(words, emitterCount, false);
+        }
+
+        private Data(int[] words, int emitterCount, boolean gpuBuild) {
             this.words = words;
             this.emitterCount = emitterCount;
+            this.gpuBuild = gpuBuild;
         }
 
         static Data create(List<Emitter> source, int[] materialToEmitter) {
@@ -282,6 +308,153 @@ final class RayTracingLightTree {
             }
             cursor = emitterOffset;
             for (Emitter emitter : emitters) {
+                writeEmitter(words, cursor, emitter);
+                cursor += EMITTER_WORDS;
+            }
+            int[] packedEmitterBySource = new int[emitters.length];
+            for (int packed = 0; packed < emitters.length; packed++) {
+                packedEmitterBySource[emitters[packed].sourceIndex] = packed;
+            }
+            for (int i = 0; i < materialToEmitter.length; i++) {
+                int sourceEmitter = materialToEmitter[i];
+                words[materialMapOffset + i] = sourceEmitter < 0 ? -1 : packedEmitterBySource[sourceEmitter];
+            }
+            for (int packed = 0; packed < emitters.length; packed++) {
+                words[leafNodeOffset + packed] = leafNodes[emitters[packed].sourceIndex];
+            }
+            return new Data(words, emitters.length);
+        }
+
+        /** Resize only the lookup span: emitter addresses, tree topology and PDFs are unchanged. */
+        Data withMaterialMapLength(int length) {
+            int oldLength = words[5];
+            if (length == oldLength) return this;
+            if (length < 0) throw new IllegalArgumentException("negative material map length");
+            int map = words[6];
+            // Never truncate a live emitter lookup if a malformed layout reaches this seam.
+            for (int i = length; i < oldLength; i++) {
+                if (words[map + i] != -1) throw new IllegalArgumentException("truncated live emitter");
+            }
+            int[] resized = new int[Math.addExact(Math.addExact(map, length), emitterCount)];
+            System.arraycopy(words, 0, resized, 0, map);
+            Arrays.fill(resized, map, map + length, -1);
+            System.arraycopy(words, map, resized, map, Math.min(length, oldLength));
+            if (emitterCount > 0) System.arraycopy(words, words[7], resized, map + length, emitterCount);
+            resized[5] = length;
+            resized[7] = emitterCount == 0 ? 0 : map + length;
+            return new Data(resized, emitterCount, gpuBuild);
+        }
+
+        int[] words() { return this.words; }
+        int emitterCount() { return this.emitterCount; }
+
+        boolean gpuBuild() { return gpuBuild; }
+
+        // Spatial ordering is done once. Heap leaves are filled in DFS order, so each
+        // internal subtree spans a contiguous Morton interval even for non-power-of-two N.
+        private static Data createGpu(List<Emitter> source, int materialMapLength) {
+            Emitter[] sorted = source.toArray(Emitter[]::new);
+            float[] min = {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY};
+            float[] max = {Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
+            for (Emitter e : sorted) {
+                float x = e.ax + .5F * (e.e1x + e.e2x), y = e.ay + .5F * (e.e1y + e.e2y), z = e.az + .5F * (e.e1z + e.e2z);
+                min[0] = Math.min(min[0], x); max[0] = Math.max(max[0], x);
+                min[1] = Math.min(min[1], y); max[1] = Math.max(max[1], y);
+                min[2] = Math.min(min[2], z); max[2] = Math.max(max[2], z);
+            }
+            int[] keys = new int[sorted.length];
+            for (Emitter e : sorted) {
+                keys[e.sourceIndex] = morton(e.ax + .5F * (e.e1x + e.e2x), e.ay + .5F * (e.e1y + e.e2y),
+                    e.az + .5F * (e.e1z + e.e2z), min, max);
+            }
+            Emitter[] scratch = new Emitter[sorted.length];
+            Emitter[] from = sorted, to = scratch;
+            int[] counts = new int[256];
+            // Four stable byte passes: O(N), deterministic ties, no recursive sorting.
+            for (int shift = 0; shift < 32; shift += 8) {
+                Arrays.fill(counts, 0);
+                for (Emitter e : from) counts[(keys[e.sourceIndex] >>> shift) & 255]++;
+                int cursor = 0;
+                for (int bucket = 0; bucket < 256; bucket++) {
+                    int count = counts[bucket]; counts[bucket] = cursor; cursor += count;
+                }
+                for (Emitter e : from) to[counts[(keys[e.sourceIndex] >>> shift) & 255]++] = e;
+                Emitter[] swap = from; from = to; to = swap;
+            }
+            int n = sorted.length, nodes = Math.subtractExact(Math.multiplyExact(n, 2), 1);
+            int forward = Math.addExact(HEADER_WORDS, Math.multiplyExact(nodes, NODE_WORDS));
+            int reverse = Math.addExact(forward, nodes), emitterOffset = Math.addExact(reverse, nodes);
+            int map = Math.addExact(emitterOffset, Math.multiplyExact(n, EMITTER_WORDS));
+            int leaf = Math.addExact(map, materialMapLength);
+            int[] words = new int[Math.addExact(leaf, n)];
+            words[0] = nodes; words[1] = n; words[2] = forward; words[3] = reverse;
+            words[4] = emitterOffset; words[5] = materialMapLength; words[6] = map; words[7] = leaf;
+            Arrays.fill(words, map, leaf, -1);
+            packHeapLeaves(sorted, 0, 0, words);
+            return new Data(words, n, true);
+        }
+
+        private static int packHeapLeaves(Emitter[] sorted, int node, int rank, int[] words) {
+            int n = sorted.length;
+            if (node < n - 1) {
+                rank = packHeapLeaves(sorted, 2 * node + 1, rank, words);
+                return packHeapLeaves(sorted, 2 * node + 2, rank, words);
+            }
+            int packed = node - (n - 1);
+            Emitter emitter = sorted[rank];
+            writeEmitter(words, words[4] + packed * EMITTER_WORDS, emitter);
+            words[words[6] + emitter.materialIndex] = packed;
+            return rank + 1;
+        }
+
+        private static int morton(float x, float y, float z, float[] min, float[] max) {
+            return spread(quantize(x, min[0], max[0])) | (spread(quantize(y, min[1], max[1])) << 1)
+                | (spread(quantize(z, min[2], max[2])) << 2);
+        }
+        private static int quantize(float v, float min, float max) {
+            return max > min ? Math.max(0, Math.min(1023, (int)((v - min) / (max - min) * 1023))) : 0;
+        }
+        private static int spread(int v) {
+            v = (v | v << 16) & 0x030000FF; v = (v | v << 8) & 0x0300F00F;
+            v = (v | v << 4) & 0x030C30C3; v = (v | v << 2) & 0x09249249; return v;
+        }
+
+        /** Same heap reduction as compute, used only after a GPU build failure and in tests. */
+        int[] completeOnCpu() {
+            if (!gpuBuild) return words;
+            int[] result = words.clone();
+            int n = emitterCount;
+            for (int node = result[0] - 1; node >= 0; node--) {
+                int b = HEADER_WORDS + node * NODE_WORDS;
+                if (node >= n - 1) {
+                    int packed = node - n + 1, e = result[4] + packed * EMITTER_WORDS;
+                    for (int a = 0; a < 3; a++) {
+                        float p = Float.intBitsToFloat(result[e + a]);
+                        float q = p + Float.intBitsToFloat(result[e + 4 + a]);
+                        float r = p + Float.intBitsToFloat(result[e + 8 + a]);
+                        result[b + a] = Float.floatToRawIntBits(Math.min(p, Math.min(q, r)));
+                        result[b + 4 + a] = Float.floatToRawIntBits(Math.max(p, Math.max(q, r)));
+                    }
+                    result[b + 3] = result[e + 11];
+                    result[result[2] + node] = packed | LEAF_FLAG;
+                    result[result[7] + packed] = node;
+                } else {
+                    int left = 2 * node + 1, right = left + 1;
+                    int l = HEADER_WORDS + left * NODE_WORDS, r = HEADER_WORDS + right * NODE_WORDS;
+                    for (int a = 0; a < 3; a++) {
+                        result[b + a] = Float.floatToRawIntBits(Math.min(Float.intBitsToFloat(result[l + a]), Float.intBitsToFloat(result[r + a])));
+                        result[b + 4 + a] = Float.floatToRawIntBits(Math.max(Float.intBitsToFloat(result[l + 4 + a]), Float.intBitsToFloat(result[r + 4 + a])));
+                    }
+                    result[b + 3] = Float.floatToRawIntBits(Float.intBitsToFloat(result[l + 3]) + Float.intBitsToFloat(result[r + 3]));
+                    result[result[2] + node] = left;
+                }
+                result[b + 7] = Float.floatToRawIntBits(MIN_SOFTENING_DISTANCE_SQUARED);
+                result[result[3] + node] = node == 0 ? -1 : (node - 1) / 2;
+            }
+            return result;
+        }
+
+        private static void writeEmitter(int[] words, int cursor, Emitter emitter) {
                 words[cursor++] = Float.floatToRawIntBits(emitter.ax);
                 words[cursor++] = Float.floatToRawIntBits(emitter.ay);
                 words[cursor++] = Float.floatToRawIntBits(emitter.az);
@@ -298,23 +471,7 @@ final class RayTracingLightTree {
                 words[cursor++] = Float.floatToRawIntBits(emitter.ny);
                 words[cursor++] = Float.floatToRawIntBits(emitter.nz);
                 words[cursor++] = emitter.materialIndex;
-            }
-            int[] packedEmitterBySource = new int[emitters.length];
-            for (int packed = 0; packed < emitters.length; packed++) {
-                packedEmitterBySource[emitters[packed].sourceIndex] = packed;
-            }
-            for (int i = 0; i < materialToEmitter.length; i++) {
-                int sourceEmitter = materialToEmitter[i];
-                words[materialMapOffset + i] = sourceEmitter < 0 ? -1 : packedEmitterBySource[sourceEmitter];
-            }
-            for (int packed = 0; packed < emitters.length; packed++) {
-                words[leafNodeOffset + packed] = leafNodes[emitters[packed].sourceIndex];
-            }
-            return new Data(words, emitters.length);
         }
-
-        int[] words() { return this.words; }
-        int emitterCount() { return this.emitterCount; }
 
         private static void populate(Emitter[] emitters, int start, int end, int nodeIndex,
                                      List<Node> nodes, int[] leafNodes, RadixWorkspace sorter) {

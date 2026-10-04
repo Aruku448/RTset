@@ -10,7 +10,30 @@ import java.util.List;
 
 /** Actual sparse material writer and Mapped range accounting, with Java memory and no native allocation. */
 public final class MappedUploadMathTest {
+    private static void verifyLightPageUpload() throws Exception {
+        var mapped = view(16384);
+        int[] previous = new int[2048];
+        java.util.Arrays.fill(previous, 123);
+        mapped.buffer().asIntBuffer().put(previous);
+        int[] next = java.util.Arrays.copyOf(previous, 2200);
+        next[1100] = 456;
+        RayTracingMaterialBuffer.writeChangedLightWords(mapped, previous, next);
+        for (int i = 0; i < next.length; i++)
+            if (mapped.buffer().asIntBuffer().get(i) != next[i]) throw new AssertionError("Sparse light upload mismatch");
+        if (covered(mapped, 0) || !covered(mapped, 1100 * 4) || !covered(mapped, 2199 * 4))
+            throw new AssertionError("Unchanged light page flushed or changed page missed");
+        var restored = view(16384);
+        restored.buffer().asIntBuffer().put(next);
+        RayTracingMaterialBuffer.writeChangedLightWords(restored, next, previous);
+        for (int i = 0; i < previous.length; i++)
+            if (restored.buffer().asIntBuffer().get(i) != previous[i]) throw new AssertionError("Light rollback mismatch");
+        var noOp = view(16384);
+        RayTracingMaterialBuffer.writeChangedLightWords(noOp, previous, previous);
+        if (covered(noOp, 0) || whole(noOp)) throw new AssertionError("No-op light upload flushed bytes");
+    }
+
     public static void main(String[] args) throws Exception {
+        verifyLightPageUpload();
         Constructor<SectionGeometry> section = SectionGeometry.class.getDeclaredConstructor(
             int.class, int.class, int.class, float[].class, float[].class);
         section.setAccessible(true);
@@ -77,7 +100,7 @@ public final class MappedUploadMathTest {
         return constructor.newInstance(sections, new float[0], new float[0], new int[0], triangles, 2, 0, 0, 0);
     }
 
-    private static NativeBuffer.Mapped view(int bytes) throws Exception {
+    static NativeBuffer.Mapped view(int bytes) throws Exception {
         Constructor<NativeBuffer> owner = NativeBuffer.class.getDeclaredConstructor(
             VulkanDevice.class, long.class, long.class, long.class);
         owner.setAccessible(true);
@@ -95,7 +118,7 @@ public final class MappedUploadMathTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static boolean covered(NativeBuffer.Mapped mapped, long offset) throws Exception {
+    static boolean covered(NativeBuffer.Mapped mapped, long offset) throws Exception {
         if (whole(mapped)) return true;
         var field = NativeBuffer.Mapped.class.getDeclaredField("flushRanges");
         field.setAccessible(true);

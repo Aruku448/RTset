@@ -178,8 +178,26 @@ public final class RayTracingAtmosphereShaderTest {
     }
 
     private static void verifySkyboxOpacityCurve() {
+        if (SkyboxOpacityCurve.resolveOpacity(true, .99F, 4, 0) != .15F
+                || SkyboxOpacityCurve.resolveOpacity(false, .99F, 4, 0) != .99F)
+            throw new AssertionError("Curve must override manual opacity only when enabled");
+        float previousSun = -1;
+        for (int i = 0; i <= 110; i++) {
+            float value = SkyboxOpacityCurve.resolveSunIntensity(true, 8, 12, 4 + i * .1F);
+            if (value < previousSun || value < 3 || value > 12)
+                throw new AssertionError("Solar daylight curve must be bounded and monotonic");
+            previousSun = value;
+        }
+        if (SkyboxOpacityCurve.resolveSunIntensity(true, 8, 12, 4) != 3
+                || SkyboxOpacityCurve.resolveSunIntensity(true, 8, 12, 15) != 12
+                || SkyboxOpacityCurve.resolveSunIntensity(true, 8, 12, 9.5F) != 7.5F
+                || SkyboxOpacityCurve.resolveSunIntensity(false, 8, 12, 4) != 8
+                || SkyboxOpacityCurve.resolveSunIntensity(true, 8, 12, Float.NaN) != 3)
+            throw new AssertionError("Solar daylight endpoints/manual/invalid behavior");
+        if (SkyboxOpacityCurve.fromSkyLightLevel(8, 23000) != .09F)
+            throw new AssertionError("Pre-sunrise sky light level 8 must have 9% opacity");
         float[][] expected = {
-            {0, .15F, 1, .10F, 2, .08F, 6, .13F, 8, .20F, 9, .35F, 10, .60F, 11, .70F, 15, .90F},
+            {0, .15F, 1, .10F, 2, .08F, (8.0F - 4.0F) * (15.0F / 11.0F), .09F, 6, .13F, 8, .20F, 9, .35F, 10, .60F, 11, .70F, 15, .90F},
             {0, .15F, 1, .20F, 2, .30F, 10, .40F, 13, .70F, 15, .90F}
         };
         for (int branch = 0; branch < expected.length; branch++) {
@@ -244,6 +262,10 @@ public final class RayTracingAtmosphereShaderTest {
             String pass = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "src/main/java/com/rtest/client/RayTracingVulkanPass.java"));
             if (!pass.contains(".putFloat(4, effectiveSkyboxTextureOpacity)")
+                || !pass.contains("SkyboxOpacityCurve.resolveOpacity(")
+                || pass.contains("!physicalSkyEnabled && skyboxDaylightOpacityEnabled")
+                || !pass.contains("buffer.putFloat(96, effectiveSunIntensity)")
+                || !pass.contains("SkyboxOpacityCurve.resolveSunIntensity(")
                 || !pass.contains("EnvironmentAttributes.SKY_LIGHT_LEVEL")
                 || !pass.contains("this.lastSkyboxDaylightOpacityEnabled != skyboxDaylightOpacityEnabled")
                 || !pass.contains("Float.compare(this.lastSkyboxTextureOpacity, skyboxTextureOpacity) != 0")) {

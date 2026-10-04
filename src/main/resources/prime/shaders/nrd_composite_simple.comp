@@ -56,9 +56,9 @@ void main() {
     vec3 dynamicShadowDelta = directSample.rgb;
     vec4 diffuseSample = imageLoad(noisyDiffuse, pixel);
     vec4 specularSample = imageLoad(noisySpecular, pixel);
-    // An unsampled/invalid continuation may still have nonzero primary NEE. Do not invent a
-    // camera-based hit distance or spread an unsupported history over this information. Keep
-    // that lobe's current-frame signal; the other valid lobe remains independently filtered.
+    // Valid surface observations include zero-radiance samples; RayGen supplies their guide
+    // distance independently of sample energy. Fall back only for genuinely invalid guides,
+    // never merely because the current Monte Carlo sample happened to be black.
     vec3 diffuseSignal = diffuseSample.rgb;
     vec3 specularSignal = specularSample.rgb;
     if (diffuseSample.a > 0.0) {

@@ -7,7 +7,10 @@ public final class RayTracingClientConfig {
     public static final ModConfigSpec SPEC;
     public static final RayTracingClientConfig INSTANCE;
 
+    public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
+    public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
+    public final ModConfigSpec.DoubleValue sunDaylightPeakIntensity;
     public final ModConfigSpec.DoubleValue sunAngularRadiusDegrees;
     public final ModConfigSpec.IntValue sunShadowSamples;
     public final ModConfigSpec.DoubleValue sunColorTemperature;
@@ -84,9 +87,16 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
+        gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder
             .comment("Solar source intensity used consistently by direct sunlight, the physical sky and solar atmospheric scattering. Values above 2 allow bright daylight under fixed display exposure.")
             .defineInRange("sunIntensity", 1.0D, 0.0D, 16.0D);
+        sunDaylightIntensityEnabled = builder
+            .comment("Override manual solar intensity using dimension sky light level: night baseline 4 (normalized level 0) gives intensity 3, level 15 gives the configured peak. Applies to direct light, sky and atmosphere together.")
+            .define("sunDaylightIntensityEnabled", true);
+        sunDaylightPeakIntensity = builder
+            .comment("Solar intensity at sky light level 15 when daylight intensity is enabled. Intermediate levels use a smooth curve from the night baseline 4.")
+            .defineInRange("sunDaylightPeakIntensity", 16.0D, 3.0D, 16.0D);
         sunAngularRadiusDegrees = builder
             .comment("Solar angular radius in degrees. Larger disks produce wider geometric penumbrae; disk-integrated energy stays fixed. Real Sun is about 0.27 degrees.")
             .defineInRange("sunAngularRadiusDegrees", 0.27D, 0.05D, 5.0D);
@@ -115,7 +125,7 @@ public final class RayTracingClientConfig {
             .comment("Use separate artist-authored morning and afternoon skybox opacity curves, interpolated smoothly between control points. Night brightness 0 = 15%, peak brightness 15 = 90%; morning brightness 2 dips to 8%. Manual opacity is used only when disabled.")
             .define("skyboxDaylightOpacityEnabled", true);
         skyboxTextureOpacity = builder
-            .comment("Manual PNG opacity when the daylight opacity curve is disabled: 0 = physical sky, 1 = PNG. Without physical sky the original PNG fallback is unchanged. Sun disk and direct sunlight remain independent.")
+            .comment("Manual PNG opacity when the daylight opacity curve is disabled: 0 = physical sky, 1 = PNG. The curve overrides this value when enabled. Without physical sky the original PNG fallback is unchanged. Sun disk and direct sunlight remain independent.")
             .defineInRange("skyboxTextureOpacity", 0.25D, 0.0D, 1.0D);
         moonEnabled = builder
             .comment("Show and illuminate with the Minecraft moon and eight phases, including colored transparent shadows and finite-segment lunar scattering.")

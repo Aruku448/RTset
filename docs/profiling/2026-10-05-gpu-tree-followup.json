@@ -1,0 +1,30 @@
+{
+  "gpu_build": {
+    "device": "AMD Radeon RX 7800 XT (RADV NAVI32)",
+    "emitters": 5003,
+    "samples": 31,
+    "warmup": 5,
+    "before_median_ms": 0.07792,
+    "after_median_ms": 0.061,
+    "reduction_percent": 21.714579055441487,
+    "metric": "Vulkan timestamp, standalone compute; not Minecraft publication or frame time",
+    "before_log": "GPU build timestamp: samples=31 warmup=5 median_ms=0.077920 min_ms=0.076840 max_ms=0.079160\nGPU light tree on AMD Radeon RX 7800 XT (RADV NAVI32): emitters=5003 nodes=10005 compared_words=190112 mismatches=0\n",
+    "after_log": "GPU build timestamp: samples=31 warmup=5 median_ms=0.061000 min_ms=0.060520 max_ms=0.062960\nGPU light tree on AMD Radeon RX 7800 XT (RADV NAVI32): emitters=5003 nodes=10005 compared_words=190112 mismatches=0\n",
+    "minimum_gpu_path_log": "GPU build timestamp: samples=31 warmup=5 median_ms=0.023640 min_ms=0.023480 max_ms=0.024280\nGPU light tree on AMD Radeon RX 7800 XT (RADV NAVI32): emitters=1024 nodes=2047 compared_words=38910 mismatches=0\n"
+  },
+  "upload": {
+    "emitters": 80000,
+    "material_lookup_words": 80000,
+    "before_bytes": 12159992,
+    "after_bytes": 5440032,
+    "skipped_bytes": 6719960,
+    "scope": "Host logical bytes, excludes allocation/cache/noncoherent flush alignment"
+  },
+  "cpu_prepare_current_run": {
+    "emitters": 80000,
+    "cpu_tree_median_ms": 52.768,
+    "gpu_seed_cpu_median_ms": 8.474,
+    "gpu_execution_measured": false
+  },
+  "minecraft_frame_time_measured": false
+}

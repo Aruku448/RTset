@@ -2537,10 +2537,13 @@ final class RayTracingShaderRaygen {
                     + specularRadiance + transmissionRadiance
                     + areaDirectSpecularRadiance - dynamicSpecularDelta;
                 vec3 unfilteredRadiance = emissionRadiance;
-                float nrdDiffuseSignalActive = primaryHit
-                    && dot(nrdDiffuseRadiance, vec3(1.0)) > 1.0e-5 ? 1.0 : 0.0;
-                float nrdSpecularSignalActive = primaryHit
-                    && dot(nrdSpecularRadiance, vec3(1.0)) > 1.0e-5 ? 1.0 : 0.0;
+                // Zero radiance is a valid Monte Carlo observation (occluded light, rejected
+                // emitter or zero lobe), not a missing surface. Preserve its history eligibility
+                // so the composite cannot replace reconstructed lighting with raw black speckles.
+                float nrdDiffuseSignalActive = primaryHit ? 1.0 : 0.0;
+                float nrdSpecularSignalActive = primaryHit ? 1.0 : 0.0;
+                if (primaryHit && !(primaryDirectDistance > 0.0))
+                    primaryDirectDistance = nrdHitDistanceScale;
                 // NEE remains valid when BSDF continuation terminates. Use the emitter distance
                 // or the existing directional-environment sentinel, never camera viewZ.
                 if (!(diffuseSignalDistance > 0.0) && nrdDiffuseSignalActive > 0.5 && primaryDirectDistance > 0.0)

@@ -1,0 +1,15 @@
+{
+  "kind": "synthetic_cpu_not_gpu_or_fps",
+  "emitters": 80000,
+  "fresh_median_ms": 27.527,
+  "lookup_resize_median_ms": 2.277,
+  "packed_equal": true,
+  "growth_simulation": {
+    "required_mib_from": 1,
+    "required_mib_to": 256,
+    "step_mib": 1,
+    "exact_allocations": 256,
+    "reserved_allocations": 12,
+    "max_extra_mib_per_buffer": 64
+  }
+}

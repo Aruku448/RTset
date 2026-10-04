@@ -22,6 +22,56 @@ import java.util.Set;
 final class RayTracingMaterialBuffer {
     private static final int COMPACT_ABSOLUTE_SLACK_TRIANGLES = 16_384;
 
+    // At most 64 MiB additional capacity; descriptors still expose only initialized live bytes.
+    static long allocationBytes(long required, long current) {
+        if (required < 0 || current < 0) throw new IllegalArgumentException("negative buffer size");
+        if (required <= current) return current;
+        long slack = Math.min(64L * 1024 * 1024, Math.max(64L * 1024, required / 2));
+        // Host mapping uses ByteBuffer int addressing. Do not reserve unreachable space.
+        long limit = Integer.MAX_VALUE - 15L;
+        if (required > limit) return required;
+        return required + Math.min(slack, limit - required);
+    }
+
+    /** Initial light upload; device-built ranges can be omitted on the GPU path. */
+    static void writeLightData(NativeBuffer.Mapped mapped, RayTracingLightTree.Data data) {
+        int[] words = data.words();
+        if (!data.gpuBuild()) {
+            writeChangedLightWords(mapped, new int[0], words);
+            return;
+        }
+        if ((long)words.length * Integer.BYTES > mapped.buffer().capacity())
+            throw new IllegalArgumentException("light buffer too small");
+        mapped.flushOnlyWrittenRanges();
+        var destination = mapped.buffer().asIntBuffer();
+        destination.put(words, 0, 8);
+        mapped.flushOnlyRange(0, 8L * Integer.BYTES);
+        // Header + emitters/material map are the only host inputs. Every node,
+        // forward/reverse pointer and reverse leaf index is written by compute.
+        int first = words[4], count = words[7] - first;
+        destination.position(first);
+        destination.put(words, first, count);
+        mapped.flushOnlyRange((long)first * Integer.BYTES, (long)count * Integer.BYTES);
+    }
+
+    /** Upload only changed 4 KiB pages, after the owning frame fence has retired. */
+    static void writeChangedLightWords(NativeBuffer.Mapped mapped, int[] previous, int[] next) {
+        if ((long)next.length * Integer.BYTES > mapped.buffer().capacity())
+            throw new IllegalArgumentException("light buffer too small");
+        mapped.flushOnlyWrittenRanges();
+        var destination = mapped.buffer().asIntBuffer();
+        final int pageWords = 1024;
+        for (int start = 0; start < next.length; start += pageWords) {
+            int end = Math.min(next.length, start + pageWords);
+            boolean changed = end > previous.length;
+            for (int i = start; !changed && i < end; i++) changed = next[i] != previous[i];
+            if (!changed) continue;
+            destination.position(start);
+            destination.put(next, start, end - start);
+            mapped.flushOnlyRange((long)start * Integer.BYTES, (long)(end - start) * Integer.BYTES);
+        }
+    }
+
     private RayTracingMaterialBuffer() {
     }
 

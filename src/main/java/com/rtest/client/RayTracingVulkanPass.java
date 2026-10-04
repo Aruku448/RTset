@@ -71,6 +71,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.shaderc.Shaderc;
 import org.lwjgl.util.vma.Vma;
+import org.lwjgl.vulkan.VkMemoryBarrier;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
 import org.lwjgl.vulkan.KHRRayTracingPipeline;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -256,6 +257,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private boolean lastMoonEnabled;
         private float lastSunAngularRadiusDegrees = Float.NaN;
         private float lastSunIntensity = Float.NaN;
+        private boolean lastSunDaylightIntensityEnabled;
+        private float lastSunDaylightPeakIntensity = Float.NaN;
         private int lastSunShadowSamples = -1;
         private int lastMoonPhaseToken = -1;
         private float lastMoonIntensity = Float.NaN;
@@ -445,6 +448,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.shaderModules = shaderModules;
             this.sbtStride = sbtStride;
             this.dynamicFrame = dynamicFrame;
+        }
+
+        private GpuLightTreeBuilder gpuLightTreeBuilder;
+
+        private void buildLightTree(NativeBuffer buffer, RayTracingLightTree.Data data) {
+            if (!data.gpuBuild()) return;
+            if (gpuLightTreeBuilder == null) gpuLightTreeBuilder = new GpuLightTreeBuilder(device);
+            gpuLightTreeBuilder.buildOrFallback(buffer, data);
         }
 
         static final class BlasCache implements AutoCloseable {
@@ -655,6 +666,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer cameraBuffer = null;
             NativeBuffer materialBuffer = null;
             NativeBuffer lightDataBuffer = null;
+            GpuLightTreeBuilder lightTreeBuilder = null;
             NativeBuffer pbrBuffer = null;
             NativeBuffer terrainNodeMetadataBuffer = null;
             NativeBuffer terrainBlasAddressBuffer = null;
@@ -751,13 +763,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 long materialFloatCount = materialFloatCount(geometry, dynamicSlotCapacity);
                 materialBuffer = NativeBuffer.create(
                     device,
-                    materialFloatCount * Float.BYTES,
+                    RayTracingMaterialBuffer.allocationBytes(materialFloatCount * Float.BYTES, 0),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     true
                 );
                 writeMaterialBuffer(materialBuffer, geometry, dynamicSlotCapacity);
-                lightDataBuffer = uploadIntBuffer(device, geometry.lightTree.words(),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                lightDataBuffer = uploadLightDataBuffer(device, geometry.lightTree);
+                if (geometry.lightTree.gpuBuild()) {
+                    lightTreeBuilder = new GpuLightTreeBuilder(device);
+                    lightTreeBuilder.buildOrFallback(lightDataBuffer, geometry.lightTree);
+                }
+
                 int[] initialPbrData = pbrMaterials == null ? geometry.pbrData : pbrMaterials.packedData();
                 long pbrBufferSize = pbrMaterials == null
                     ? (long)initialPbrData.length * Integer.BYTES
@@ -1102,7 +1118,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VkDescriptorBufferInfo.Buffer cameraInfo = VkDescriptorBufferInfo.calloc(1, stack)
                         .buffer(cameraBuffer.buffer).offset(0).range(304);
                     VkDescriptorBufferInfo.Buffer materialInfo = VkDescriptorBufferInfo.calloc(1, stack)
-                        .buffer(materialBuffer.buffer).offset(0).range(materialBuffer.size);
+                        .buffer(materialBuffer.buffer).offset(0).range(materialFloatCount * Float.BYTES);
                     VkDescriptorBufferInfo.Buffer pbrInfo = VkDescriptorBufferInfo.calloc(1, stack)
                         .buffer(pbrBuffer.buffer).offset(0).range(pbrBuffer.size);
                     VkDescriptorBufferInfo.Buffer dynamicMotionInfo = VkDescriptorBufferInfo.calloc(1, stack)
@@ -1404,6 +1420,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         atmosphereCameraBuffer,
                         atmosphereRequested
                     );
+                    resources.gpuLightTreeBuilder = lightTreeBuilder;
                     blasCache.commit(sectionBlas);
                     blasCache.trim(activeKeys);
                     encoder = null;
@@ -1437,6 +1454,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 if (descriptorPool != 0L) VK10.vkDestroyDescriptorPool(vkDevice, descriptorPool, null);
                 if (descriptorSetLayout != 0L) VK10.vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, null);
                 for (long shaderModule : shaderModules) if (shaderModule != 0L) VK10.vkDestroyShaderModule(vkDevice, shaderModule, null);
+                closeDuringFailure(lightTreeBuilder, throwable);
                 closeDuringFailure(topLevel, throwable);
                 closeDuringFailure(shaderBindingTable, throwable);
                 closeDuringFailure(pbrBuffer, throwable);
@@ -1740,6 +1758,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (this.usesGeometry(nextGeometry)) {
                 return;
             }
+            long blasAcquireNanos = 0, sceneBuffersNanos = 0, materialNanos = 0;
+            long lightUploadNanos = 0, descriptorsNanos = 0, phaseStart = 0;
             int previousSectionCount = this.sectionBlas.size();
             List<CachedBlas> nextBlas = new ArrayList<>();
             Set<SectionKey> activeKeys = new HashSet<>();
@@ -1756,6 +1776,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             boolean reuseScratch = false;
             boolean reuseMaterial = false;
             boolean reuseLightData = false;
+            boolean reuseLightAllocation = false;
             boolean reusePbr = false;
             boolean incrementalMaterialWrite = false;
             boolean dynamicMaterialRangesReset = false;
@@ -1768,12 +1789,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 int geometryUsage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                     | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
                     | KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+                phaseStart = System.nanoTime();
                 for (SceneGeometry.SectionGeometry section : nextGeometry.sections) {
                     CachedBlas cached = blasCache.acquire(this.device, section);
                     nextBlas.add(cached);
                     activeKeys.add(cached.key);
                 }
                 validateUniqueBlasKeys(nextBlas);
+                blasAcquireNanos = System.nanoTime() - phaseStart;
+                phaseStart = System.nanoTime();
                 List<RayTracingTerrainTraversalAbi.NodeMetadata> nextTerrainTraversalMetadata = null;
                 if (this.terrainTraversalEnabled) {
                     nextTerrainTraversalMetadata = buildTerrainTraversalMetadata(nextGeometry);
@@ -1843,11 +1867,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         requiredScratchBufferSize,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         false);
+                sceneBuffersNanos = System.nanoTime() - phaseStart;
+                phaseStart = System.nanoTime();
                 long nextMaterialFloatCount = materialFloatCount(nextGeometry, dynamicSlotCapacity);
                 reuseMaterial = nextMaterialFloatCount * Float.BYTES <= this.materialBuffer.size;
                 nextMaterial = reuseMaterial
                     ? this.materialBuffer
-                    : NativeBuffer.create(this.device, nextMaterialFloatCount * Float.BYTES,
+                    : NativeBuffer.create(this.device,
+                        RayTracingMaterialBuffer.allocationBytes(nextMaterialFloatCount * Float.BYTES, this.materialBuffer.size),
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
                 // SectionGeometry instances are preserved by replaceSections() for clean
                 // sections. When their per-index material spans are unchanged, those identities
@@ -1874,10 +1901,34 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     writeMaterialBuffer(nextMaterial, nextGeometry, dynamicSlotCapacity,
                         dynamicMaterialRangesReset);
                 }
+                materialNanos = System.nanoTime() - phaseStart;
+                phaseStart = System.nanoTime();
                 int[] nextLightWords = nextGeometry.lightTree.words();
                 reuseLightData = java.util.Arrays.equals(this.geometry.lightTree.words(), nextLightWords);
-                nextLightData = reuseLightData ? this.lightDataBuffer
-                    : uploadIntBuffer(this.device, nextLightWords, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                // GPU seed words are not the finished device tree. Never delta-write or
+                // rollback against a seed; build changed trees in a separate allocation.
+                reuseLightAllocation = reuseLightData || (!nextGeometry.lightTree.gpuBuild()
+                    && !this.geometry.lightTree.gpuBuild()
+                    && (long)nextLightWords.length * Integer.BYTES <= this.lightDataBuffer.size);
+                if (reuseLightAllocation) {
+                    nextLightData = this.lightDataBuffer;
+                    if (!reuseLightData) {
+                        // Register rollback before any in-place write, including partially failed uploads.
+                        rollback.before(() -> {
+                            try (NativeBuffer.Mapped mapped = this.lightDataBuffer.map()) {
+                                RayTracingMaterialBuffer.writeChangedLightWords(mapped,
+                                    nextLightWords, this.geometry.lightTree.words());
+                            }
+                        });
+                        try (NativeBuffer.Mapped mapped = nextLightData.map()) {
+                            RayTracingMaterialBuffer.writeChangedLightWords(mapped,
+                                this.geometry.lightTree.words(), nextLightWords);
+                        }
+                    }
+                } else {
+                    nextLightData = uploadLightDataBuffer(this.device, nextGeometry.lightTree);
+                    buildLightTree(nextLightData, nextGeometry.lightTree);
+                }
                 if (this.pbrMaterials == null) {
                     int[] nextPbrData = nextGeometry.pbrData;
                     // Capacity alone is not content equality. Keep changed immutable snapshots
@@ -1892,6 +1943,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     reusePbr = true;
                     nextPbr = this.pbrBuffer;
                 }
+                lightUploadNanos = System.nanoTime() - phaseStart;
+                phaseStart = System.nanoTime();
                 long pbrRange = nextPbr.size;
                 rollback.before(() -> updateSceneDescriptors(this.topLevel, this.materialBuffer,
                     this.lightDataBuffer, this.pbrBuffer,
@@ -1937,7 +1990,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 rollback.restore(throwable);
                 if (nextTopLevel != null && !reuseTopLevel) RtResourceRollback.attempt(throwable, nextTopLevel::close);
                 if (nextPbr != null && !reusePbr) RtResourceRollback.attempt(throwable, nextPbr::close);
-                if (nextLightData != null && !reuseLightData) RtResourceRollback.attempt(throwable, nextLightData::close);
+                if (nextLightData != null && !reuseLightAllocation) RtResourceRollback.attempt(throwable, nextLightData::close);
                 if (nextMaterial != null && !reuseMaterial) RtResourceRollback.attempt(throwable, nextMaterial::close);
                 if (nextScratch != null && !reuseScratch) RtResourceRollback.attempt(throwable, nextScratch::close);
                 if (nextInstance != null && !reuseInstance) RtResourceRollback.attempt(throwable, nextInstance::close);
@@ -1949,6 +2002,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 throw throwable;
             }
 
+            descriptorsNanos = System.nanoTime() - phaseStart;
             // Publish BLAS candidates only after every replacement buffer and descriptor update
             // succeeded. This keeps the old TLAS inputs valid on any failure path.
             blasCache.commit(nextBlas);
@@ -2005,7 +2059,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (!reuseMaterial) {
                 oldMaterial.close();
             }
-            if (!reuseLightData) {
+            if (!reuseLightAllocation) {
                 oldLightData.close();
             }
             if (!reusePbr) {
@@ -2016,11 +2070,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 oldTerrainBlasAddresses.close();
             }
             LOGGER.info(
-                "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, reuseLightData={}, incrementalMaterialWrite={}, temporalReset={}, resetReason={}, duration={} ms",
+                "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, reuseLightData={}, incrementalMaterialWrite={}, temporalReset={}, resetReason={}, duration={} ms, blas_acquire_ms={}, scene_buffers_ms={}, material_write_ms={}, light_pbr_upload_ms={}, descriptors_ms={}, retire_ms={}, material_capacity_bytes={}, material_live_bytes={}, reuseLightAllocation={}, light_capacity_bytes={}",
                 previousSectionCount, nextBlas.size(), reuseTopLevel, !reuseInstance, !reuseMaterial,
                 reuseLightData,
                 incrementalMaterialWrite, true, TemporalResetReason.GEOMETRY_PUBLICATION,
-                (System.nanoTime() - startNanos) / 1_000_000L);
+                (System.nanoTime() - startNanos) / 1_000_000L,
+                formatGpuMs(blasAcquireNanos / 1_000_000.0), formatGpuMs(sceneBuffersNanos / 1_000_000.0),
+                formatGpuMs(materialNanos / 1_000_000.0), formatGpuMs(lightUploadNanos / 1_000_000.0),
+                formatGpuMs(descriptorsNanos / 1_000_000.0), formatGpuMs((System.nanoTime() - phaseStart - descriptorsNanos) / 1_000_000.0),
+                this.materialBuffer.size, materialFloatCount(nextGeometry, dynamicSlotCapacity) * Float.BYTES,
+                reuseLightAllocation, this.lightDataBuffer.size);
         }
 
         private void updateLivingEntityTextureDescriptors(DynamicEntityGeometry.Frame frame) {
@@ -2223,6 +2282,21 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
         }
 
+        private static NativeBuffer uploadLightDataBuffer(VulkanDevice device, RayTracingLightTree.Data data) {
+            NativeBuffer buffer = NativeBuffer.create(device,
+                RayTracingMaterialBuffer.allocationBytes((long)data.words().length * Integer.BYTES, 0),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            try {
+                try (NativeBuffer.Mapped mapped = buffer.map()) {
+                    RayTracingMaterialBuffer.writeLightData(mapped, data);
+                }
+                return buffer;
+            } catch (Throwable throwable) {
+                RtResourceRollback.attempt(throwable, buffer::close);
+                throw throwable;
+            }
+        }
+
         private static NativeBuffer uploadIntBuffer(VulkanDevice device, int[] values, int usage) {
             NativeBuffer buffer = NativeBuffer.create(device, (long)values.length * Integer.BYTES, usage, true);
             try {
@@ -2301,6 +2375,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
             RtestFsrSettings.Jitter jitter = token.jitter();
             RayTracingClientConfig config = RayTracingClientConfig.INSTANCE;
             float sunIntensity = config.sunIntensity.get().floatValue();
+            boolean sunDaylightIntensityEnabled = config.sunDaylightIntensityEnabled.get();
+            float sunDaylightPeakIntensity = config.sunDaylightPeakIntensity.get().floatValue();
+            float skyLightLevel = level.environmentAttributes().getDimensionValue(EnvironmentAttributes.SKY_LIGHT_LEVEL);
+            float effectiveSunIntensity = SkyboxOpacityCurve.resolveSunIntensity(sunDaylightIntensityEnabled,
+                sunIntensity, sunDaylightPeakIntensity, skyLightLevel);
             float sunAngularRadiusDegrees = config.sunAngularRadiusDegrees.get().floatValue();
             int sunShadowSamples = config.sunShadowSamples.get();
             int pbrPackedMode = config.pbrPackedMode();
@@ -2339,6 +2418,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 || this.lastSkyboxDaylightOpacityEnabled != skyboxDaylightOpacityEnabled
                 || this.lastMoonEnabled != moonEnabled
                 || Float.compare(this.lastSunIntensity, sunIntensity) != 0
+                || this.lastSunDaylightIntensityEnabled != sunDaylightIntensityEnabled
+                || Float.compare(this.lastSunDaylightPeakIntensity, sunDaylightPeakIntensity) != 0
                 || Float.compare(this.lastSunAngularRadiusDegrees, sunAngularRadiusDegrees) != 0
                 || this.lastSunShadowSamples != sunShadowSamples) {
                 // Material interpretation changes invalidate temporal samples just like a
@@ -2360,6 +2441,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastSkyboxDaylightOpacityEnabled = skyboxDaylightOpacityEnabled;
                 this.lastMoonEnabled = moonEnabled;
                 this.lastSunIntensity = sunIntensity;
+                this.lastSunDaylightIntensityEnabled = sunDaylightIntensityEnabled;
+                this.lastSunDaylightPeakIntensity = sunDaylightPeakIntensity;
                 this.lastSunAngularRadiusDegrees = sunAngularRadiusDegrees;
                 this.lastSunShadowSamples = sunShadowSamples;
                 LOGGER.info("RTest volumetric lighting config: enabled={}, strength={}, fogDensity={}, quality={}",
@@ -2455,7 +2538,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     .putFloat(84, this.currentSunDirectionY)
                     .putFloat(88, this.currentSunDirectionZ)
                     .putFloat(92, maxTraceDistance);
-                buffer.putFloat(96, RayTracingClientConfig.INSTANCE.sunIntensity.get().floatValue())
+                buffer.putFloat(96, effectiveSunIntensity)
                     .putFloat(100, RayTracingClientConfig.INSTANCE.shadowStrength.get().floatValue())
                     // settings.z carries the optional Prime-inspired aerial volume strength;
                     // zero keeps the shader path completely dormant without changing the UBO ABI.
@@ -2511,11 +2594,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     currentCamera.y(), atmosphereSettings());
                 // Read unquantized dimension sky brightness, not a block/player light sample.
                 // Daily/weather changes must not repeatedly reset NRD/FSR histories.
-                boolean physicalSkyEnabled = this.atmosphere != null && level.dimensionType().hasSkyLight();
-                float effectiveSkyboxTextureOpacity = !physicalSkyEnabled && skyboxDaylightOpacityEnabled
-                    ? SkyboxOpacityCurve.fromSkyLightLevel(level.environmentAttributes().getDimensionValue(
-                        EnvironmentAttributes.SKY_LIGHT_LEVEL), level.getOverworldClockTime())
-                    : skyboxTextureOpacity;
+                float effectiveSkyboxTextureOpacity = SkyboxOpacityCurve.resolveOpacity(
+                    skyboxDaylightOpacityEnabled, skyboxTextureOpacity, skyLightLevel, level.getOverworldClockTime());
                 try (NativeBuffer.Mapped mapped = this.atmosphereCameraBuffer.map()) {
                     mapped.buffer().putFloat(0, this.atmosphereEyeRadiusKm)
                         .putFloat(4, effectiveSkyboxTextureOpacity)
@@ -3663,6 +3743,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(atmosphere, failure);
             failure = closeAndCapture(cameraBuffer, failure);
             failure = closeAndCapture(materialBuffer, failure);
+            failure = closeAndCapture(gpuLightTreeBuilder, failure);
             failure = closeAndCapture(lightDataBuffer, failure);
             failure = closeAndCapture(pbrBuffer, failure);
             failure = closeAndCapture(terrainTraversalParamsBuffer, failure);
@@ -3685,6 +3766,128 @@ import com.rtest.client.fsr.RtestFsrSettings;
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         } catch (java.io.IOException exception) {
             throw new IllegalStateException("Could not read shader resource: " + path, exception);
+        }
+    }
+
+    private static final class GpuLightTreeBuilder implements AutoCloseable {
+        final VulkanDevice device;
+        long setLayout, pool, set, layout, pipeline, shader;
+        boolean disabled;
+
+        GpuLightTreeBuilder(VulkanDevice device) {
+            this.device = device;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                var vk = device.vkDevice();
+                var h = stack.callocLong(1);
+                var binding = VkDescriptorSetLayoutBinding.calloc(1, stack).binding(0)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                    .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+                VulkanUtils.crashIfFailure(device, VK10.vkCreateDescriptorSetLayout(vk,
+                    VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binding), null, h), "Light tree descriptor layout");
+                setLayout = h.get(0);
+                var size = VkDescriptorPoolSize.calloc(1, stack).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
+                VulkanUtils.crashIfFailure(device, VK10.vkCreateDescriptorPool(vk,
+                    VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(size), null, h), "Light tree descriptor pool");
+                pool = h.get(0);
+                VulkanUtils.crashIfFailure(device, VK10.vkAllocateDescriptorSets(vk,
+                    VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool).pSetLayouts(stack.longs(setLayout)), h), "Light tree descriptor set");
+                set = h.get(0);
+                var push = VkPushConstantRange.calloc(1, stack).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(12);
+                VulkanUtils.crashIfFailure(device, VK10.vkCreatePipelineLayout(vk,
+                    VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, h), "Light tree pipeline layout");
+                layout = h.get(0);
+                shader = ShaderModule.create(device, loadShaderResource("rtest/shaders/light_tree_build.comp"), Shaderc.shaderc_glsl_compute_shader).handle;
+                var stage = VkPipelineShaderStageCreateInfo.calloc(stack).sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT)
+                    .module(shader).pName(stack.UTF8("main"));
+                var info = VkComputePipelineCreateInfo.calloc(1, stack);
+                info.get(0).sType$Default().stage(stage).layout(layout);
+                VulkanUtils.crashIfFailure(device, VK10.vkCreateComputePipelines(vk, 0L, info, null, h), "Light tree compute pipeline");
+                pipeline = h.get(0);
+            } catch (RuntimeException failure) {
+                close();
+                disabled = true;
+                com.mojang.logging.LogUtils.getLogger().warn("RTest GPU light tree initialization failed; CPU heap fallback", failure);
+            }
+        }
+
+        void buildOrFallback(NativeBuffer buffer, RayTracingLightTree.Data data) {
+            long start = System.nanoTime();
+            if (!disabled) {
+                try {
+                    int dispatches = build(buffer, data.emitterCount());
+                    long hostBytes = (8L + data.words()[7] - data.words()[4]) * Integer.BYTES;
+                    com.mojang.logging.LogUtils.getLogger().info("RTest GPU light tree: emitters={}, nodes={}, dispatches={}, host_upload_bytes={}, build_submit_wait_ms={}",
+                        data.emitterCount(), data.words()[0], dispatches, hostBytes, (System.nanoTime()-start)/1_000_000.0);
+                    return;
+                } catch (RuntimeException failure) {
+                    disabled = true;
+                    com.mojang.logging.LogUtils.getLogger().warn("RTest GPU light tree build failed; CPU heap fallback", failure);
+                }
+            }
+            try (var mapped = buffer.map()) {
+                for (int word : data.completeOnCpu()) mapped.buffer().putInt(word);
+            }
+        }
+
+        private int build(NativeBuffer buffer, int n) {
+            VulkanCommandEncoder encoder = new VulkanCommandEncoder(device);
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                var info = VkDescriptorBufferInfo.calloc(1, stack).buffer(buffer.buffer).offset(0).range(buffer.size);
+                var write = VkWriteDescriptorSet.calloc(1, stack).sType$Default().dstSet(set).dstBinding(0)
+                    .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(info);
+                VK10.vkUpdateDescriptorSets(device.vkDevice(), write, null);
+                var cmd = encoder.allocateAndBeginTransientCommandBuffer();
+                var barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK10.VK_ACCESS_HOST_WRITE_BIT).dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT);
+                VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, stack.longs(set), null);
+                dispatch(cmd, stack, n-1, n, false);
+                int dispatches = 1;
+                barrier.srcAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT);
+                for (int first = Integer.highestOneBit(n-1)-1; first >= 255; first = (first-1)/2) {
+                    VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+                    dispatch(cmd, stack, first, Math.min(first+1, n-1-first), false);
+                    dispatches++;
+                }
+                VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, barrier, null, null);
+                // The top 255 nodes fit in one group: 128 -> 64 -> ... -> 1.
+                dispatch(cmd, stack, 127, 128, true);
+                dispatches++;
+                barrier.dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT);
+                VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, barrier, null, null);
+                VulkanUtils.crashIfFailure(device, VK10.vkEndCommandBuffer(cmd), "Light tree end command");
+                encoder.execute(cmd);
+                try (var fence = encoder.createFence()) {
+                    encoder.submit();
+                    if (!fence.awaitCompletion(5_000_000_000L)) {
+                        device.graphicsQueue().waitIdle();
+                        throw new IllegalStateException("GPU light tree build timed out");
+                    }
+                }
+                return dispatches;
+            } finally {
+                // Retire command pools before any fallback host write or publication.
+                try { encoder.destroy(); }
+                catch (RuntimeException failure) { device.graphicsQueue().waitIdle(); throw failure; }
+            }
+        }
+
+        private void dispatch(VkCommandBuffer cmd, MemoryStack stack, int first, int count, boolean fused) {
+            VK10.vkCmdPushConstants(cmd, layout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(first, count, fused ? 1 : 0));
+            VK10.vkCmdDispatch(cmd, Math.min(65535, (count+127)/128), 1, 1);
+        }
+
+        @Override public void close() {
+            var vk = device.vkDevice();
+            if (pipeline != 0) VK10.vkDestroyPipeline(vk, pipeline, null);
+            if (shader != 0) VK10.vkDestroyShaderModule(vk, shader, null);
+            if (layout != 0) VK10.vkDestroyPipelineLayout(vk, layout, null);
+            if (pool != 0) VK10.vkDestroyDescriptorPool(vk, pool, null);
+            if (setLayout != 0) VK10.vkDestroyDescriptorSetLayout(vk, setLayout, null);
+            pipeline = shader = layout = pool = setLayout = set = 0;
         }
     }
 

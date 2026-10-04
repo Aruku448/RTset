@@ -15,9 +15,9 @@
   "screen.rtest.settings.skyboxTextureEnabled": "Legacy skybox texture: %s",
   "screen.rtest.settings.skyboxTextureEnabled.tip": "Retain the PNG skybox; blend over physical sky using texture opacity. Disabling hides only the PNG, not atmosphere, sun or volume lighting.",
   "screen.rtest.settings.skyboxDaylightOpacityEnabled": "Skybox daylight opacity curve: %s",
-  "screen.rtest.settings.skyboxDaylightOpacityEnabled.tip": "Separate morning and afternoon opacity curves for the legacy PNG sky. Prime physical sky uses manual PNG opacity and does not treat this curve as an atmosphere control.",
+  "screen.rtest.settings.skyboxDaylightOpacityEnabled.tip": "Morning/afternoon curves override manual PNG opacity, including the physical sky texture blend. Only PNG blending changes, not the atmosphere medium.",
   "screen.rtest.settings.skyboxTextureOpacity": "Manual skybox opacity: %s",
-  "screen.rtest.settings.skyboxTextureOpacity.tip": "Manual PNG blend: 0 = physical sky, 1 = PNG. Prime physical sky always uses this value; the daylight curve only applies to the legacy sky path. Sun, Moon and their atmospheric scattering remain separate.",
+  "screen.rtest.settings.skyboxTextureOpacity.tip": "Manual PNG opacity when the curve is off: 0 is physical sky, 1 is texture. Ignored while the curve is enabled.",
   "screen.rtest.settings.moonEnabled": "Moon: %s",
   "screen.rtest.settings.moonEnabled.tip": "Enlarged moon with Minecraft direction and eight phases, lunar surface NEE, RGB transparent shadows and finite-segment scattering. Reflections/refractions share emitter radiance; independent of PNG opacity.",
   "screen.rtest.settings.moonIntensity": "Moonlight intensity: %s",
@@ -91,7 +91,7 @@
   "screen.rtest.settings.category.pathTracing.description": "Adjust GI intensity and path layers; higher values can increase noise and GPU cost.",
   "screen.rtest.settings.category.reconstruction.description": "FSR3 handles temporal reconstruction and upscaling, not RT denoising.",
   "screen.rtest.settings.category.denoiser.description": "Use NRD or raw RT; observe a few frames after switching.",
-  "screen.rtest.settings.sunIntensity.tip": "Multiplier for direct sunlight.",
+  "screen.rtest.settings.sunIntensity.tip": "Manual intensity for direct sunlight, physical sky and solar atmospheric scattering. Overridden when sky light level mode is enabled.",
   "screen.rtest.settings.shadowStrength.tip": "How strongly shadows affect direct sunlight.",
   "screen.rtest.settings.volumetricLightingEnabled.tip": "Enable Prime-inspired single-scattering sun shafts and aerial perspective; disable to restore the old cost.",
   "screen.rtest.settings.volumetricLightingStrength.tip": "Legacy medium strength. In Prime mode scales solar in-scatter only; transmittance uses the fixed physical medium, and zero disables finite aerial.",
@@ -162,5 +162,9 @@
   "screen.rtest.settings.sunAngularRadiusDegrees": "Sun angular radius: %s°",
   "screen.rtest.settings.sunAngularRadiusDegrees.tip": "Larger radius widens penumbrae with blocker distance. Real Sun: about 0.27 degrees; try 1 degree. Integrated sunlight stays fixed.",
   "screen.rtest.settings.sunShadowSamples": "Sun shadow samples: %s",
-  "screen.rtest.settings.sunShadowSamples.tip": "Solar samples per primary surface per frame. More samples reduce penumbra noise even without NRD, at additional ray cost."
+  "screen.rtest.settings.sunShadowSamples.tip": "Solar samples per primary surface per frame. More samples reduce penumbra noise even without NRD, at additional ray cost.",
+  "screen.rtest.settings.sunDaylightIntensityEnabled": "Sun intensity follows sky light level: %s",
+  "screen.rtest.settings.sunDaylightIntensityEnabled.tip": "Overrides manual solar intensity: normalized level 0 (raw sky light level 4) has intensity 3, level 15 is the daytime peak, with a smooth transition. Shared by direct light, physical sky and solar atmospheric scattering.",
+  "screen.rtest.settings.sunDaylightPeakIntensity": "Daytime peak sun intensity: %s",
+  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "Solar intensity at sky light level 15 in automatic mode. Manual intensity is used when automatic mode is off."
 }

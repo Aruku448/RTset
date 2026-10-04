@@ -17,6 +17,8 @@ public final class RayTracingTerrainTraversalShaderContractTest {
         } catch (java.io.IOException exception) {
             throw new AssertionError("could not read terrain traversal shader", exception);
         }
+        require(shader, "max(depthNear, depthFar) >= 0.0 && min(depthNear, depthFar) <= 1.0");
+        require(shader, "vec2 rectMin = vec2(3.402823e38);");
         require(shader, "layout(local_size_x = 64");
         require(shader, "vec4 boundsMinAndLodError");
         require(shader, "uvec4 hierarchy");

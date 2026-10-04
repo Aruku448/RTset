@@ -1,0 +1,18 @@
+{
+  "emitters": 80000,
+  "cpu_tree_median_ms": 58.923,
+  "gpu_seed_cpu_median_ms": 9.78,
+  "gpu_execution_measured": false,
+  "samples": 9,
+  "warmup_iterations": 4,
+  "description": "Full CPU tree build versus emitter extraction, Morton radix ordering and GPU seed packing. Excludes upload, GPU dispatch and publication wait.",
+  "gpu_correctness": {
+    "device": "AMD Radeon RX 7800 XT (RADV NAVI32)",
+    "emitters": 5003,
+    "nodes": 10005,
+    "compared_words": 190112,
+    "mismatches": 0,
+    "compiler": "Shaderc, Vulkan 1.2 target"
+  },
+  "in_game_frame_time_measured": false
+}

@@ -80,6 +80,40 @@ public final class RayTracingTerrainTraversalAbiTest {
                 RayTracingTerrainTraversalAbi.DepthConvention.FORWARD_Z)) {
             throw new AssertionError("Hi-Z rejected a rectangle with a visible texel");
         }
+        verifyProjectionConventions(identity, readyRenderableBlas);
+        var oddHiZ = new RayTracingTerrainTraversalAbi.HiZPyramid(5, 1,
+            new float[] {.8F, .8F, .8F, .8F, 0}, RayTracingTerrainTraversalAbi.DepthConvention.REVERSED_Z);
+        if (oddHiZ.width(1) != 2 || oddHiZ.sample(1, 1, 0) != 0)
+            throw new AssertionError("Odd Vulkan mip must include the last source texel");
         System.out.println("Terrain traversal ABI contract passed");
     }
+    private static void verifyProjectionConventions(float[] identity, int flags) {
+        var reversed = RayTracingTerrainTraversalAbi.DepthConvention.REVERSED_Z;
+        var forward = RayTracingTerrainTraversalAbi.DepthConvention.FORWARD_Z;
+        var nearCrossing = new RayTracingTerrainTraversalAbi.Bounds(-.2F, -.2F, .8F, .2F, .2F, 1.2F);
+        var rect = RayTracingTerrainTraversalAbi.projectBounds(nearCrossing, identity, reversed);
+        if (!rect.intersectsViewport() || rect.depthNear() != 1 || Math.abs(rect.depthFar() - .8F) > 1e-6F)
+            throw new AssertionError("Reversed-Z node crossing near plane must stay visible with clamped depth");
+        var farCrossing = new RayTracingTerrainTraversalAbi.Bounds(-.2F, -.2F, -.2F, .2F, .2F, .2F);
+        if (!RayTracingTerrainTraversalAbi.projectBounds(farCrossing, identity, reversed).intersectsViewport())
+            throw new AssertionError("Reversed-Z node crossing far plane must stay visible");
+        for (var convention : new RayTracingTerrainTraversalAbi.DepthConvention[] {forward, reversed}) {
+            for (float z : new float[] {-2, 2}) {
+                var outside = new RayTracingTerrainTraversalAbi.Bounds(-.2F, -.2F, z, .2F, .2F, z + .1F);
+                if (RayTracingTerrainTraversalAbi.projectBounds(outside, identity, convention).intersectsViewport())
+                    throw new AssertionError("Whole node outside depth slab must be rejected");
+            }
+            var outsideXY = new RayTracingTerrainTraversalAbi.Bounds(2, 2, .2F, 3, 3, .8F);
+            if (RayTracingTerrainTraversalAbi.projectBounds(outsideXY, identity, convention).intersectsViewport())
+                throw new AssertionError("Whole node outside viewport must be rejected");
+        }
+        var bounds = new RayTracingTerrainTraversalAbi.Bounds(-.2F, -.2F, .2F, .2F, .2F, .8F);
+        var node = new RayTracingTerrainTraversalAbi.NodeMetadata(bounds, -1, -1, 0, 0, 0, 0, 1, flags, 10000);
+        // A reversed-Z occluder at .5 is behind this node's nearest .8 surface. Using the
+        // forward nearest .2 would incorrectly discard the entire node.
+        var hiz = new RayTracingTerrainTraversalAbi.HiZPyramid(1, 1, new float[] {.5F}, reversed);
+        if (RayTracingTerrainTraversalAbi.selectNodes(List.of(node), identity, 0, 0, 100, 100, 100, hiz, reversed).size() != 1)
+            throw new AssertionError("Selection must forward depth convention to projection");
+    }
+
 }

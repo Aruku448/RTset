@@ -15,9 +15,9 @@
   "screen.rtest.settings.skyboxTextureEnabled": "旧天空盒贴图：%s",
   "screen.rtest.settings.skyboxTextureEnabled.tip": "保留天空盒贴图；与物理天空同时开启时按贴图不透明度混合。关闭仅隐藏贴图，不影响物理天空、太阳和体积光。",
   "screen.rtest.settings.skyboxDaylightOpacityEnabled": "天空盒昼夜透明曲线：%s",
-  "screen.rtest.settings.skyboxDaylightOpacityEnabled.tip": "昼夜透明曲线只控制旧 PNG 天空。Prime 物理天空始终使用手动 PNG 不透明度，不再把这条曲线当作大气参数。",
+  "screen.rtest.settings.skyboxDaylightOpacityEnabled.tip": "启用时晨昏曲线覆盖手动 PNG 不透明度，包括 Prime 物理天空的贴图混合。它只控制 PNG 混合，不改变大气介质。",
   "screen.rtest.settings.skyboxTextureOpacity": "天空盒手动不透明度：%s",
-  "screen.rtest.settings.skyboxTextureOpacity.tip": "手动混合 PNG：0 为纯物理天空，1 为纯贴图。Prime 物理天空始终使用此值；昼夜曲线只用于旧天空。太阳、月亮及其大气散射保持独立。",
+  "screen.rtest.settings.skyboxTextureOpacity.tip": "曲线关闭时使用的 PNG 不透明度：0 为纯物理天空，1 为纯贴图。曲线开启时该手动值不生效。",
   "screen.rtest.settings.moonEnabled": "月亮：%s",
   "screen.rtest.settings.moonEnabled.tip": "按游戏方向和八阶段月相显示放大的月盘，并提供地面月光、RGB透明阴影和有限段体积散射；反射折射与选光器保持一致，独立于天空盒透明度。",
   "screen.rtest.settings.moonIntensity": "月光强度：%s",
@@ -91,7 +91,7 @@
   "screen.rtest.settings.category.pathTracing.description": "调整 GI 强度与路径层数；更高值可能增加噪声和 GPU 开销。",
   "screen.rtest.settings.category.reconstruction.description": "FSR3 负责时域重建与超分，不负责 RT 降噪。",
   "screen.rtest.settings.category.denoiser.description": "选择 NRD 或原始 RT；切换后请观察几帧。",
-  "screen.rtest.settings.sunIntensity.tip": "直接太阳光乘数。",
+  "screen.rtest.settings.sunIntensity.tip": "手动太阳强度，同时影响直射、物理天空和太阳大气散射；启用光照等级自动模式时由曲线覆盖。",
   "screen.rtest.settings.shadowStrength.tip": "阴影对直接太阳光的影响强度。",
   "screen.rtest.settings.volumetricLightingEnabled.tip": "启用 Prime 风格的太阳单次散射、空气透视和遮挡体积光；关闭可恢复原性能。",
   "screen.rtest.settings.volumetricLightingStrength.tip": "旧模型控制介质强度；Prime 模式仅控制太阳散射亮度，透射由固定物理介质决定，0 关闭有限段效果。",
@@ -162,5 +162,9 @@
   "screen.rtest.settings.sunAngularRadiusDegrees": "太阳角半径：%s°",
   "screen.rtest.settings.sunAngularRadiusDegrees.tip": "半径越大，遮挡物远处的半影越宽。真实太阳约 0.27°，可试 1°；总光照强度保持一致。",
   "screen.rtest.settings.sunShadowSamples": "太阳阴影采样：%s",
-  "screen.rtest.settings.sunShadowSamples.tip": "每帧主表面的太阳采样数。增加采样可降低半影噪声，即使关闭 NRD；会增加射线开销。"
+  "screen.rtest.settings.sunShadowSamples.tip": "每帧主表面的太阳采样数。增加采样可降低半影噪声，即使关闭 NRD；会增加射线开销。",
+  "screen.rtest.settings.sunDaylightIntensityEnabled": "太阳强度随天空光照等级变化：%s",
+  "screen.rtest.settings.sunDaylightIntensityEnabled.tip": "启用时覆盖手动太阳强度。归一化光照等级 0（原始天空等级 4）为强度 3，15 为日间峰值，中间平滑过渡；同时影响直射、物理天空和太阳大气散射。",
+  "screen.rtest.settings.sunDaylightPeakIntensity": "太阳日间峰值强度：%s",
+  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "自动模式下天空光照等级 15 对应的太阳强度。关闭自动模式时使用手动太阳强度。"
 }

@@ -67,10 +67,10 @@ uint nodeLod(NodeMetadata node) { return floatBitsToUint(node.boundsMaxAndLod.w)
 ScreenRect projectBounds(NodeMetadata node) {
     vec3 lo = boundsMin(node);
     vec3 hi = boundsMax(node);
-    vec2 rectMin = vec2(1.0);
-    vec2 rectMax = vec2(0.0);
-    float depthNear = params.config.z == 0u ? 1.0 : 0.0;
-    float depthFar = params.config.z == 0u ? 0.0 : 1.0;
+    vec2 rectMin = vec2(3.402823e38);
+    vec2 rectMax = vec2(-3.402823e38);
+    float depthNear = params.config.z == 0u ? 3.402823e38 : -3.402823e38;
+    float depthFar = params.config.z == 0u ? -3.402823e38 : 3.402823e38;
     bool behindNearPlane = false;
     for (uint corner = 0u; corner < 8u; corner++) {
         vec3 point = vec3((corner & 1u) == 0u ? lo.x : hi.x,
@@ -97,7 +97,7 @@ ScreenRect projectBounds(NodeMetadata node) {
         params.config.z == 0u ? vec2(0.0, 1.0) : vec2(1.0, 0.0), true);
     bool intersects = rectMax.x >= 0.0 && rectMin.x <= 1.0
                    && rectMax.y >= 0.0 && rectMin.y <= 1.0
-                   && depthFar >= 0.0 && depthNear <= 1.0;
+                   && max(depthNear, depthFar) >= 0.0 && min(depthNear, depthFar) <= 1.0;
     return ScreenRect(vec4(clamp(rectMin, vec2(0.0), vec2(1.0)),
                            clamp(rectMax, vec2(0.0), vec2(1.0))),
                       vec2(clamp(depthNear, 0.0, 1.0), clamp(depthFar, 0.0, 1.0)), intersects);

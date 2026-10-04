@@ -1,0 +1,223 @@
+{
+  "log_sha256": "14f64e5f79b5c05b3e7139031b5c91f3711a2a53be5503e4727fbfb4ab365d73",
+  "requested_window": {
+    "since": "01:23:20",
+    "until": "01:24:26"
+  },
+  "sample_window": {
+    "first": "01:23:20",
+    "last": "01:24:26"
+  },
+  "scope_sample_counts": {
+    "geometry_merge_event": 42,
+    "geometry_publish_event": 42,
+    "gpu": 36,
+    "vulkan_dispatch_cpu": 38,
+    "smoke_run_cpu": 38
+  },
+  "statistics": {
+    "geometry_merge_event": {
+      "duration": {
+        "n": 42,
+        "mean_ms": 88.5,
+        "median_ms": 85.5,
+        "p95_ms": 120.0,
+        "min_ms": 54.0,
+        "max_ms": 154.0
+      }
+    },
+    "geometry_publish_event": {
+      "duration": {
+        "n": 42,
+        "mean_ms": 175.619048,
+        "median_ms": 180.0,
+        "p95_ms": 229.0,
+        "min_ms": 16.0,
+        "max_ms": 242.0
+      }
+    },
+    "gpu": {
+      "rt": {
+        "n": 36,
+        "mean_ms": 11.053806,
+        "median_ms": 10.995,
+        "p95_ms": 13.621,
+        "min_ms": 6.469,
+        "max_ms": 18.678
+      },
+      "post_rt": {
+        "n": 36,
+        "mean_ms": 0.177667,
+        "median_ms": 0.175,
+        "p95_ms": 0.19,
+        "min_ms": 0.166,
+        "max_ms": 0.255
+      },
+      "total": {
+        "n": 36,
+        "mean_ms": 11.236361,
+        "median_ms": 11.174,
+        "p95_ms": 13.8,
+        "min_ms": 6.649,
+        "max_ms": 18.94
+      },
+      "terrain_traversal": {
+        "n": 36,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "atmosphere_lut": {
+        "n": 36,
+        "mean_ms": 0.351389,
+        "median_ms": 0.0,
+        "p95_ms": 1.073,
+        "min_ms": 0.0,
+        "max_ms": 1.082
+      }
+    },
+    "vulkan_dispatch_cpu": {
+      "resource_match": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "resource_rebuild": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "dynamic_update": {
+        "n": 38,
+        "mean_ms": 0.081921,
+        "median_ms": 0.0465,
+        "p95_ms": 0.308,
+        "min_ms": 0.012,
+        "max_ms": 0.385
+      },
+      "pbr_sync": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 38,
+        "mean_ms": 0.082079,
+        "median_ms": 0.0715,
+        "p95_ms": 0.175,
+        "min_ms": 0.048,
+        "max_ms": 0.188
+      },
+      "fence_wait_cpu": {
+        "n": 38,
+        "mean_ms": 8.270368,
+        "median_ms": 8.0685,
+        "p95_ms": 14.707,
+        "min_ms": 1.106,
+        "max_ms": 15.141
+      },
+      "readback": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    },
+    "smoke_run_cpu": {
+      "resource_match": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "resource_rebuild": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "geometry_update": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "dynamic_update": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "pbr_sync": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "command_record": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "fence_wait_cpu": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      },
+      "readback": {
+        "n": 38,
+        "mean_ms": 0.0,
+        "median_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 0.0
+      }
+    }
+  },
+  "notes": [
+    "All durations are milliseconds.",
+    "CPU waits overlap GPU work; do not sum CPU and GPU durations.",
+    "Zero in sampled frames does not imply a stage is free or never executed.",
+    "GPU results are asynchronous; configuration-change boundaries are ambiguous.",
+    "Select a stable resolution, denoiser and offline-mode window before comparing.",
+    "P95 uses nearest rank; sparse samples are not full-frame P95."
+  ],
+  "source": "/home/aruku/.minecraft/versions/RTest/logs/latest.log"
+}

@@ -24,6 +24,7 @@ public final class LightTreeReuseMathTest {
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0 && args[0].equals("bench")) { benchmark(); return; }
+        if (args.length != 0 && args[0].equals("bench-growth")) { benchmarkGrowth(); return; }
         SectionGeometry lamp = section(0, 2, 1), dark = section(16, 1, 0);
         SceneGeometry first = scene(List.of(lamp, dark));
         SceneGeometry next = merge(first, dark, section(16, 1, 0));
@@ -43,6 +44,14 @@ public final class LightTreeReuseMathTest {
         SceneGeometry reordered = merge(tied, tied.sections.getFirst(), section(0, 2, 1));
         exact(reordered);
         if (reordered.lightTree == tied.lightTree) throw new AssertionError("emitter source order ignored");
+        // Non-emissive growth changes only the material lookup extent, not the tree topology.
+        var grownSections = List.of(lamp, section(16, 4, 0));
+        var grownLayout = first.materialLayout.update(grownSections);
+        if (!RayTracingLightTree.sameLightInputs(first, grownSections, 0, 0, 0, grownLayout))
+            throw new AssertionError("Dark section growth must reuse emitter hierarchy and resize only lookup");
+        var lookupGrown = RayTracingLightTree.buildOrReuse(first, grownSections, 0, 0, 0, grownLayout);
+        if (!Arrays.equals(lookupGrown.words(), RayTracingLightTree.build(grownSections, 0, 0, 0, grownLayout).words()))
+            throw new AssertionError("Resized light lookup differs from fresh tree/PDF");
         guardCoverage();
         java.util.Random random = new java.util.Random(974);
         SceneGeometry state = scene(List.of(section(0, 3, 1), section(16, 3, 0), section(32, 2, 2)));
@@ -128,6 +137,29 @@ public final class LightTreeReuseMathTest {
             materials[m+5] = 1; materials[m+22] = emission;
         }
         return SECTION.newInstance(x, 0, 0, vertices, materials);
+    }
+
+    private static void benchmarkGrowth() throws Exception {
+        var lamp = section(0, 80000, 1);
+        var dark = section(16, 1, 0);
+        var initial = scene(List.of(lamp, dark));
+        var grown = List.of(lamp, section(16, 4000, 0));
+        var layout = initial.materialLayout.update(grown);
+        long[] full = new long[9], resized = new long[9];
+        for (int i = -4; i < 9; i++) {
+            long start = System.nanoTime();
+            var a = RayTracingLightTree.build(grown, 0, 0, 0, layout);
+            long middle = System.nanoTime();
+            var b = RayTracingLightTree.buildOrReuse(initial, grown, 0, 0, 0, layout);
+            long end = System.nanoTime();
+            if (!Arrays.equals(a.words(), b.words())) throw new AssertionError("Growth bench packed mismatch");
+            sink = Arrays.hashCode(b.words());
+            if (i >= 0) { full[i] = middle - start; resized[i] = end - middle; }
+        }
+        Arrays.sort(full); Arrays.sort(resized);
+        System.out.printf(java.util.Locale.ROOT,
+            "LIGHT_GROWTH_BENCH emitters=80000 fresh_median_ms=%.3f resize_median_ms=%.3f ratio=%.2f packed_equal=true%n",
+            full[4]/1e6, resized[4]/1e6, (double)full[4]/resized[4]);
     }
 
     private static volatile int sink;

@@ -19,6 +19,14 @@ public final class NrdCompositeShaderContractTest {
             }
             shader = new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
+        // A zero-energy Monte Carlo sample is valid evidence, not a missing signal. If RayGen
+        // derives distance validity from current RGB, the composite returns raw black samples
+        // even when NRD reconstructs nonzero illumination from neighbouring/history samples.
+        String raygen = RayTracingShaders.RAYGEN_SHADER;
+        for (String lobe : new String[] {"Diffuse", "Specular"}) {
+            if (raygen.contains("&& dot(nrd" + lobe + "Radiance, vec3(1.0)) > 1.0e-5"))
+                throw new AssertionError("Zero-radiance " + lobe + " surface samples incorrectly bypass NRD history");
+        }
         require(shader, "layout(set = 0, binding = 3, r32f) uniform readonly image2D viewZ;");
         require(shader, "if (viewZValue >= 65503.0)");
         require(shader, "layout(set = 0, binding = 4, rgba16f) uniform readonly image2D material;");

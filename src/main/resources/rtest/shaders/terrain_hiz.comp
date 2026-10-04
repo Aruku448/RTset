@@ -1,7 +1,7 @@
 #version 460
 
 // Builds a conservative reversed-Z Hi-Z pyramid. The source contains 0.05/viewZ,
-// therefore the minimum of a 2x2 tile is the farthest surface in that tile.
+// therefore the minimum over the covered source footprint is its farthest surface.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 2) uniform sampler2D sourceDepth;
 layout(set = 0, binding = 5, r32f) uniform writeonly image2D targetDepth;
@@ -15,11 +15,14 @@ void main() {
     ivec2 destinationSize = imageSize(targetDepth);
     if (destination.x >= destinationSize.x || destination.y >= destinationSize.y) return;
     ivec2 sourceSize = ivec2(params.values.xy);
-    ivec2 sourceOrigin = destination * 2;
+    // Vulkan rounds odd mip dimensions down. A fixed 2x2 tile would omit the last
+    // source row/column. Overlapping footprints conservatively cover normalized texel areas.
+    ivec2 sourceMin = destination * sourceSize / destinationSize;
+    ivec2 sourceMax = ((destination + ivec2(1)) * sourceSize + destinationSize - ivec2(1)) / destinationSize;
     float aggregate = 1.0;
-    for (int y = 0; y < 2; y++) {
-        for (int x = 0; x < 2; x++) {
-            ivec2 source = min(sourceOrigin + ivec2(x, y), sourceSize - ivec2(1));
+    for (int y = sourceMin.y; y < sourceMax.y; y++) {
+        for (int x = sourceMin.x; x < sourceMax.x; x++) {
+            ivec2 source = ivec2(x, y);
             float value = texelFetch(sourceDepth, source, 0).r;
             if (isnan(value) || isinf(value)) value = 0.0;
             aggregate = min(aggregate, value);

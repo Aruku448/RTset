@@ -135,16 +135,20 @@ public final class RayTracingTerrainTraversalAbi {
             float[] level = nearestDepth.clone();
             ws.add(w); hs.add(h); data.add(level);
             while (w > 1 || h > 1) {
-                int nextW = Math.max(1, (w + 1) / 2);
-                int nextH = Math.max(1, (h + 1) / 2);
+                int nextW = Math.max(1, w / 2);
+                int nextH = Math.max(1, h / 2);
                 float[] next = new float[nextW * nextH];
                 for (int y = 0; y < nextH; y++) {
                     for (int x = 0; x < nextW; x++) {
                         float aggregate = convention == DepthConvention.FORWARD_Z ? 0.0F : 1.0F;
-                        for (int oy = 0; oy < 2; oy++) {
-                            for (int ox = 0; ox < 2; ox++) {
-                                int sx = Math.min(w - 1, x * 2 + ox);
-                                int sy = Math.min(h - 1, y * 2 + oy);
+                        // Vulkan mip sizes floor-divide. Include every source texel overlapping
+                        // this normalized footprint, including the odd final row/column.
+                        int x0 = (int)((long)x * w / nextW);
+                        int x1 = (int)(((long)(x + 1) * w + nextW - 1) / nextW);
+                        int y0 = (int)((long)y * h / nextH);
+                        int y1 = (int)(((long)(y + 1) * h + nextH - 1) / nextH);
+                        for (int sy = y0; sy < y1; sy++) {
+                            for (int sx = x0; sx < x1; sx++) {
                                 float value = level[sy * w + sx];
                                 aggregate = convention == DepthConvention.FORWARD_Z
                                         ? Math.max(aggregate, value) : Math.min(aggregate, value);
@@ -264,10 +268,11 @@ public final class RayTracingTerrainTraversalAbi {
                 || convention == null) {
             throw new IllegalArgumentException("viewProjection and depth convention are required");
         }
-        float minX = 1.0F, minY = 1.0F, maxX = 0.0F, maxY = 0.0F;
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         boolean reversed = convention == DepthConvention.REVERSED_Z;
-        float depthNear = reversed ? 0.0F : 1.0F;
-        float depthFar = reversed ? 1.0F : 0.0F;
+        float depthNear = reversed ? -Float.MAX_VALUE : Float.MAX_VALUE;
+        float depthFar = reversed ? Float.MAX_VALUE : -Float.MAX_VALUE;
         boolean behindNearPlane = false;
         for (int i = 0; i < 8; i++) {
             float x = ((i & 1) == 0) ? bounds.minX() : bounds.maxX();
@@ -302,10 +307,10 @@ public final class RayTracingTerrainTraversalAbi {
                 : new ScreenRect(0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 1.0F, true);
         }
         boolean intersects = maxX >= 0.0F && minX <= 1.0F && maxY >= 0.0F && minY <= 1.0F
-                && depthFar >= 0.0F && depthNear <= 1.0F;
-        return new ScreenRect(Math.max(0.0F, minX), Math.max(0.0F, minY),
-                Math.min(1.0F, maxX), Math.min(1.0F, maxY),
-                Math.max(0.0F, depthNear), Math.min(1.0F, depthFar), intersects);
+                && Math.max(depthNear, depthFar) >= 0.0F && Math.min(depthNear, depthFar) <= 1.0F;
+        return new ScreenRect(Math.clamp(minX, 0.0F, 1.0F), Math.clamp(minY, 0.0F, 1.0F),
+                Math.clamp(maxX, 0.0F, 1.0F), Math.clamp(maxY, 0.0F, 1.0F),
+                Math.clamp(depthNear, 0.0F, 1.0F), Math.clamp(depthFar, 0.0F, 1.0F), intersects);
     }
 
     /**
@@ -353,7 +358,7 @@ public final class RayTracingTerrainTraversalAbi {
         boolean[] descend = new boolean[nodes.size()];
         for (int i = 0; i < nodes.size(); i++) {
             NodeMetadata node = nodes.get(i);
-            rectangles[i] = projectBounds(node.bounds(), viewProjection);
+            rectangles[i] = projectBounds(node.bounds(), viewProjection, convention);
             float distance = distanceToBounds(cameraX, cameraZ, node.bounds());
             visible[i] = node.ready() && rectangles[i].intersectsViewport() && distance <= renderDistance
                     && !isHiZOccluded(rectangles[i], hiz, screenWidth, screenHeight, convention);
