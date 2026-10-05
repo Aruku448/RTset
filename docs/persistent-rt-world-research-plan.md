@@ -1,6 +1,8 @@
 # Persistent RT World 研究分支
 
-分支：`codex/persistent-rt-world-research`
+分支：`persistent-rt-world-research`
+
+远端：[Aruku448/RTset 的研究分支](https://github.com/Aruku448/RTset/tree/persistent-rt-world-research)。
 
 代码基线：`569424f8aea3407599a2f7bb320a62807af9df69`。
 
