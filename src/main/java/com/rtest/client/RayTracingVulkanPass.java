@@ -298,7 +298,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private int pendingFrameGpuIndex;
         private boolean closed;
         // 0..3 retain RT/post/total; 4..5 bracket traversal/AS; 6..7 isolate dynamic sky LUT work.
-        private static final int GPU_TIMESTAMP_COUNT = 8;
+        private static final int GPU_TIMESTAMP_COUNT = 10;
         private final long gpuTimestampQueryPool;
         private final double gpuTimestampPeriodNs;
         private final boolean gpuTimestampsAvailable;
@@ -2808,7 +2808,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 double[] gpuMilliseconds = readGpuTimestamps(stack);
                 if (gpuMilliseconds != null && this.pendingFrameGpuIndex % 120 == 0) {
                     LOGGER.info(
-                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={} pre_trace_ms={} rt_pipeline_ms={}",
+                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={} pre_trace_ms={} rt_pipeline_ms={} cache_prepare_ms={}",
                         this.pendingFrameGpuIndex,
                         formatGpuMs(gpuMilliseconds[0]),
                         formatGpuMs(gpuMilliseconds[1]),
@@ -2817,7 +2817,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         gpuTimestampPeriodNs,
                         formatGpuMs(gpuMilliseconds[4]),
                         formatGpuMs(gpuMilliseconds[5]),
-                        formatGpuMs(gpuMilliseconds[6]));
+                        formatGpuMs(gpuMilliseconds[6]),
+                        formatGpuMs(gpuMilliseconds[7]));
                 }
                 if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
                     logTerrainTraversalStats(this.pendingFrameGpuIndex);
@@ -3499,7 +3500,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             writeGpuTimestamp(commandBuffer, 5,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
+            writeGpuTimestamp(commandBuffer, 8, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT);
             this.persistentLighting.recordBeforeTrace(commandBuffer, stack);
+            writeGpuTimestamp(commandBuffer, 9, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT);
             VK10.vkCmdBindPipeline(commandBuffer, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VK10.vkCmdBindDescriptorSets(
                 commandBuffer,
@@ -3644,7 +3647,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[7];
+            double[] milliseconds = new double[8];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
@@ -3653,6 +3656,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             milliseconds[4] = (values.get(7) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[5] = (values.get(0) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[6] = (values.get(3) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
+            milliseconds[7] = (values.get(9) - values.get(8)) * gpuTimestampPeriodNs / 1_000_000.0;
             return milliseconds;
         }
 

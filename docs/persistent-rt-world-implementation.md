@@ -13,11 +13,11 @@
 ## 资源与同步
 
 - Binding 41：32 个 uint 的控制/统计头，两个 bank，每个 bank 65,536 个 24-word 槽。约 12 MiB；禁用时只分配 128-byte dummy。
-- 当前 GPU 帧退役后 CPU 更新头；本帧 GPU 将 read bank 复制到独立 write bank，RT 只查询 read bank。
-- 每个槽每帧最多一个 invocation 通过 CAS 获得写入权；其他 invocation 不读取该 write 槽的键和值。跨帧发布依赖现有提交、barrier 和 fence，而非槽 owner 字段。
-- 提交成功后选择下一读 bank；下一帧使用它前等待上一帧结束。场景或光照失效时清空两个 bank。
+- 当前 GPU 帧退役后 CPU 更新头；仅训练刷新帧将 read bank 复制到独立 write bank，RT 只查询 read bank；其余帧不复制也不交换 bank。
+- 在追踪尾部前，每个槽每个训练帧最多一个 invocation 通过 CAS 获得写入权；唯一槽位预留使用原子 ticket，接纳数严格不超过配置预算（默认 4096）。其他 invocation 不读取该 write 槽的键和值。跨帧发布依赖现有提交、barrier 和 fence，而非槽 owner 字段。
+- 训练帧提交成功后选择下一读 bank；下一帧使用它前等待上一帧结束。场景或光照失效时清空两个 bank。
 - 最多累计 16 个更新样本，随后使用 1/16 EMA；样本非有限、负值或任一通道超过 8192 时拒绝训练。有效零值可命中。
-- 每个槽最低默认 4 个更新样本才可复用。默认最大年龄 500 ms，按实际单调时钟计算，支持 uint 毫秒环绕。更新批次默认间隔 50 ms；成熟槽在更新帧按屏幕像素和 epoch 轮换选择约 1/16 强制刷新。
+- 每个槽最低默认 4 个更新样本才可复用。默认最大年龄 500 ms，按实际单调时钟计算，支持 uint 毫秒环绕。更新批次默认间隔 50 ms，低显示帧率会延迟批次；成熟槽在更新帧按屏幕像素和 epoch 轮换选择约 1/16 强制刷新。
 
 键包含 0.5-block 空间单元、量化法线、量化观察方向、精确 RGB/roughness/reflectivity。观察方向属于键，承认目标的 PBR 视角依赖；正常相机移动不全局清空缓存，新键未命中后补路径。Hash 冲突进行完整键比较，不将碰撞值当作命中。空间、方向量化会带来偏差，且相邻表面存在漏光风险；仍需要游戏内对照。
 
@@ -40,6 +40,7 @@ rtEvaluationMode = "full"
 persistentRtUpdateIntervalMs = 50
 persistentRtMaxAgeMs = 500
 persistentRtMinimumSamples = 4
+persistentRtTrainingBudget = 4096
 ```
 
 默认 `persistentRtEnabled = false`、`persistentRtStatistics = false`。此次不替换正式实例 mod。
@@ -55,9 +56,9 @@ persistentRtMinimumSamples = 4
 
 后两者是成本探针，终止路径会改变 MIS 和图像，不作为画质等价参考。`current_visibility` 仍有材质计算、后处理和相关资源更新，并不等于孤立 primary traversal benchmark。
 
-开启统计时每 256 个像素抽样一个 invocation，约每 120 帧日志包含 sampled_queries、sampled_hits、sampled_primary、sampled_secondary、sampled_writes。统计数不是全图射线数；primary/secondary 不包含 shadow/volume，hit ratio 只针对尝试查询的 invocation，强制刷新不计入查询分母。
+开启统计时每 256 个像素抽样一个 invocation，约每 120 帧日志包含 sampled_queries、sampled_hits、sampled_primary、sampled_secondary、sampled_writes。统计数不是全图射线数；primary/secondary 不包含 shadow/volume，hit ratio 只针对尝试查询的 invocation，所有符合条件的主表面都先查询缓存，强制刷新也计入命中分母。新增 sampled_fallback（查询未命中后继续追踪）、sampled_forced（已命中但获得训练预留）、sampled_claim_losses、sampled_budget_denied；exact_reservation_attempts 与 exact_admitted 是全图唯一预留计数，后者包括随后被拒绝的非有限训练目标。它们不是完整 shadow/GI ray 数。`snapshot_copy_bytes` 直接报告本帧记录的复制字节数，非刷新帧为 0。
 
-GPU 日志新增 `pre_trace_ms`（terrain/AS/缓存准备等）与 `rt_pipeline_ms`（大气预处理至 RT 输出复制结束）。后者不包含 Minecraft 全部渲染或显示等待。持续记录命中率和完整 GPU critical path，比较 warmed cache 的相同轨迹；默认开关关闭不代表开启后必定更快。
+GPU 日志新增 `pre_trace_ms`（terrain/AS/缓存准备等）与 `rt_pipeline_ms`（大气预处理至 RT 输出复制结束），另有 `cache_prepare_ms`（transfer 阶段的缓存准备区间，含清空/复制与统计头重置）。后者不包含 Minecraft 全部渲染或显示等待。持续记录命中率和完整 GPU critical path，比较 warmed cache 的相同轨迹；默认开关关闭不代表开启后必定更快。
 
 ## 已验证
 
@@ -77,6 +78,16 @@ cc -O2 -Wall -Wextra tools/gpu_persistent_rt_smoke.c -lvulkan -o /tmp/gpu_persis
 
 ## 尚未完成的后续阶段
 
-尚无独立 30–60 Hz RT world worker、异步队列、严格 GPU 更新预算、compacted repair list、区域失效或独立高频显示重建。每帧仍有完整 primary/direct 与部分实时 continuation；刷新帧的 fallback 工作没有硬预算。当前实现提供运行接缝、可靠快照和成本探针，不能宣称达成 120–240 Hz。
+尚无独立 30–60 Hz RT world worker、异步队列、严格 GPU 更新预算、compacted repair list、区域失效或独立高频显示重建。每帧仍有完整 primary/direct 与部分实时 continuation；静态尾部训练预留有槽位数预算，但刷新帧和其他帧的 live fallback 没有总射线或毫秒预算。当前实现提供运行接缝、可靠快照和成本探针，不能宣称达成 120–240 Hz。
 
 下一阶段优先采集游戏内固定轨迹的数据，验证偏差与缓存收益，再将失效/训练任务 compact 成短批次并加入更新预算。动态间接影响需单独设计，不能简单缓存完整实体阴影。
+
+## 追加：训练预算与完整 bank 回读
+
+刷新前获得槽位和全局 ticket，超出训练预算则：已有有效缓存继续复用；未命中仍走完整 live fallback，不为了满足预算写黑色。抢到槽但训练目标不合法仍消耗该预留，保证额外训练路径数不突破上限。预算为 0 时不会提交训练目标。当前采用先到先得，不保证每个空间槽公平更新；高预算压力下槽可能迟迟未成熟或超过年龄，这需要日志和后续 compact/priority 调度来解决。
+
+预算并不表示总 GI ray budget：未命中时重复像素仍可能执行 live fallback，且每条尾部可含多个 segment/NEE。单帧 GPU deadline 和严格时间预算尚未实现。
+
+GPU 测试扩展为四组：原并发 snapshot、串行确定顺序的预算 2/预算 0、运行尺寸 65,536 槽双 bank。运行尺寸测试比较 3,147,015 words，零不合格差异（浮点最大 1 ULP）；6 MiB read→write copy 加 69 个训练/7 个查询的 median 约 0.36 ms。预算顺序 fixture 故意串行以验证确切接纳对象，不将它的时长当作并行吞吐性能。数据来自独立 Vulkan compute fixture，不包含实际 RT tail 或游戏帧率。
+
+生成 fixtures 后分别运行 `/tmp/persistent-rt-cache`、`/tmp/persistent-rt-cache-budget`、`/tmp/persistent-rt-cache-zero`、`/tmp/persistent-rt-cache-large` 对应的 `.spv`、`.seed`、`.expected` 文件即可。

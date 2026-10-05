@@ -13,6 +13,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.IntValue persistentRtUpdateIntervalMs;
     public final ModConfigSpec.IntValue persistentRtMaxAgeMs;
     public final ModConfigSpec.IntValue persistentRtMinimumSamples;
+    public final ModConfigSpec.IntValue persistentRtTrainingBudget;
     public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
     public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
@@ -103,6 +104,8 @@ public final class RayTracingClientConfig {
             .defineInRange("persistentRtUpdateIntervalMs", 50, 16, 1000);
         persistentRtMaxAgeMs = builder.comment("Maximum age of reusable indirect samples. Expired/missing values trace full continuation.")
             .defineInRange("persistentRtMaxAgeMs", 500, 50, 5000);
+        persistentRtTrainingBudget = builder.comment("Maximum unique static tail training reservations per refresh. Miss fallback rays are not capped. Zero freezes training.")
+            .defineInRange("persistentRtTrainingBudget", 4096, 0, 65536);
         persistentRtMinimumSamples = builder.comment("Distinct update epochs needed before using a cache slot.")
             .defineInRange("persistentRtMinimumSamples", 4, 1, 16);
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);

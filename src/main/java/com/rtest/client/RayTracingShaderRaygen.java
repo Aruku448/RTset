@@ -2111,17 +2111,20 @@ final class RayTracingShaderRaygen {
                             prtKey(primaryPosition, normal, viewDirection, baseColor, roughness, reflectivity, persistentKey);
                             vec3 cachedDiffuse, cachedSpecular;
                             bool forceRefresh = prt.words[4] != 0u && ((pixelIndex + prt.words[3]) & 15u) == 0u;
-                            if (!forceRefresh && prtLookup(persistentKey, cachedDiffuse, cachedSpecular)) {
+                            bool cacheHit = prtLookup(persistentKey, cachedDiffuse, cachedSpecular);
+                            persistentTraining = (!cacheHit || forceRefresh) && prtReserve(persistentKey);
+                            if (cacheHit && !persistentTraining) {
                                 // A cache value is reused evidence, not a new NRD Monte Carlo observation.
                                 radiance += cachedDiffuse + cachedSpecular;
                                 emissionRadiance += cachedDiffuse + cachedSpecular;
                                 break;
                             }
-                            persistentTraining = true;
-                            // Static indirect target: entities retain live primary/direct visibility.
-                            // Do not bake entity secondary visibility or shadow deltas into this cache.
-                            pathPayload.staticBoundary = uint(camera.dynamicParameters.x + 0.5);
-                            shadowExcludeDynamic = 1u;
+                            prtCount(cacheHit ? 3u : 2u);
+                            if (persistentTraining) {
+                                // Static indirect target; unreserved misses use the full live fallback.
+                                pathPayload.staticBoundary = uint(camera.dynamicParameters.x + 0.5);
+                                shadowExcludeDynamic = 1u;
+                            }
                         }
                         rayDirection = sampleCosineHemisphere(normal, scatterSample.xy);
                         BsdfValue sampled = evaluateBsdf(normal, viewDirection, rayDirection, baseColor,
@@ -2156,7 +2159,7 @@ final class RayTracingShaderRaygen {
                     rayOrigin = pathPosition.xyz + offsetNormal * rayOffset;
                 }
             """, """
-                if (persistentTraining) prtTrain(persistentKey, indirectDiffuseRadiance, specularRadiance);
+                if (persistentTraining) prtStoreReserved(persistentKey, indirectDiffuseRadiance, specularRadiance);
                 pathPayload.staticBoundary = 0u;
                 shadowExcludeDynamic = 0u;
                 // Diagnostic views bypass the denoiser by writing into the unfiltered direct/emission

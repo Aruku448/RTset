@@ -1,7 +1,7 @@
 // Immutable read bank + single-writer-per-slot write bank. Host copies read -> write before RT.
 // Header: enable, read base, write base, invocation epoch, refresh, clock ms, max age,
-// minimum samples, slot mask, work mode, reserved, reserved, statistics gate, reserved[3].
-// 16..31: sampled invocation counters. Rows: owner epoch, exact key[10], sample count,
+// minimum samples, slot mask, work mode, training budget, reserved, statistics gate, reserved[3].
+// 16..29: sampled invocation counters; 30: exact unique reservation attempts; 31: reserved. Rows: owner epoch, exact key[10], sample count,
 // diffuse RGB, specular RGB, reserved, timestamp ms, reserved[4]. All offsets are uint words.
 layout(set = 0, binding = 41, std430) buffer PersistentIndirect { uint words[]; } prt;
 const uint PRT_ROW_WORDS = 24u;
@@ -46,19 +46,27 @@ bool prtLookup(uint key[10], out vec3 diffuse, out vec3 specular) {
     prtCount(1u);
     return true;
 }
-void prtTrain(uint key[10], vec3 diffuse, vec3 specular) {
-    if (prt.words[0] == 0u || prt.words[4] == 0u) return;
+// Reserve BEFORE tracing: a losing invocation must not perform redundant static training.
+bool prtReserve(uint key[10]) {
+    if (prt.words[0] == 0u || prt.words[4] == 0u) return false;
+    uint row = prt.words[2] + prtHash(key) * PRT_ROW_WORDS;
+    uint previousOwner = atomicAdd(prt.words[row], 0u);
+    if (previousOwner == prt.words[3] || atomicCompSwap(prt.words[row], previousOwner, prt.words[3]) != previousOwner) {
+        prtCount(7u); return false;
+    }
+    // At most slotCount atomic additions per refresh; a rejected slot keeps its old values.
+    uint ticket = atomicAdd(prt.words[30], 1u);
+    if (ticket >= prt.words[10]) { prtCount(11u); return false; }
+    prtCount(10u); return true;
+}
+void prtStoreReserved(uint key[10], vec3 diffuse, vec3 specular) {
+    // Called only by the invocation holding this slot's reservation.
     if (any(isnan(diffuse)) || any(isinf(diffuse)) || any(lessThan(diffuse, vec3(0.0)))
         || any(greaterThan(diffuse, vec3(8192.0))) || any(isnan(specular)) || any(isinf(specular))
         || any(lessThan(specular, vec3(0.0))) || any(greaterThan(specular, vec3(8192.0)))) {
         prtCount(8u); return;
     }
     uint slot = prtHash(key), row = prt.words[2] + slot * PRT_ROW_WORDS;
-    uint previousOwner = atomicAdd(prt.words[row], 0u);
-    // Only the winner writes any key/value field. Other invocations never inspect this write row.
-    if (previousOwner == prt.words[3] || atomicCompSwap(prt.words[row], previousOwner, prt.words[3]) != previousOwner) {
-        prtCount(7u); return;
-    }
     uint readRow = prt.words[1] + slot * PRT_ROW_WORDS;
     uint n = prtFresh(readRow) && prtSameKey(readRow, key) ? min(prt.words[readRow + 11u], 15u) : 0u;
     vec3 oldDiffuse = vec3(0.0), oldSpecular = vec3(0.0);
@@ -76,4 +84,9 @@ void prtTrain(uint key[10], vec3 diffuse, vec3 specular) {
     prt.words[row + 19u] = prt.words[5];
     prt.words[row + 11u] = n + 1u;
     prtCount(6u);
+}
+
+// Test harness and optional already-available samples use the same reservation protocol.
+void prtTrain(uint key[10], vec3 diffuse, vec3 specular) {
+    if (prtReserve(key)) prtStoreReserved(key, diffuse, specular);
 }

@@ -28,7 +28,7 @@ int main(int argc,char **argv) {
     if(argc!=4){fprintf(stderr,"Usage: %s shader.spv tree.seed tree.expected\n",argv[0]);return 1;}
     size_t code_bytes,seed_bytes,expected_bytes;
     uint32_t *code=read_file(argv[1],&code_bytes),*seed=read_file(argv[2],&seed_bytes),*expected=read_file(argv[3],&expected_bytes);
-    if(seed_bytes!=expected_bytes || seed_bytes<256 || seed[8]!=255){fprintf(stderr,"bad seed\n");return 1;}
+    if(seed_bytes!=expected_bytes || seed_bytes<256 || (seed[8]!=255 && seed[8]!=65535)){fprintf(stderr,"bad seed\n");return 1;}
     VkApplicationInfo app={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="RTest persistent cache smoke",.apiVersion=VK_API_VERSION_1_2};
     VkInstanceCreateInfo ici={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app};
     VkInstance instance;CHECK(vkCreateInstance(&ici,NULL,&instance));
@@ -95,6 +95,7 @@ int main(int argc,char **argv) {
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_HOST_BIT|VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&barrier,0,NULL,0,NULL);
     VkBufferCopy copy={.srcOffset=seed[1]*4ULL,.dstOffset=seed[2]*4ULL,.size=(seed[2]-seed[1])*4ULL};
     vkCmdCopyBuffer(cmd,buffer,buffer,1,&copy);
+    vkCmdFillBuffer(cmd,buffer,30*4,4,0);
     barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_HOST_WRITE_BIT;
     barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
