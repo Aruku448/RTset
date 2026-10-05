@@ -26,8 +26,7 @@ final class WorldRasterDisplay implements AutoCloseable {
     private final VkDevice vk;
     private final int width,height;
     private final Image[] images=new Image[7];
-    private NativeBuffer positions,camera,dummy,shadowDummy;
-    private long shadowStaticView,shadowDynamicView,shadowSampler,shadowBuffer,shadowBytes;
+    private NativeBuffer positions,camera,dummy;
     private long setLayout,pool,set,layout,renderPass,framebuffer,pipeline,dynamicPool;
     private final java.util.List<DynamicDraw> dynamicDraws=new java.util.ArrayList<>();
     private final java.util.Map<Long,DynamicDraw> dynamicBuffers=new java.util.HashMap<>();
@@ -35,8 +34,11 @@ final class WorldRasterDisplay implements AutoCloseable {
     record Texture(long view,long sampler) {}
     interface TextureResolver { Texture resolve(net.minecraft.resources.Identifier id); }
     private record DynamicDraw(long identity,NativeBuffer position,NativeBuffer previous,NativeBuffer material,long atlasSet,long textureSet,int[] kinds,int count,Texture texture) {}
-    private long materialHandle,materialBytes,fieldHandle,fieldBytes,atlasView,atlasSampler;
+    private long materialHandle,materialBytes,fieldHandle,fieldBytes,surfaceHandle,surfaceBytes,atlasView,atlasSampler;
     private int vertexCount;
+    private int dynamicLightingKey;
+    private final java.util.Map<Long,Integer> surfaceCounts=new java.util.HashMap<>();
+    private final java.util.Map<Long,Integer> surfaceBases=new java.util.HashMap<>();
     private SceneGeometry geometry;
     private RtestFsrCamera previousCamera;
     private boolean closed;
@@ -46,44 +48,34 @@ final class WorldRasterDisplay implements AutoCloseable {
         this.atlasView=atlasView;this.atlasSampler=atlasSampler;
         if(width<1||height<1)throw new IllegalArgumentException("Invalid raster extent");
         try {
-            camera=NativeBuffer.create(device,192,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
+            camera=NativeBuffer.create(device,208,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
             dummy=NativeBuffer.create(device,256,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
             try(var mapped=dummy.map()){for(int i=0;i<256;i+=4)mapped.buffer().putInt(i,0);}
             fieldHandle=dummy.buffer;fieldBytes=dummy.size;
-            shadowDummy=NativeBuffer.create(device,80,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
-            try(var mapped=shadowDummy.map()){for(int i=0;i<80;i+=4)mapped.buffer().putInt(i,0);}
-            shadowStaticView=atlasView;shadowDynamicView=atlasView;shadowSampler=atlasSampler;shadowBuffer=shadowDummy.buffer;shadowBytes=80;
             positions=NativeBuffer.create(device,16,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
             for(int i=0;i<images.length;i++)images[i]=new Image(FORMATS[i],i==6);
             createPipeline();
         } catch(Throwable error) { close();throw error; }
     }
 
-    void setSunShadow(long staticView,long dynamicView,long sampler,long buffer,long bytes) {
-        if (shadowStaticView==staticView && shadowDynamicView==dynamicView && shadowSampler==sampler
-                && shadowBuffer==buffer && shadowBytes==bytes) return;
-        shadowStaticView=staticView;shadowDynamicView=dynamicView;shadowSampler=sampler;shadowBuffer=buffer;shadowBytes=bytes;
-        if(geometry!=null)updateDescriptors();
+    int prepareSurfaceLayout(){
+        surfaceBases.clear();surfaceCounts.clear();int next=vertexCount;
+        for(var draw:dynamicDraws){surfaceBases.put(draw.identity,next);surfaceCounts.put(draw.identity,draw.count);next=Math.addExact(next,draw.count);}return next-vertexCount;
     }
-    WorldRasterSunShadow.Draw staticShadowDraw() {
-        return new WorldRasterSunShadow.Draw(positions.buffer,materialHandle,materialBytes,atlasView,atlasSampler,0,vertexCount);
-    }
-    java.util.List<WorldRasterSunShadow.Draw> dynamicShadowDraws(TextureResolver resolver,DynamicRasterSnapshot.Frame snapshot) {
-        // The texture handles are already resolved during publishDynamics; return the same triangle ranges.
-        var result=new java.util.ArrayList<WorldRasterSunShadow.Draw>();
-        for(var draw:dynamicDraws) {
-            int first=0;
-            while(first<draw.kinds.length) {
-                int kind=draw.kinds[first],end=first+1;
-                while(end<draw.kinds.length&&draw.kinds[end]==kind)end++;
-                Texture texture=kind==0?new Texture(atlasView,atlasSampler):draw.texture;
-                if(texture!=null)result.add(new WorldRasterSunShadow.Draw(draw.position.buffer,draw.material.buffer,draw.material.size,texture.view,texture.sampler,first*3,(end-first)*3));
-                first=end;
-            }
+    void recordSurfacePositions(VkCommandBuffer cmd,MemoryStack stack,long destination,int first){
+        for(var draw:dynamicDraws){Integer base=surfaceBases.get(draw.identity);if(base==null)continue;
+            var copy=VkBufferCopy.calloc(1,stack).dstOffset((long)base*16).size((long)draw.count*16);
+            vkCmdCopyBuffer(cmd,draw.position.buffer,destination,copy);
         }
-        return java.util.List.copyOf(result);
     }
-
+    int dynamicLightingKey(){return dynamicLightingKey;}
+    int surfaceVertexCount(){return vertexCount;}
+    long surfacePositions(){return positions.buffer;}
+    long surfacePositionBytes(){return positions.size;}
+    void setSurfaceBuffer(long handle,long bytes){
+        if(surfaceHandle==handle && surfaceBytes==bytes)return;
+        surfaceHandle=handle;surfaceBytes=bytes;if(geometry!=null)updateDescriptors();
+    }
     void setIrradianceBuffer(long handle,long bytes) {
         if(fieldHandle==handle && fieldBytes==bytes)return;
         fieldHandle=handle==0?dummy.buffer:handle;fieldBytes=handle==0?dummy.size:bytes;
@@ -92,7 +84,7 @@ final class WorldRasterDisplay implements AutoCloseable {
     void publishGeometry(SceneGeometry next,long materialHandle,long materialBytes) {
         if(next==geometry&&this.materialHandle==materialHandle&&this.materialBytes==materialBytes)return;
         long vertices=next.sections.isEmpty()?next.vertices.length/3:next.sections.stream().mapToLong(section->(long)section.triangleCount*3).sum();
-        NativeBuffer candidate=NativeBuffer.create(device,Math.max(16,Math.multiplyExact(vertices,16)),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
+        NativeBuffer candidate=NativeBuffer.create(device,Math.max(16,Math.multiplyExact(vertices,16)),VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);
         try(var mapped=candidate.map()) {
             ByteBuffer out=mapped.buffer().order(ByteOrder.nativeOrder());
             if(next.sections.isEmpty()) {
@@ -113,6 +105,7 @@ final class WorldRasterDisplay implements AutoCloseable {
         updateDescriptors();
     }
 
+    void updateSunRadius(float radius){sunColor[3]=radius;}
     void updateLighting(float x,float y,float z,float intensity,float r,float g,float b) {
         sun[0]=x;sun[1]=y;sun[2]=z;sun[3]=Math.max(intensity,0);
         sunColor[0]=r;sunColor[1]=g;sunColor[2]=b;
@@ -120,7 +113,7 @@ final class WorldRasterDisplay implements AutoCloseable {
 
     /** Entity triangles select their atlas or captured texture independently; held items retain atlas UVs. */
     void publishDynamics(DynamicRasterSnapshot.Frame snapshot,TextureResolver resolver) {
-        dynamicDraws.clear();
+        dynamicDraws.clear();dynamicLightingKey=1;
         check(vkResetDescriptorPool(vk,dynamicPool,0));
         var keep=new java.util.HashSet<Long>();
         if(snapshot!=null && geometry!=null) for(var draw:snapshot.draws())
@@ -133,13 +126,17 @@ final class WorldRasterDisplay implements AutoCloseable {
             var texture=draw.texture()==null?null:resolver.resolve(draw.texture());
             int count=draw.triangleCount()*3;
             long identity=draw.instance().identity();
+            dynamicLightingKey=31*dynamicLightingKey+Long.hashCode(identity);
+            // Pose changes update RT data on the world clock; they do not invalidate
+            // every cached shadow each display frame. Admission/layout changes do.
+            dynamicLightingKey=31*dynamicLightingKey+count;
             DynamicDraw cached=dynamicBuffers.get(identity);
             if(cached!=null && cached.count!=count) {closeDynamic(cached);dynamicBuffers.remove(identity);cached=null;}
             boolean reused=cached!=null;
             NativeBuffer current=null,previous=null,material=null;
             try {
-                current=reused?cached.position:NativeBuffer.create(device,(long)count*16,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
-                previous=reused?cached.previous:NativeBuffer.create(device,(long)count*16,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
+                current=reused?cached.position:NativeBuffer.create(device,(long)count*16,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);
+                previous=reused?cached.previous:NativeBuffer.create(device,(long)count*16,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);
                 material=reused?cached.material:NativeBuffer.create(device,(long)draw.triangleCount()*28*4,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,true);
                 var xyz=draw.positions();var data=draw.materials();int[] kinds=reused?cached.kinds:new int[draw.triangleCount()];
                 try(var a=current.map();var b=previous.map();var m=material.map()) {
@@ -210,6 +207,8 @@ final class WorldRasterDisplay implements AutoCloseable {
             out.putFloat(128,(float)geometry.originX).putFloat(132,(float)geometry.originY).putFloat(136,(float)geometry.originZ).putFloat(140,0);
             out.putFloat(144,width).putFloat(148,height).putFloat(152,jitterX).putFloat(156,jitterY);
             for(int i=0;i<4;i++){out.putFloat(160+i*4,sun[i]);out.putFloat(176+i*4,sunColor[i]);}
+            out.putFloat(192,(float)(latest.x()-geometry.originX)).putFloat(196,(float)(latest.y()-geometry.originY))
+                .putFloat(200,(float)(latest.z()-geometry.originZ)).putFloat(204,0);
         }
         previousCamera=latest;
     }
@@ -244,6 +243,7 @@ final class WorldRasterDisplay implements AutoCloseable {
             vkCmdBeginRenderPass(cmd,begin,VK_SUBPASS_CONTENTS_INLINE);
             vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
             vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,stack.longs(set),null);
+            vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_VERTEX_BIT,0,stack.ints(0));
             vkCmdDraw(cmd,vertexCount,1,0,0);
             for(var draw:dynamicDraws) {
                 int first=0;
@@ -253,6 +253,7 @@ final class WorldRasterDisplay implements AutoCloseable {
                     long descriptor=kind==0?draw.atlasSet:draw.textureSet;
                     if(descriptor!=0) {
                         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,stack.longs(descriptor),null);
+                        vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_VERTEX_BIT,0,stack.ints(surfaceCounts.getOrDefault(draw.identity,-1)==draw.count?surfaceBases.getOrDefault(draw.identity,-1):-1));
                         vkCmdDraw(cmd,(end-first)*3,1,first*3,0);
                     }
                     first=end;
@@ -305,35 +306,18 @@ final class WorldRasterDisplay implements AutoCloseable {
         }
     }
 
-    private void updateDescriptors() {
+    private void updateDescriptors(){
         writeDescriptors(set,positions,positions,materialHandle,materialBytes,atlasView,atlasSampler);
-        for(var draw:dynamicDraws) {
-            // Field publication changes must be propagated to live dynamic descriptors as well.
-            try(MemoryStack stack=MemoryStack.stackPush()) {
-                VkWriteDescriptorSet.Buffer writes=VkWriteDescriptorSet.calloc(draw.textureSet==0?1:2,stack);
-                for(int i=0;i<writes.capacity();i++)writes.get(i).sType$Default().dstSet(i==0?draw.atlasSet:draw.textureSet)
-                    .dstBinding(3).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
-                    .pBufferInfo(VkDescriptorBufferInfo.calloc(1,stack).buffer(fieldHandle).range(fieldBytes));
-                vkUpdateDescriptorSets(vk,writes,null);
-                updateShadowDescriptors(draw.atlasSet);if(draw.textureSet!=0)updateShadowDescriptors(draw.textureSet);
-            }
-        }
-    }
-    private void updateShadowDescriptors(long target) {
-        try(MemoryStack stack=MemoryStack.stackPush()) {
-            VkWriteDescriptorSet.Buffer writes=VkWriteDescriptorSet.calloc(3,stack);
-            for(int i=0;i<2;i++)writes.get(i).sType$Default().dstSet(target).dstBinding(7+i).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1)
-                .pImageInfo(VkDescriptorImageInfo.calloc(1,stack).imageView(i==0?shadowStaticView:shadowDynamicView).sampler(shadowSampler).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-            writes.get(2).sType$Default().dstSet(target).dstBinding(9).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
-                .pBufferInfo(VkDescriptorBufferInfo.calloc(1,stack).buffer(shadowBuffer).range(shadowBytes));
-            vkUpdateDescriptorSets(vk,writes,null);
+        for(var draw:dynamicDraws){
+            writeDescriptors(draw.atlasSet,draw.position,draw.previous,draw.material.buffer,draw.material.size,atlasView,atlasSampler);
+            if(draw.textureSet!=0)writeDescriptors(draw.textureSet,draw.position,draw.previous,draw.material.buffer,draw.material.size,draw.texture.view,draw.texture.sampler);
         }
     }
     private void writeDescriptors(long target,NativeBuffer current,NativeBuffer previous,long material,long bytes,long textureView,long textureSampler) {
         try(MemoryStack stack=MemoryStack.stackPush()) {
             long[] handles={current.buffer,material,camera.buffer,fieldHandle};
             long[] sizes={current.size,bytes,camera.size,fieldBytes};
-            VkWriteDescriptorSet.Buffer writes=VkWriteDescriptorSet.calloc(6,stack);
+            VkWriteDescriptorSet.Buffer writes=VkWriteDescriptorSet.calloc(7,stack);
             for(int i=0;i<4;i++) {
                 writes.get(i).sType$Default().dstSet(target).dstBinding(i).descriptorType(i==2?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                     .descriptorCount(1).pBufferInfo(VkDescriptorBufferInfo.calloc(1,stack).buffer(handles[i]).range(sizes[i]));
@@ -342,31 +326,32 @@ final class WorldRasterDisplay implements AutoCloseable {
                 .pImageInfo(VkDescriptorImageInfo.calloc(1,stack).imageView(textureView).sampler(textureSampler).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
             writes.get(5).sType$Default().dstSet(target).dstBinding(5).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
                 .pBufferInfo(VkDescriptorBufferInfo.calloc(1,stack).buffer(previous.buffer).range(previous.size));
+            writes.get(6).sType$Default().dstSet(target).dstBinding(6).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                .pBufferInfo(VkDescriptorBufferInfo.calloc(1,stack).buffer(surfaceHandle!=0?surfaceHandle:dummy.buffer)
+                    .range(surfaceHandle!=0?surfaceBytes:dummy.size));
             vkUpdateDescriptorSets(vk,writes,null);
-            updateShadowDescriptors(target);
+
         }
     }
 
     private void createPipeline() {
         try(MemoryStack stack=MemoryStack.stackPush()) {
             LongBuffer result=stack.mallocLong(1);
-            VkDescriptorSetLayoutBinding.Buffer bindings=VkDescriptorSetLayoutBinding.calloc(9,stack);
+            VkDescriptorSetLayoutBinding.Buffer bindings=VkDescriptorSetLayoutBinding.calloc(7,stack);
             for(int i=0;i<6;i++)bindings.get(i).binding(i).descriptorCount(1)
                 .descriptorType(i==2?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:(i==4?VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))
                 .stageFlags(VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings.get(6).binding(7).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings.get(7).binding(8).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
-            bindings.get(8).binding(9).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            bindings.get(6).binding(6).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             check(vkCreateDescriptorSetLayout(vk,VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings),null,result));setLayout=result.get(0);
             VkDescriptorPoolSize.Buffer sizes=VkDescriptorPoolSize.calloc(3,stack);
-            sizes.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(4);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(2);
-            sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(3);
+            sizes.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
+            sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             check(vkCreateDescriptorPool(vk,VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes),null,result));pool=result.get(0);
-            sizes.get(0).descriptorCount(4096*4);sizes.get(1).descriptorCount(4096*2);sizes.get(2).descriptorCount(4096*3);
+            sizes.get(0).descriptorCount(4096*5);sizes.get(1).descriptorCount(4096);sizes.get(2).descriptorCount(4096);
             check(vkCreateDescriptorPool(vk,VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(4096).pPoolSizes(sizes),null,result));dynamicPool=result.get(0);
             check(vkAllocateDescriptorSets(vk,VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool).pSetLayouts(stack.longs(setLayout)),result));set=result.get(0);
-            check(vkCreatePipelineLayout(vk,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)),null,result));layout=result.get(0);
+            check(vkCreatePipelineLayout(vk,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(VkPushConstantRange.calloc(1,stack).stageFlags(VK_SHADER_STAGE_VERTEX_BIT).size(4)),null,result));layout=result.get(0);
             VkAttachmentDescription.Buffer attachments=VkAttachmentDescription.calloc(7,stack);
             VkAttachmentReference.Buffer colors=VkAttachmentReference.calloc(6,stack);
             for(int i=0;i<7;i++) {
@@ -455,6 +440,6 @@ final class WorldRasterDisplay implements AutoCloseable {
         if(renderPass!=0)vkDestroyRenderPass(vk,renderPass,null);if(layout!=0)vkDestroyPipelineLayout(vk,layout,null);
         retireDynamics();if(dynamicPool!=0)vkDestroyDescriptorPool(vk,dynamicPool,null);
         if(pool!=0)vkDestroyDescriptorPool(vk,pool,null);if(setLayout!=0)vkDestroyDescriptorSetLayout(vk,setLayout,null);
-        for(Image image:images)if(image!=null)image.close();if(positions!=null)positions.close();if(camera!=null)camera.close();if(dummy!=null)dummy.close();if(shadowDummy!=null)shadowDummy.close();
+        for(Image image:images)if(image!=null)image.close();if(positions!=null)positions.close();if(camera!=null)camera.close();if(dummy!=null)dummy.close();
     }
 }

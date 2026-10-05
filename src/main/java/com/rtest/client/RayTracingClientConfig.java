@@ -10,6 +10,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.BooleanValue persistentRtEnabled;
     public final ModConfigSpec.BooleanValue worldRasterDisplayEnabled;
     public final ModConfigSpec.IntValue worldProbeTrainingBudget;
+    public final ModConfigSpec.IntValue worldSurfaceTrainingBudget;
     public final ModConfigSpec.BooleanValue persistentRtStatistics;
     public final ModConfigSpec.ConfigValue<String> rtEvaluationMode;
     public final ModConfigSpec.IntValue persistentRtUpdateIntervalMs;
@@ -100,6 +101,8 @@ public final class RayTracingClientConfig {
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
         worldRasterDisplayEnabled = builder.comment("Experimental high-frequency raster display with low-frequency RT irradiance probes. Approximate lighting; full RT remains the default reference.")
             .define("worldRasterDisplayEnabled", false);
+        worldSurfaceTrainingBudget = builder.comment("Static RT surface corner samples per world tick; moving entities additionally refresh their own corners. Zero freezes surface training.")
+            .defineInRange("worldSurfaceTrainingBudget",65536,0,131072);
         worldProbeTrainingBudget = builder.comment("Maximum irradiance probes updated per world tick; zero freezes training. Display misses never trigger synchronous RT repair.")
             .defineInRange("worldProbeTrainingBudget", 1024, 0, 4096);
         persistentRtStatistics = builder.comment("Research counters sample every 256th display/world invocation; logs are sampled counts, not complete ray counts.")

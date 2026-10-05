@@ -10,19 +10,24 @@ final class WorldRasterShaders {
         layout(set=0,binding=0,std430) readonly buffer Positions { vec4 vertices[]; } positions;
         layout(set=0,binding=1,std430) readonly buffer Materials { vec4 entries[]; } materials;
         layout(set=0,binding=2,std140) uniform Camera {
-            mat4 current; mat4 previous; vec4 worldOrigin; vec4 lighting; vec4 sun; vec4 sunColor;
+            mat4 current; mat4 previous; vec4 worldOrigin; vec4 lighting; vec4 sun; vec4 sunColor; vec4 eye;
         } camera;
         layout(set=0,binding=5,std430) readonly buffer PreviousPositions { vec4 vertices[]; } previousPositions;
+        layout(push_constant) uniform SurfaceDraw {uint base;} surfaceDraw;
         layout(location=0) out vec2 uv;
         layout(location=1) out vec3 position;
         layout(location=2) out vec4 previousClip;
         layout(location=3) flat out uint materialIndex;
+        layout(location=4) out vec3 barycentric;
+        layout(location=5) flat out uint surfaceTriangle;
         void main() {
             vec4 vertex=positions.vertices[gl_VertexIndex];
             materialIndex=floatBitsToUint(vertex.w)*7u;
             vec4 uv01=materials.entries[materialIndex+2u];
             vec4 uv2=materials.entries[materialIndex+3u];
             uint corner=uint(gl_VertexIndex)%3u;
+            barycentric=corner==0u?vec3(1,0,0):(corner==1u?vec3(0,1,0):vec3(0,0,1));
+            surfaceTriangle=surfaceDraw.base==0xffffffffu?0xffffffffu:(surfaceDraw.base+uint(gl_VertexIndex))/3u;
             uv=corner==0u?uv01.xy:(corner==1u?uv01.zw:uv2.xy);
             position=vertex.xyz;
             previousClip=camera.previous*vec4(previousPositions.vertices[gl_VertexIndex].xyz,1.0);
@@ -44,48 +49,28 @@ final class WorldRasterShaders {
         return """
             #version 450
             #define WORLD_IRRADIANCE_BINDING 3
-            """+field+contributions+"""
+            """+field+contributions+"\n#define WORLD_SURFACE_BINDING 6\n"+WorldSurfaceRadiance.GLSL+"""
             layout(set=0,binding=2,std140) uniform Camera {
-                mat4 current; mat4 previous; vec4 worldOrigin; vec4 lighting; vec4 sun; vec4 sunColor;
+                mat4 current; mat4 previous; vec4 worldOrigin; vec4 lighting; vec4 sun; vec4 sunColor; vec4 eye;
             } camera;
             layout(set=0,binding=4) uniform sampler2D atlas;
-            layout(set=0,binding=7) uniform sampler2D staticSunDepth;
-            layout(set=0,binding=8) uniform sampler2D dynamicSunDepth;
-            layout(set=0,binding=9,std140) uniform SunShadow { mat4 lightMatrix; vec4 params; } shadow;
-            // Compare at the shadow texel center, not the display fragment position.
-            // A constant world-space epsilon cannot cover nearest-texel error on slopes.
-            float sunVisibility(sampler2D depthMap,vec2 coord,float depth,vec2 gradient) {
-                ivec2 size=textureSize(depthMap,0);
-                ivec2 cell=clamp(ivec2(floor(coord*vec2(size))),ivec2(0),size-1);
-                vec2 center=(vec2(cell)+0.5)/vec2(size);
-                float receiverDepth=depth+dot(gradient,center-coord);
-                return receiverDepth-shadow.params.y<=texelFetch(depthMap,cell,0).r?1.0:0.0;
-            }
-            WorldDirectSample sunSample(vec3 point) {
-                WorldDirectSample sampleValue;
-                sampleValue.sourceWeight=camera.sunColor.rgb*camera.sun.w;
-                sampleValue.staticVisibility=vec3(1);sampleValue.fullVisibility=vec3(1);
-                if(shadow.params.x<0.5)return sampleValue;
-                vec4 clip=shadow.lightMatrix*vec4(point,1);
-                vec3 p=clip.xyz/max(clip.w,0.0001);
-                vec2 coord=p.xy*0.5+0.5;
-                vec2 dx=dFdx(coord),dy=dFdy(coord);
-                float zx=dFdx(p.z),zy=dFdy(p.z);
-                float determinant=dx.x*dy.y-dx.y*dy.x;
-                vec2 gradient=abs(determinant)>1e-20?
-                    vec2(zx*dy.y-zy*dx.y,zy*dx.x-zx*dy.x)/determinant:vec2(0);
-                if(any(lessThan(p.xy,vec2(-1)))||any(greaterThan(p.xy,vec2(1)))||p.z<0||p.z>1)return sampleValue;
-                float staticV=sunVisibility(staticSunDepth,coord,p.z,gradient);
-                float dynamicV=sunVisibility(dynamicSunDepth,coord,p.z,gradient);
-                // Joint same-point-source visibility. GI/sky are deliberately untouched.
-                sampleValue.staticVisibility=vec3(staticV);
-                sampleValue.fullVisibility=vec3(staticV*dynamicV);
-                return sampleValue;
-            }
             layout(location=0) in vec2 uv;
             layout(location=1) in vec3 position;
             layout(location=2) in vec4 previousClip;
             layout(location=3) flat in uint materialIndex;
+            layout(location=4) in vec3 barycentric;
+            layout(location=5) flat in uint surfaceTriangle;
+            vec3 fresnelSchlick(vec3 f0,float cosine){return f0+(1.0-f0)*pow(1.0-clamp(cosine,0.0,1.0),5.0);}
+            vec3 directSpecular(vec3 n,vec3 v,vec3 l,vec3 f0,float roughness){
+                float nv=max(dot(n,v),0.0),nl=max(dot(n,l),0.0);if(nv<=0.0||nl<=0.0)return vec3(0);
+                vec3 h=normalize(v+l);float nh=max(dot(n,h),0.0),vh=max(dot(v,h),0.0);
+                float a=max(roughness*roughness,max(0.002,sin(camera.sunColor.w)*0.5)),a2=a*a;
+                float denom=nh*nh*(a2-1.0)+1.0;
+                float d=a2/(3.14159265359*denom*denom);
+                float gv=2.0*nv/(nv+sqrt(a2+(1.0-a2)*nv*nv));
+                float gl=2.0*nl/(nl+sqrt(a2+(1.0-a2)*nl*nl));
+                return fresnelSchlick(f0,vh)*(d*gv*gl/max(4.0*nv,1e-6));
+            }
             layout(set=0,binding=1,std430) readonly buffer Materials { vec4 entries[]; } materials;
             layout(location=0) out vec4 sceneColor;
             layout(location=1) out float reversedDepth;
@@ -110,18 +95,25 @@ final class WorldRasterShaders {
                 float len2=dot(n,n);
                 n=len2>1e-12?n*inversesqrt(len2):vec3(0,1,0);
                 if(!gl_FrontFacing)n=-n;
-                vec3 irradiance; float confidence;
-                wifQuery(position+camera.worldOrigin.xyz,n,irradiance,confidence);
+                vec3 v=normalize(camera.eye.xyz-position);
+                vec3 irradiance,reflected;float confidence;
+                wifQuerySurface(position+camera.worldOrigin.xyz,n,reflect(-v,n),clamp(surface.x,0.0,1.0),irradiance,reflected,confidence);
                 // Explicit unshadowed preview: no hidden RT fallback on immature cells.
                 vec3 fallback=vec3(0.28)+vec3(0.72)*max(n.y,0.0);
                 vec3 diffuse=worldLambertIrradiance(mix(fallback,irradiance,confidence),albedo);
                 float sunLen2=dot(camera.sun.xyz,camera.sun.xyz);
                 vec3 sunDir=sunLen2>1e-12?camera.sun.xyz*inversesqrt(sunLen2):vec3(0,1,0);
                 // Current material resolves static direct and signed entity occlusion separately.
-                DisplayDirectContribution solar=worldDirectAtView(sunSample(position),
-                    albedo*max(dot(n,sunDir),0.0)/3.14159265359);
-                diffuse+=worldDirectTotal(solar);
-                sceneColor=vec4(diffuse*(1.0-clamp(surface.y,0.0,1.0))+albedo*max(surface.z,0.0),1);
+                float surfaceConfidence;vec3 directLight=wsrSun(surfaceTriangle,barycentric,surfaceConfidence);
+                // Untrained surfaces receive no invented direct visibility; world work fills them.
+                float metallic=clamp(surface.y,0.0,1.0),roughness=clamp(surface.x,0.0,1.0);
+                vec3 f0=mix(vec3(clamp(surface.w,0.04,1.0)),albedo,metallic);
+                vec3 f=fresnelSchlick(f0,max(dot(n,v),0.0));
+                vec3 diffuseEnergy=(1.0-f)*(1.0-metallic);
+                vec3 diffuseDirect=albedo*max(dot(n,sunDir),0.0)/3.14159265359;
+                vec3 glossy=directSpecular(n,v,sunDir,f0,roughness)*directLight;
+                glossy+=f*reflected*confidence;
+                sceneColor=vec4(diffuseEnergy*(diffuse+diffuseDirect*directLight)+glossy+albedo*max(surface.z,0.0),1);
                 reversedDepth=gl_FragCoord.z;
                 vec2 currentUv=(gl_FragCoord.xy+camera.lighting.zw)/camera.lighting.xy;
                 vec2 previousUv=previousClip.xy/max(previousClip.w,0.0001)*vec2(0.5,0.5)+0.5;

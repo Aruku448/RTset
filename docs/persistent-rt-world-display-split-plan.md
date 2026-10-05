@@ -1,6 +1,6 @@
 # 高频光栅显示与低频世界 RT：改造设计
 
-状态：已实现第一版实验运行管线，默认关闭。基线 `f4c4929`，研究分支 `persistent-rt-world-research`。下文“已有代码与阻塞点”记录改造前基线。
+状态：初版记录。最新表面 RT 阴影与方向高光实现见 [persistent-rt-world-surface-radiance.md](persistent-rt-world-surface-radiance.md)。实验运行管线默认关闭。基线 `f4c4929`，研究分支 `persistent-rt-world-research`。下文“已有代码与阻塞点”记录改造前基线。
 
 ## 目标合同
 

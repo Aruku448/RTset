@@ -7,7 +7,7 @@ final class RayTracingShaderRaygen {
             return (first.replace(extension, extension + RayTracingAtmosphereShader.GLSL
                 + RayTracingAtmosphereSegmentShader.GLSL + RayTracingMoonShader.GLSL)
                 + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL)
-                    .replace("// PERSISTENT_INDIRECT_FUNCTIONS", PersistentRtShader.GLSL + WorldIrradianceField.GLSL);
+                    .replace("// PERSISTENT_INDIRECT_FUNCTIONS", PersistentRtShader.GLSL + WorldIrradianceField.GLSL + WorldSurfaceRadiance.GLSL);
         }
 
     static final String RAYGEN_SHADER = joinShaderParts("""
@@ -1436,8 +1436,40 @@ final class RayTracingShaderRaygen {
                 return moon ? physicalAtmosphereMoonSky(direction, source) : physicalAtmosphereSky(direction, source);
             }
             layout(push_constant) uniform PersistentWork { uint phase; } persistentWork;
+            layout(set=0,binding=44,std430) readonly buffer WorldSurfacePositions {vec4 vertices[];} worldSurfacePositions;
             // PERSISTENT_INDIRECT_FUNCTIONS
             void main() {
+                if(persistentWork.phase==3u) {
+                    if(wsr.words[5]==0u || gl_LaunchIDEXT.x>=wsr.words[0])return;
+                    uint id=wsrJob(gl_LaunchIDEXT.x);
+                    uint base=(id/3u)*3u;vec3 a=worldSurfacePositions.vertices[base].xyz;
+                    vec3 b=worldSurfacePositions.vertices[base+1u].xyz,c=worldSurfacePositions.vertices[base+2u].xyz;
+                    vec3 triangleCenter=(a+b+c)/3.0;
+                    vec3 point=mix(worldSurfacePositions.vertices[id].xyz,triangleCenter,0.02);
+                    vec3 normal=cross(b-a,c-a);float n2=dot(normal,normal);
+                    if(n2<1e-12){wsrStore(id,vec3(0));return;}normal*=inversesqrt(n2);
+                    persistentWorldTransport=true;
+                    persistentWorldRadius=clamp(6360.0+(point.y+uintBitsToFloat(prt.words[33])+64.0+uintBitsToFloat(prt.words[36]))*0.001,6360.0,6479.999);
+                    PrimeSampleBase seed=primeMakeSampleBase(uvec2(id,0u),wsrSequence(id),wsr.words[1],0u,0u);
+                    vec3 direction=sampleSunDirection(camera.sun.xyz,primeSobolSample2D(seed,PRIME_SAMPLE_EFFECT_DIRECT_SUN,0u));
+                    shadowExcludeDynamic=1u;shadowTransmittance=vec3(1);shadowDynamicOccluder=0u;
+                    if(dot(direction,direction)>0.5 && camera.settings.x>0.0) {
+                        vec3 offset=normal*(dot(normal,direction)<0.0?-0.002:0.002);
+                        traceRayEXT(topLevelAS,gl_RayFlagsTerminateOnFirstHitEXT,SECONDARY_RAY_MASK,
+                            1,1,1,point+offset,0.001,direction,camera.sun.w,1);
+                    }
+                    vec3 staticVisibility=shadowTransmittance;
+                    shadowExcludeDynamic=0u;shadowTransmittance=vec3(1);shadowDynamicOccluder=0u;
+                    if(dot(direction,direction)>0.5 && camera.settings.x>0.0 && wsr.words[7]>0u){
+                        traceRayEXT(topLevelAS,gl_RayFlagsTerminateOnFirstHitEXT,SECONDARY_RAY_MASK,1,1,1,
+                            point+normal*(dot(normal,direction)<0.0?-0.002:0.002),0.001,direction,camera.sun.w,1);
+                    }else shadowTransmittance=staticVisibility;
+                    float weather=clamp(1.0-camera.environmentState.y*.55-camera.environmentState.z*.25,.25,1.0);
+                    vec3 source=physicalAtmosphereEnabled()?persistentSunT(direction):colorTemperature(camera.environment.y)*(1.0-camera.environmentState.w);
+                    vec3 weight=max(source,vec3(0))*camera.settings.x*weather;
+                    wsrStore(id,weight*mix(vec3(1),staticVisibility,camera.settings.y),weight*mix(vec3(1),shadowTransmittance,camera.settings.y));
+                    return;
+                }
                 uint pixelIndex = gl_LaunchIDEXT.x + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y;
                 prtSampledInvocation = (pixelIndex & 255u) == 0u;
                 bool probeWorker = persistentWork.phase == 2u;

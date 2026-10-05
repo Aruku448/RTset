@@ -215,6 +215,9 @@ public final class RayTracingSettingsScreen extends Screen {
                     .withValues(true, false)
                     .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.worldRasterDisplayEnabled"),
                         (button, value) -> RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.set(value))),
+            slider("screen.rtest.settings.worldSurfaceTrainingBudget","screen.rtest.settings.worldSurfaceTrainingBudget.tip",
+                "65536",0.0D,131072.0D,RayTracingClientConfig.INSTANCE.worldSurfaceTrainingBudget.get(),
+                value->RayTracingClientConfig.INSTANCE.worldSurfaceTrainingBudget.set((int)Math.round(value))),
             slider("screen.rtest.settings.worldProbeTrainingBudget", "screen.rtest.settings.worldProbeTrainingBudget.tip",
                 "1024", 0.0D, 4096.0D, RayTracingClientConfig.INSTANCE.worldProbeTrainingBudget.get(),
                 value -> RayTracingClientConfig.INSTANCE.worldProbeTrainingBudget.set((int)Math.round(value))),

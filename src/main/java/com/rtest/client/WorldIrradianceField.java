@@ -8,7 +8,7 @@ import java.nio.ByteOrder;
  * Sample Li must exclude the receiver's BSDF/albedo and obey the supplied sphere PDF.
  */
 final class WorldIrradianceField {
-    static final int HEADER_WORDS = 16, ROW_WORDS = 64;
+    static final int HEADER_WORDS = 16, ROW_WORDS = 320;
     static final int SH_OFFSET = 4, DISTANCE_OFFSET = 31, DISTANCE_COUNT_OFFSET = 43;
     static final String GLSL;
     static {

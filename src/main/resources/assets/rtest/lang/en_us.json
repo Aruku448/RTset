@@ -40,8 +40,8 @@
   "screen.rtest.settings.persistentWorldTrainingBudget.tip": "Maximum ray seeds per independent world update batch. Zero pauses updates; missing cache still traces live.",
   "screen.rtest.settings.persistentWorldMaxAgeMs": "World lighting lifetime (ms)",
   "screen.rtest.settings.persistentWorldMaxAgeMs.tip": "Older cache samples are rejected. Lower budgets require longer lifetimes and warmup.",
-  "screen.rtest.settings.worldRasterDisplayEnabled": "World RT / raster display (experimental)",
-  "screen.rtest.settings.worldRasterDisplayEnabled.tip": "Raster camera display with low-frequency RT world lighting. Lighting/reflection/transparency are approximate; disable for full RT.",
+  "screen.rtest.settings.worldRasterDisplayEnabled": "Persistent RT world (experimental)",
+  "screen.rtest.settings.worldRasterDisplayEnabled.tip": "Low-frequency RT stores surface sunlight, colored transmission and directional radiance; display reads caches and resolves view-dependent highlights. Cache resolution and transparent visibility remain approximate.",
   "screen.rtest.settings.worldProbeTrainingBudget": "World irradiance probe budget",
   "screen.rtest.settings.worldProbeTrainingBudget.tip": "Maximum probes sampled per world update. Zero freezes training; display misses never trace repair rays.",
   "screen.rtest.settings.persistentRtEnabled": "Persistent RT cache (experimental)",
@@ -176,5 +176,7 @@
   "screen.rtest.settings.sunDaylightIntensityEnabled": "Sun intensity follows sky light level: %s",
   "screen.rtest.settings.sunDaylightIntensityEnabled.tip": "Overrides manual solar intensity: normalized level 0 (raw sky light level 4) has intensity 3, level 15 is the daytime peak, with a smooth transition. Shared by direct light, physical sky and solar atmospheric scattering.",
   "screen.rtest.settings.sunDaylightPeakIntensity": "Daytime peak sun intensity: %s",
-  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "Solar intensity at sky light level 15 in automatic mode. Manual intensity is used when automatic mode is off."
+  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "Solar intensity at sky light level 15 in automatic mode. Manual intensity is used when automatic mode is off.",
+  "screen.rtest.settings.worldSurfaceTrainingBudget": "Static surface RT update budget",
+  "screen.rtest.settings.worldSurfaceTrainingBudget.tip": "Static corner rays per world tick; entity corners additionally refresh. Zero freezes surface lighting. Camera rotation never traces repair rays."
 }

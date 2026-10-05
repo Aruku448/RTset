@@ -40,8 +40,8 @@
   "screen.rtest.settings.persistentWorldTrainingBudget.tip": "独立世界任务每批最多处理的射线种子数。0 暂停更新；缺失缓存仍实时追踪。",
   "screen.rtest.settings.persistentWorldMaxAgeMs": "世界照明缓存寿命（毫秒）",
   "screen.rtest.settings.persistentWorldMaxAgeMs.tip": "超过此年龄的缓存不再复用。较低预算需要较长寿命和预热时间。",
-  "screen.rtest.settings.worldRasterDisplayEnabled": "世界 RT／光栅显示（实验）",
-  "screen.rtest.settings.worldRasterDisplayEnabled.tip": "相机显示使用光栅，世界照明低频 RT 更新。首版照明与反射、透明有近似；关闭返回完整 RT。",
+  "screen.rtest.settings.worldRasterDisplayEnabled": "持久 RT 世界（实验）",
+  "screen.rtest.settings.worldRasterDisplayEnabled.tip": "低频 RT 保存表面太阳光、彩色透射和方向辐射；显示查询缓存并计算当前视角高光。仍有缓存分辨率和透明近似，关闭返回完整 RT。",
   "screen.rtest.settings.worldProbeTrainingBudget": "世界辐照度探针预算",
   "screen.rtest.settings.worldProbeTrainingBudget.tip": "每次世界更新最多采样的探针数。0 暂停训练；显示缺失值不补射线。",
   "screen.rtest.settings.persistentRtEnabled": "持久 RT 缓存（实验）",
@@ -176,5 +176,7 @@
   "screen.rtest.settings.sunDaylightIntensityEnabled": "太阳强度随天空光照等级变化：%s",
   "screen.rtest.settings.sunDaylightIntensityEnabled.tip": "启用时覆盖手动太阳强度。归一化光照等级 0（原始天空等级 4）为强度 3，15 为日间峰值，中间平滑过渡；同时影响直射、物理天空和太阳大气散射。",
   "screen.rtest.settings.sunDaylightPeakIntensity": "太阳日间峰值强度：%s",
-  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "自动模式下天空光照等级 15 对应的太阳强度。关闭自动模式时使用手动太阳强度。"
+  "screen.rtest.settings.sunDaylightPeakIntensity.tip": "自动模式下天空光照等级 15 对应的太阳强度。关闭自动模式时使用手动太阳强度。",
+  "screen.rtest.settings.worldSurfaceTrainingBudget": "静态表面 RT 更新预算",
+  "screen.rtest.settings.worldSurfaceTrainingBudget.tip": "每次世界更新的静态三角形角点采样数；实体角点额外刷新。0 冻结表面照明。相机转动不触发补射线。"
 }

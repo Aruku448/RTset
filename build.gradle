@@ -475,3 +475,10 @@ def worldRasterDisplayTest = tasks.register('worldRasterDisplayTest', JavaExec) 
     mainClass = 'com.rtest.client.WorldRasterDisplayTest'
 }
 tasks.named('test') { dependsOn worldRasterDisplayTest }
+
+def worldSurfaceRadianceTest = tasks.register('worldSurfaceRadianceTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.WorldSurfaceRadianceTest'
+    if (project.hasProperty('world_surface_dump')) args project.property('world_surface_dump')
+}
+tasks.named('test') { dependsOn worldSurfaceRadianceTest }
