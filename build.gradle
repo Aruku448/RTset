@@ -440,3 +440,10 @@ def gpuLightTreeMathTest = tasks.register('gpuLightTreeMathTest', JavaExec) {
     if (project.hasProperty('gpu_tree_dump')) args 'dump', project.property('gpu_tree_dump'), (project.findProperty('gpu_tree_dump_count') ?: '5003')
 }
 tasks.named('test') { dependsOn gpuLightTreeMathTest }
+
+// F9 viewport and responsive layout regression checks.
+def settingsLayoutTest = tasks.register('settingsLayoutTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SettingsLayoutTest'
+}
+tasks.named('test') { dependsOn settingsLayoutTest }
