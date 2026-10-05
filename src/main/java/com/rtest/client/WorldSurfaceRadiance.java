@@ -17,18 +17,27 @@ final class WorldSurfaceRadiance implements AutoCloseable {
     private boolean geometryUpload;
     private long lastPositions;
     private int vertices,generation,bank,cursor,count;
-    private boolean reset;
+    private boolean reset, migrationSubmitted;
+    private RayTracingScene.SceneGeometry geometry;
+    private NativeBuffer previous;
+    private int previousCapacity, previousBank;
+    private java.util.List<WorldCacheMigration.Copy> migration=java.util.List.of();
     WorldSurfaceRadiance(VulkanDevice device){this.device=device;buffer=allocate(64);positions=allocatePositions(16);}
     private NativeBuffer allocate(long bytes){return NativeBuffer.create(device,bytes,VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);}
     private NativeBuffer allocatePositions(long bytes){return NativeBuffer.create(device,bytes,VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,false);}
     void prepare(WorldRasterDisplay raster,int nextGeneration,boolean due,int budget){
+        if(migrationSubmitted && previous!=null){previous.close();previous=null;migration=java.util.List.of();migrationSubmitted=false;}
+        boolean geometryChanged=geometry!=raster.surfaceGeometry() || lastPositions!=raster.surfacePositions();
         staticVertices=raster.surfaceVertexCount();dynamicVertices=due?raster.prepareSurfaceLayout():dynamicVertices;
         int nextVertices=Math.addExact(staticVertices,dynamicVertices);
-        if(nextVertices>capacity||staticVertices!=allocatedStaticVertices){
+        if(nextVertices>capacity||staticVertices!=allocatedStaticVertices||geometryChanged){
             int nextCapacity=Math.addExact(staticVertices,Math.max(65536,dynamicVertices));
             NativeBuffer next=allocate(64L+Math.max(1L,nextCapacity)*64),nextPositions;
             try{nextPositions=allocatePositions(Math.max(16L,(long)nextCapacity*16));}catch(RuntimeException|Error failure){next.close();throw failure;}
-            buffer.close();positions.close();buffer=next;positions=nextPositions;capacity=nextCapacity;allocatedStaticVertices=staticVertices;reset=true;geometryUpload=true;
+            migration=nextGeneration==generation?WorldCacheMigration.surfaces(geometry,raster.surfaceGeometry()):java.util.List.of();
+            previous=buffer;previousCapacity=capacity;previousBank=bank;
+            positions.close();buffer=next;positions=nextPositions;capacity=nextCapacity;allocatedStaticVertices=staticVertices;reset=true;geometryUpload=true;bank=0;cursor=0;
+            geometry=raster.surfaceGeometry();
         }
         vertices=nextVertices;
         if(lastPositions!=raster.surfacePositions()){lastPositions=raster.surfacePositions();geometryUpload=true;reset=true;}
@@ -50,7 +59,19 @@ final class WorldSurfaceRadiance implements AutoCloseable {
         var barrier=VkMemoryBarrier.calloc(1,stack).sType$Default().srcAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT|VK10.VK_ACCESS_SHADER_WRITE_BIT|VK10.VK_ACCESS_HOST_WRITE_BIT)
             .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT|VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
         VK10.vkCmdPipelineBarrier(cmd,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,0,barrier,null,null);
-        if(reset)VK10.vkCmdFillBuffer(cmd,buffer.buffer,64,buffer.size-64,0);
+        if(reset){
+            VK10.vkCmdFillBuffer(cmd,buffer.buffer,64,buffer.size-64,0);
+            if(previous!=null && !migration.isEmpty()){
+                barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
+                VK10.vkCmdPipelineBarrier(cmd,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,0,barrier,null,null);
+                var copy=VkBufferCopy.calloc(1,stack);
+                for(var span:migration)for(int targetBank=0;targetBank<2;targetBank++){
+                    copy.srcOffset(64L+((long)previousBank*previousCapacity+span.source())*32)
+                        .dstOffset(64L+((long)targetBank*capacity+span.destination())*32).size((long)span.count()*32);
+                    VK10.vkCmdCopyBuffer(cmd,previous.buffer,buffer.buffer,copy);
+                }
+            }
+        }
         else {long bytes=(long)capacity*32;var copy=VkBufferCopy.calloc(1,stack).srcOffset(64+bank*bytes).dstOffset(64+(1-bank)*bytes).size(bytes);VK10.vkCmdCopyBuffer(cmd,buffer.buffer,buffer.buffer,copy);}
         if(count>0&&dynamicVertices>0){
             barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -64,6 +85,6 @@ final class WorldSurfaceRadiance implements AutoCloseable {
             KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR|VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,barrier,null,null);
     }
     int count(){return count;}
-    void submitted(){reset=false;if(count>0){bank=1-bank;cursor=staticVertices>0?(cursor+Math.max(0,count-dynamicVertices))%staticVertices:0;}}
-    @Override public void close(){buffer.close();positions.close();}
+    void submitted(){reset=false;migrationSubmitted=previous!=null;if(count>0){bank=1-bank;cursor=staticVertices>0?(cursor+Math.max(0,count-dynamicVertices))%staticVertices:0;}}
+    @Override public void close(){buffer.close();positions.close();if(previous!=null)previous.close();}
 }

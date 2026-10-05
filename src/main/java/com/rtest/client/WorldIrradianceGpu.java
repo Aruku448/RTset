@@ -16,6 +16,11 @@ final class WorldIrradianceGpu implements AutoCloseable {
     private WorldIrradianceField.Grid grid;
     private boolean reset=true, update;
     private int readBank, cursor, count;
+    private NativeBuffer previous;
+    private WorldIrradianceField.Grid previousGrid;
+    private int previousBank;
+    private boolean migrationSubmitted;
+    private java.util.List<WorldCacheMigration.Copy> migration=java.util.List.of();
     WorldIrradianceGpu(VulkanDevice device) {
         this.device=device;
         buffer=allocate(64);
@@ -29,6 +34,11 @@ final class WorldIrradianceGpu implements AutoCloseable {
     /** Layout follows loaded scene extents, not camera rotation. Call on geometry publication only. */
     static WorldIrradianceField.Grid sceneGrid(RayTracingScene.SceneGeometry geometry, int generation,
                                                int minimumSamples, int maxAgeMs, float maxTraceDistance) {
+        return sceneGrid(geometry,generation,minimumSamples,maxAgeMs,maxTraceDistance,null);
+    }
+    static WorldIrradianceField.Grid sceneGrid(RayTracingScene.SceneGeometry geometry, int generation,
+                                               int minimumSamples, int maxAgeMs, float maxTraceDistance,
+                                               WorldIrradianceField.Grid previous) {
         double minX=Double.POSITIVE_INFINITY,minY=minX,minZ=minX;
         double maxX=Double.NEGATIVE_INFINITY,maxY=maxX,maxZ=maxX;
         for(var section:geometry.sections) {
@@ -39,15 +49,22 @@ final class WorldIrradianceGpu implements AutoCloseable {
             }
         }
         if(!Double.isFinite(minX)) { minX=geometry.originX;minY=geometry.originY;minZ=geometry.originZ;maxX=minX+8;maxY=minY+8;maxZ=minZ+8; }
-        float spacing=(float)Math.max(8,Math.max(Math.max((maxX-minX)/29,(maxZ-minZ)/29),(maxY-minY)/13));
+        // Spacing depends on configured world radius, not how many chunks have finished loading.
+        float spacing=(float)Math.pow(2,Math.ceil(Math.log(Math.max(16,(geometry.renderDistanceChunks+1)*32.0/29))/Math.log(2)));
+        if(previous!=null && previous.generation()==generation && previous.spacing()==spacing
+            && minX>=previous.x() && minY>=previous.y() && minZ>=previous.z()
+            && maxX<=previous.x()+(previous.nx()-1)*spacing
+            && maxY<=previous.y()+(previous.ny()-1)*spacing
+            && maxZ<=previous.z()+(previous.nz()-1)*spacing) return previous;
         float x=(float)(Math.floor(minX/spacing)*spacing-spacing),y=(float)(Math.floor(minY/spacing)*spacing-spacing),z=(float)(Math.floor(minZ/spacing)*spacing-spacing);
-        int nx=Math.max(2,Math.min(34,(int)Math.ceil((maxX-x)/spacing)+2));
-        int ny=Math.max(2,Math.min(18,(int)Math.ceil((maxY-y)/spacing)+2));
-        int nz=Math.max(2,Math.min(34,(int)Math.ceil((maxZ-z)/spacing)+2));
+        int nx=Math.max(2,(int)Math.ceil((maxX-x)/spacing)+2);
+        int ny=Math.max(2,(int)Math.ceil((maxY-y)/spacing)+2);
+        int nz=Math.max(2,(int)Math.ceil((maxZ-z)/spacing)+2);
         return new WorldIrradianceField.Grid(x,y,z,spacing,nx,ny,nz,generation,minimumSamples,maxAgeMs,maxTraceDistance);
     }
     /** Returns whether allocation/header changed; refresh binding 42 before recording either pipeline. */
     boolean prepare(WorldIrradianceField.Grid requested, boolean enabled, int clockMs, int budget, boolean worldDue) {
+        if(migrationSubmitted && previous!=null){previous.close();previous=null;previousGrid=null;migration=java.util.List.of();migrationSubmitted=false;}
         boolean changed=grid==null || !grid.equals(requested);
         if(changed) {
             NativeBuffer candidate=allocate(requested.bytes());
@@ -55,13 +72,15 @@ final class WorldIrradianceGpu implements AutoCloseable {
                 ByteBuffer header=requested.initializeHeader(clockMs);
                 mapped.flushOnlyRange(0,64);mapped.buffer().put(0,header,0,64);
             } catch(RuntimeException|Error failure) {candidate.close();throw failure;}
-            buffer.close();buffer=candidate;grid=requested;readBank=0;cursor=0;reset=true;
+            migration=WorldCacheMigration.probes(grid,requested);
+            previous=buffer;previousGrid=grid;previousBank=readBank;
+            buffer=candidate;grid=requested;readBank=0;cursor=0;reset=true;
         }
         count=enabled && worldDue ? Math.min(Math.max(0,budget),grid.count()) : 0;
         update=count>0;
         try(var mapped=buffer.map()) {
             mapped.flushOnlyRange(40,24);var b=mapped.buffer();
-            b.putInt(40,clockMs).putInt(48,enabled && !reset ? 1 : 0);
+            b.putInt(40,clockMs).putInt(48,enabled && (!reset || !migration.isEmpty()) ? 1 : 0);
             b.putInt(52,WorldIrradianceField.HEADER_WORDS+readBank*grid.count()*WorldIrradianceField.ROW_WORDS);
             b.putInt(56,WorldIrradianceField.HEADER_WORDS+(1-readBank)*grid.count()*WorldIrradianceField.ROW_WORDS);
             b.putInt(60,cursor);
@@ -85,7 +104,20 @@ final class WorldIrradianceGpu implements AutoCloseable {
             .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT|VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
         VK10.vkCmdPipelineBarrier(cmd,VK10.VK_PIPELINE_STAGE_HOST_BIT|VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
             |KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,0,barrier,null,null);
-        if(reset) VK10.vkCmdFillBuffer(cmd,buffer.buffer,64,buffer.size-64,0);
+        if(reset) {
+            VK10.vkCmdFillBuffer(cmd,buffer.buffer,64,buffer.size-64,0);
+            if(previous!=null && !migration.isEmpty()) {
+                barrier.srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT);
+                VK10.vkCmdPipelineBarrier(cmd,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,0,barrier,null,null);
+                var copy=VkBufferCopy.calloc(1,stack);
+                for(var span:migration)for(int targetBank=0;targetBank<2;targetBank++){
+                    copy.srcOffset(64L+((long)previousBank*previousGrid.count()+span.source())*WorldIrradianceField.ROW_WORDS*4)
+                        .dstOffset(64L+((long)targetBank*grid.count()+span.destination())*WorldIrradianceField.ROW_WORDS*4)
+                        .size((long)span.count()*WorldIrradianceField.ROW_WORDS*4);
+                    VK10.vkCmdCopyBuffer(cmd,previous.buffer,buffer.buffer,copy);
+                }
+            }
+        }
         else {
             long bankBytes=(long)grid.count()*WorldIrradianceField.ROW_WORDS*4;
             var copy=VkBufferCopy.calloc(1,stack).srcOffset(64+readBank*bankBytes)
@@ -102,7 +134,7 @@ final class WorldIrradianceGpu implements AutoCloseable {
     long generation() { return grid==null ? 0 : Integer.toUnsignedLong(grid.generation()); }
     void submitted() {
         if(update) { readBank=1-readBank;cursor=(cursor+count)%grid.count(); }
-        reset=false;
+        reset=false;migrationSubmitted=previous!=null;
     }
-    @Override public void close() { buffer.close(); }
+    @Override public void close() { buffer.close();if(previous!=null)previous.close(); }
 }

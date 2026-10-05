@@ -102,6 +102,8 @@ float wifVisibility(uint row, vec3 offset) {
 // Returns a confidence-weighted irradiance. Caller blends with its explicitly named cheap fallback:
 // E = mix(fallbackE, irradiance, confidence); Lambert = albedo * E / PI.
 // Six directional moments reduce leakage, but are not an exact visibility test or a thin-wall guarantee.
+// A persistent world observation does not expire just because its training budget is paused.
+bool wifFresh(uint row) { return wif.words[9]==0u || (wif.words[10]-wif.words[row+2u])<=wif.words[9]; }
 bool wifQuery(vec3 position, vec3 normal, out vec3 irradiance, out float confidence) {
     irradiance=vec3(0); confidence=0.0;
     if(wif.words[12]==0u || any(isnan(position)) || any(isinf(position))
@@ -116,7 +118,7 @@ bool wifQuery(vec3 position, vec3 normal, out vec3 irradiance, out float confide
         uint id=wifIndex(coord), row=wif.words[13]+id*WIF_ROW_WORDS;
         uint count=wif.words[row+1u];
         if(wif.words[row]!=wif.words[7] || count<wif.words[8]
-           || (wif.words[10]-wif.words[row+2u])>wif.words[9]) continue;
+           || !wifFresh(row)) continue;
         vec3 axes=mix(vec3(1)-fraction,fraction,vec3(bits));
         float weight=axes.x*axes.y*axes.z;
         weight*=wifVisibility(row,position-wifProbePosition(id));
@@ -145,7 +147,7 @@ bool wifQueryRadiance(vec3 position,vec3 direction,float roughness,out vec3 radi
     float total=0.0;
     for(uint corner=0u;corner<8u;corner++){
         uvec3 bits=uvec3(corner&1u,(corner>>1u)&1u,(corner>>2u)&1u);uint id=wifIndex(cell+bits),row=wif.words[13]+id*WIF_ROW_WORDS;
-        uint count=wif.words[row+1u];if(wif.words[row]!=wif.words[7]||count<wif.words[8]||(wif.words[10]-wif.words[row+2u])>wif.words[9])continue;
+        uint count=wif.words[row+1u];if(wif.words[row]!=wif.words[7]||count<wif.words[8]||!wifFresh(row))continue;
         vec3 axes=mix(1.0-fraction,fraction,vec3(bits));float weight=axes.x*axes.y*axes.z*wifVisibility(row,position-wifProbePosition(id))*min(float(count)/float(max(1u,wif.words[8])*4u),1.0);
         radiance+=weight*wifEvaluateRadiance(row,direction,roughness);total+=weight;
     }
@@ -166,7 +168,7 @@ bool wifQuerySurface(vec3 position,vec3 normal,vec3 direction,float roughness,ou
     uint directionBin=wifDirectionBin(normalize(direction));float total=0.0;
     for(uint corner=0u;corner<8u;corner++){
         uvec3 bits=uvec3(corner&1u,(corner>>1u)&1u,(corner>>2u)&1u);uint id=wifIndex(cell+bits),row=wif.words[13]+id*WIF_ROW_WORDS;
-        uint count=wif.words[row+1u];if(wif.words[row]!=wif.words[7]||count<wif.words[8]||(wif.words[10]-wif.words[row+2u])>wif.words[9])continue;
+        uint count=wif.words[row+1u];if(wif.words[row]!=wif.words[7]||count<wif.words[8]||!wifFresh(row))continue;
         vec3 axes=mix(1.0-fraction,fraction,vec3(bits));float weight=axes.x*axes.y*axes.z*wifVisibility(row,position-wifProbePosition(id))*min(float(count)/float(max(1u,wif.words[8])*4u),1.0);
         vec3 e=vec3(0),li=vec3(0);
         for(uint k=0u;k<9u;k++){uint at=row+4u+3u*k;vec3 coefficient=vec3(uintBitsToFloat(wif.words[at]),uintBitsToFloat(wif.words[at+1u]),uintBitsToFloat(wif.words[at+2u]));e+=coefficient*yn[k];li+=coefficient*yr[k];}

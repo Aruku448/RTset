@@ -69,6 +69,7 @@ final class WorldRasterDisplay implements AutoCloseable {
         }
     }
     int dynamicLightingKey(){return dynamicLightingKey;}
+    SceneGeometry surfaceGeometry(){return geometry;}
     int surfaceVertexCount(){return vertexCount;}
     long surfacePositions(){return positions.buffer;}
     long surfacePositionBytes(){return positions.size;}

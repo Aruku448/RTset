@@ -22,7 +22,7 @@ final class WorldIrradianceField {
         Grid {
             if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)
                     || !Float.isFinite(spacing) || spacing <= 0 || nx < 2 || ny < 2 || nz < 2
-                    || generation == 0 || minSamples < 1 || maxAgeMs < 1
+                    || generation == 0 || minSamples < 1 || maxAgeMs < 0
                     || !Float.isFinite(maxTraceDistance) || maxTraceDistance <= 0)
                 throw new IllegalArgumentException("Invalid world irradiance grid");
             long count = (long) nx * ny * nz;

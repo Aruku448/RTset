@@ -160,9 +160,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private boolean rasterDisplayFrame, worldUpdateFrame, lastRasterDisplay;
         private WorldIrradianceField.Grid worldGrid;
         private SceneGeometry worldGridGeometry;
-        private Object worldGridMedium;
         private int worldGeneration;
-        private long worldLightIdentity;
         private int lastEvaluationMode = -1;
         private boolean lastPersistentEnabled;
         // Optional compute-side terrain traversal resources. They are separate from the RT
@@ -3469,29 +3467,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
         }
 
         private void prepareWorldRaster(RtestFsrCamera currentCamera, DynamicEntityGeometry.Frame entities, RtestFsr3Upscaler.FrameToken token) {
-            long identity;
-            try (var mapped = this.cameraBuffer.map()) {
-                mapped.flushOnlyWrittenRanges();
-                var b = mapped.buffer();
-                // Broad source bins let a world field mature. These are approximation tolerances,
-                // never a camera-history key; medium and material generation remain exact.
-                identity = 0xcbf29ce484222325L;
-                for (int offset : new int[]{80,84,88,12,124,232})
-                    identity = (identity ^ Math.round(b.getFloat(offset) * 10)) * 0x100000001b3L;
-                for (int offset : new int[]{96,244,248,252})
-                    identity = (identity ^ Math.round(b.getFloat(offset))) * 0x100000001b3L;
-                for (int offset : new int[]{28,100,112,116,120,236,272,276,280,284,288,292})
-                    identity = (identity ^ Integer.toUnsignedLong(b.getInt(offset))) * 0x100000001b3L;
-            }
-            identity=(identity ^ RayTracingClientConfig.INSTANCE.atmosphereAltitudeOffsetMeters.get())*0x100000001b3L;
-            boolean invalid = worldGrid == null || !PersistentRtPolicy.sameStaticScene(worldGridGeometry,this.geometry)
-                || worldGridMedium != this.atmosphere || worldLightIdentity != identity;
-            if (invalid) {
-                if (++worldGeneration == 0) worldGeneration = 1;
-                worldGrid = WorldIrradianceGpu.sceneGrid(this.geometry, worldGeneration, 4, 30000,
-                    (float)((this.geometry.renderDistanceChunks + 1) * 16.0 * Math.sqrt(2.0)));
+            // Generation identifies this world's storage, not changing daylight or camera state.
+            // Keep observations visible while new geometry/source samples are collected.
+            if (worldGeneration == 0) worldGeneration = 1;
+            if (worldGrid == null || worldGridGeometry != this.geometry) {
+                worldGrid = WorldIrradianceGpu.sceneGrid(this.geometry, worldGeneration, 4, 0,
+                    (float)((this.geometry.renderDistanceChunks + 1) * 16.0 * Math.sqrt(2.0)), worldGrid);
                 worldUpdateFrame = true;
-                worldLightIdentity = identity; worldGridMedium = this.atmosphere;
             }
             worldGridGeometry = this.geometry;
             this.worldIrradiance.prepare(worldGrid,true,(int)(System.nanoTime()/1_000_000L),

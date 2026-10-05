@@ -482,3 +482,9 @@ def worldSurfaceRadianceTest = tasks.register('worldSurfaceRadianceTest', JavaEx
     if (project.hasProperty('world_surface_dump')) args project.property('world_surface_dump')
 }
 tasks.named('test') { dependsOn worldSurfaceRadianceTest }
+
+def worldCacheMigrationTest = tasks.register('worldCacheMigrationTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.WorldCacheMigrationTest'
+}
+tasks.named('test') { dependsOn worldCacheMigrationTest }
