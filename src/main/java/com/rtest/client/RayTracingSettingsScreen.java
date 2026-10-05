@@ -209,6 +209,15 @@ public final class RayTracingSettingsScreen extends Screen {
 
     private List<SettingsEntry> pathTracingEntries() {
         return List.of(
+            cycle("screen.rtest.settings.worldRasterDisplayEnabled", "screen.rtest.settings.worldRasterDisplayEnabled.tip", "off",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.worldRasterDisplayEnabled"),
+                        (button, value) -> RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.set(value))),
+            slider("screen.rtest.settings.worldProbeTrainingBudget", "screen.rtest.settings.worldProbeTrainingBudget.tip",
+                "1024", 0.0D, 4096.0D, RayTracingClientConfig.INSTANCE.worldProbeTrainingBudget.get(),
+                value -> RayTracingClientConfig.INSTANCE.worldProbeTrainingBudget.set((int)Math.round(value))),
             cycle("screen.rtest.settings.persistentRtEnabled", "screen.rtest.settings.persistentRtEnabled.tip", "off",
                 CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
                         RayTracingClientConfig.INSTANCE.persistentRtEnabled.get())

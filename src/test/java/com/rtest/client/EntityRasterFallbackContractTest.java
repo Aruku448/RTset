@@ -56,7 +56,7 @@ public final class EntityRasterFallbackContractTest {
         require(dynamicInstances, "if (this.dynamicHistoryResetPending)");
         require(dynamicInstances, "this.dynamicHistoryResetPending = false;");
         if (dispatch.indexOf("updateDynamicInstances(effectiveDynamicFrame,")
-            > dispatch.indexOf("if (!this.topLevelBuilt)")) {
+            > dispatch.indexOf("if (!this.topLevelBuilt && (!rasterDisplayFrame || worldUpdateFrame))")) {
             throw new AssertionError("dynamic TLAS instances are updated after TLAS construction");
         }
         require(hand, "renderRtAfterHandCapture()");

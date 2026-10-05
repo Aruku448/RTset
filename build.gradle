@@ -454,3 +454,24 @@ def settingsLayoutTest = tasks.register('settingsLayoutTest', JavaExec) {
     mainClass = 'com.rtest.client.SettingsLayoutTest'
 }
 tasks.named('test') { dependsOn settingsLayoutTest }
+
+// Source radiance / current-view BSDF and dynamic raster snapshot contracts.
+def worldLightingContributionsTest = tasks.register('worldLightingContributionsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.WorldLightingContributionsTest'
+}
+tasks.named('test') { dependsOn worldLightingContributionsTest }
+
+// World-space irradiance transport contracts; independent of display-camera state.
+def worldIrradianceFieldTest = tasks.register('worldIrradianceFieldTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.WorldIrradianceFieldTest'
+    if (project.hasProperty('world_irradiance_dump')) args project.property('world_irradiance_dump')
+}
+tasks.named('test') { dependsOn worldIrradianceFieldTest }
+
+def worldRasterDisplayTest = tasks.register('worldRasterDisplayTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.WorldRasterDisplayTest'
+}
+tasks.named('test') { dependsOn worldRasterDisplayTest }

@@ -7,7 +7,7 @@ final class RayTracingShaderRaygen {
             return (first.replace(extension, extension + RayTracingAtmosphereShader.GLSL
                 + RayTracingAtmosphereSegmentShader.GLSL + RayTracingMoonShader.GLSL)
                 + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL)
-                    .replace("// PERSISTENT_INDIRECT_FUNCTIONS", PersistentRtShader.GLSL);
+                    .replace("// PERSISTENT_INDIRECT_FUNCTIONS", PersistentRtShader.GLSL + WorldIrradianceField.GLSL);
         }
 
     static final String RAYGEN_SHADER = joinShaderParts("""
@@ -207,6 +207,7 @@ final class RayTracingShaderRaygen {
             const uint PRIME_SAMPLE_EFFECT_VOLUME_SKY = 9u;
             const uint PRIME_SAMPLE_EFFECT_DIRECT_SKY = 10u;
             const uint PRIME_SAMPLE_EFFECT_VOLUME_SHADOW = 11u;
+            const uint PRIME_SAMPLE_EFFECT_WORLD_PROBE_DIRECTION = 12u;
             const uint PRIME_SOBOL_INDEX_MASK = 0xffff0000u;
             const float PRIME_UINT32_TO_FLOAT_EXCLUSIVE_SCALE = 1.0 / 4294967808.0;
             struct PrimeSampleBase {
@@ -1439,21 +1440,31 @@ final class RayTracingShaderRaygen {
             void main() {
                 uint pixelIndex = gl_LaunchIDEXT.x + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y;
                 prtSampledInvocation = (pixelIndex & 255u) == 0u;
-                bool persistentWorker = persistentWork.phase == 1u;
+                bool probeWorker = persistentWork.phase == 2u;
+                bool persistentWorker = persistentWork.phase == 1u || probeWorker;
+                float probeFirstDistance = camera.sun.w;
                 persistentWorldTransport = persistentWorker;
                 bool persistentQueryPending = false;
                 uint persistentKey[10];
                 uint persistentSlot = 0u;
                 uint persistentSampleIndex = 0u;
-                if (persistentWorker) {
+                if (persistentWorker && !probeWorker) {
                     uint jobs = min(prt.words[38], prt.words[8] + 1u);
                     if (gl_LaunchIDEXT.x >= min(jobs, prt.words[10])) return;
                     persistentSlot = prt.words[prt.words[39] + (prt.words[11] + gl_LaunchIDEXT.x) % jobs];
                 }
                 vec3 persistentOrigin, persistentDirection;
-                if (persistentWorker && (!prtLoadJob(persistentSlot, persistentKey, persistentOrigin, persistentDirection)
+                if (persistentWorker && !probeWorker && (!prtLoadJob(persistentSlot, persistentKey, persistentOrigin, persistentDirection)
                     || !prtReserve(persistentKey))) return;
-                if (persistentWorker) persistentSampleIndex = prtNextSample(persistentSlot);
+                if (persistentWorker && !probeWorker) persistentSampleIndex = prtNextSample(persistentSlot);
+                if (probeWorker) {
+                    if (wif.words[12] == 0u || gl_LaunchIDEXT.x >= wifProbeCount()) return;
+                    persistentSlot = (wif.words[15] + gl_LaunchIDEXT.x) % wifProbeCount();
+                    persistentSampleIndex = wifSampleIndex(persistentSlot);
+                    persistentOrigin = wifProbePosition(persistentSlot);
+                    PrimeSampleBase seed = primeMakeSampleBase(uvec2(persistentSlot, 0u), persistentSampleIndex, wif.words[7], 0u, 0u);
+                    persistentDirection = wifUniformSphere(primeSobolSample2D(seed, PRIME_SAMPLE_EFFECT_WORLD_PROBE_DIRECTION, 0u));
+                }
                 pathPayload.staticBoundary = 0u;
                 vec2 jitteredPixel = vec2(gl_LaunchIDEXT.xy) + vec2(0.5) + camera.jitter.xy;
                 vec2 pixel = jitteredPixel / vec2(gl_LaunchSizeEXT.xy);
@@ -1555,7 +1566,7 @@ final class RayTracingShaderRaygen {
                     if (persistentWorker) sampleBase.sampleIndex = persistentSampleIndex;
                     if (persistentWorker) {
                         sampleBase.pixel = uvec2(persistentSlot, 0u);
-                        sampleBase.sampleEpoch = prt.words[35];
+                        sampleBase.sampleEpoch = probeWorker ? wif.words[7] : prt.words[35];
                         persistentWorldRadius = clamp(6360.0 + (rayOrigin.y + uintBitsToFloat(prt.words[33]) + 64.0) * 0.001
                             + uintBitsToFloat(prt.words[36]) * 0.001, 6360.0, 6479.999);
                     }
@@ -1581,6 +1592,8 @@ final class RayTracingShaderRaygen {
                         camera.sun.w,
                         0
                     );
+                    if (probeWorker && bounce == 0 && pathPosition.w >= 0.5)
+                        probeFirstDistance = length(pathPosition.xyz - rayOrigin);
                     // Confirm current first-secondary visibility before reusing directional incident radiance.
                     // This preserves primary MIS and rejects current entity occlusion without an extra trace.
                     if (!persistentWorker && bounce == 1 && persistentQueryPending
@@ -1595,7 +1608,7 @@ final class RayTracingShaderRaygen {
                         prtCount(2u);
                     }
                     // Sky/emitter first-hit paths retain their current primary MIS in the display pass.
-                    if (persistentWorker && bounce == 0 && (pathPosition.w < 0.5 || pathMaterial.y > 0.0)) { prtCount(3u); return; }
+                    if (persistentWorker && !probeWorker && bounce == 0 && (pathPosition.w < 0.5 || pathMaterial.y > 0.0)) { prtCount(3u); return; }
                     if (bounce == 0 && pathPosition.w >= 0.5) {
                         primaryPosition = pathPosition.xyz;
                         primaryLocalPosition = pathLocalPosition;
@@ -1675,7 +1688,7 @@ final class RayTracingShaderRaygen {
                             skyRadiance *= skyMisWeight;
                             bool sunIsValid = dot(camera.sun.xyz, camera.sun.xyz) > 1.0e-8;
                             bool sunDiskIsHit = sunIsValid && sunDiskHit(rayDirection, camera.sun.xyz);
-                            if ((physicalAtmosphereEnabled() || daylight > 0.0) && sunDiskIsHit) {
+                            if ((physicalAtmosphereEnabled() || daylight > 0.0) && sunDiskIsHit && !(probeWorker && bounce == 0)) {
                                 skySunDiskHit = true;
                                 // settings.x is the calibrated disk-integrated direct-sun scale.
                                 // Convert that same source to directional radiance for an environment miss.
@@ -1694,7 +1707,7 @@ final class RayTracingShaderRaygen {
                             // Independent of PNG opacity; both physical and legacy misses share this.
                             vec3 moonRadiance = visibleMoonRadiance(rayDirection,
                                 vec3(camera.origin.w, camera.environment.w, camera.jitter.z), camera.jitter.w);
-                            if (dot(moonRadiance, vec3(1.0)) > 0.0) {
+                            if (dot(moonRadiance, vec3(1.0)) > 0.0 && !(probeWorker && bounce == 0)) {
                                 vec3 moonTransmittance = physicalAtmosphereEnabled()
                                     ? persistentSunT(rayDirection)
                                     : vec3(rayDirection.y > 0.0 ? 1.0 : 0.0);
@@ -2062,7 +2075,7 @@ final class RayTracingShaderRaygen {
                             BsdfValue skyBsdf = evaluateBsdf(normal, viewDirection, sampledSkyDirection,
                                 baseColor, roughness, metallic, reflectivity, diffuseMaterialWeight,
                                 diffuseProbability, specularProbability, receiverEnergy);
-                            float skyNeeMisWeight = powerHeuristic(skyPdf, skyBsdf.pdf);
+                            float skyNeeMisWeight = bounce + 1 >= maxPathSegments ? 1.0 : powerHeuristic(skyPdf, skyBsdf.pdf);
                             vec3 sampledSkyIrradiance = incidentSky * (skyCosine / skyPdf) * skyVisibility * skyNeeMisWeight;
                             skyDirectDiffuseContribution = skyBsdf.diffuse * sampledSkyIrradiance;
                             skyDirectSpecularContribution = max(skyBsdf.f - skyBsdf.diffuse, vec3(0.0)) * sampledSkyIrradiance;
@@ -2217,7 +2230,9 @@ final class RayTracingShaderRaygen {
                 }
             """, """
                 if (persistentWorker) {
-                    prtStoreReserved(persistentKey, radiance, vec3(0.0));
+                    if (probeWorker) wifAccumulate(persistentSlot, persistentDirection, radiance,
+                        1.0 / (4.0 * 3.14159265359), probeFirstDistance);
+                    else prtStoreReserved(persistentKey, radiance, vec3(0.0));
                     return; // Worker never writes display pixels, NRD guides, motion or atmosphere segments.
                 }
                 pathPayload.staticBoundary = 0u;

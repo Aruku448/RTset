@@ -8,6 +8,8 @@ public final class RayTracingClientConfig {
     public static final RayTracingClientConfig INSTANCE;
 
     public final ModConfigSpec.BooleanValue persistentRtEnabled;
+    public final ModConfigSpec.BooleanValue worldRasterDisplayEnabled;
+    public final ModConfigSpec.IntValue worldProbeTrainingBudget;
     public final ModConfigSpec.BooleanValue persistentRtStatistics;
     public final ModConfigSpec.ConfigValue<String> rtEvaluationMode;
     public final ModConfigSpec.IntValue persistentRtUpdateIntervalMs;
@@ -96,6 +98,10 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
+        worldRasterDisplayEnabled = builder.comment("Experimental high-frequency raster display with low-frequency RT irradiance probes. Approximate lighting; full RT remains the default reference.")
+            .define("worldRasterDisplayEnabled", false);
+        worldProbeTrainingBudget = builder.comment("Maximum irradiance probes updated per world tick; zero freezes training. Display misses never trigger synchronous RT repair.")
+            .defineInRange("worldProbeTrainingBudget", 1024, 0, 4096);
         persistentRtStatistics = builder.comment("Research counters sample every 256th display/world invocation; logs are sampled counts, not complete ray counts.")
             .define("persistentRtStatistics", false);
         persistentRtEnabled = builder.comment("Research branch: independent persistent world lighting updates for static rough surfaces. Current primary/first-secondary visibility and direct lighting remain live. Default off.")

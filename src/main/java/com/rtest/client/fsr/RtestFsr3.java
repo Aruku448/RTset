@@ -39,6 +39,7 @@ public final class RtestFsr3 implements AutoCloseable {
     private final NrdDenoiser nrd;
     private final AerialPerspectiveComposite aerialComposite;
     private RtestFsrCamera currentCamera;
+    private boolean rasterInput;
     private long currentSceneRevision;
     private long currentAtlasView;
     private long currentAtlasSampler;
@@ -161,6 +162,10 @@ public final class RtestFsr3 implements AutoCloseable {
         return this.sceneColor.view();
     }
 
+    public long motionImage() { return this.motion.image(); }
+    public long reactiveImage() { return this.reactive.image(); }
+    public long transparencyImage() { return this.transparency.image(); }
+
     public long motionView() {
         return this.motion.view();
     }
@@ -225,7 +230,7 @@ public final class RtestFsr3 implements AutoCloseable {
         // on whether this frame produces guides, including zero-strength toggles.
         this.frameNrdStrength = RayTracingClientConfig.INSTANCE.nrdStrength.get().floatValue();
         RtestDenoiserMode nextDenoiserMode = RtestDenoiserMode.select(
-            RayTracingClientConfig.INSTANCE.nrdEnabled.get(), this.frameNrdStrength);
+            !this.rasterInput && RayTracingClientConfig.INSTANCE.nrdEnabled.get(), this.frameNrdStrength);
         if (nextDenoiserMode != this.frameDenoiserMode) {
             // FSR must not blend previous raw/other-denoiser output into this mode's history.
             // Request before beginFrame snapshots the reset bit; stable modes do not reset.
@@ -309,6 +314,29 @@ public final class RtestFsr3 implements AutoCloseable {
             this.nrd.prepareForRayTrace(commandBuffer);
             this.guideDescriptorsInitialized = true;
         }
+    }
+
+    public void setRasterInput(boolean rasterInput) { this.rasterInput = rasterInput; }
+
+    public void prepareForRasterDisplay(VkCommandBuffer commandBuffer) {
+        prepareForRayTracing(commandBuffer);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                .srcStageMask(VK12.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+                .srcAccessMask(VK12.VK_ACCESS_MEMORY_READ_BIT | VK12.VK_ACCESS_MEMORY_WRITE_BIT)
+                .dstStageMask(VK12.VK_PIPELINE_STAGE_TRANSFER_BIT)
+                .dstAccessMask(VK12.VK_ACCESS_TRANSFER_READ_BIT | VK12.VK_ACCESS_TRANSFER_WRITE_BIT);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+                VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
+        }
+    }
+
+    /** Raster inputs are fresh display samples; a reused world field is never a new NRD observation. */
+    public void recordAfterRasterDisplay(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token) {
+        if (this.nrdToken != null) { this.nrd.cancel(this.nrdToken); this.nrdToken = null; }
+        this.nrdWasEnabled = false;
+        computeReadWriteBarrier(commandBuffer);
+        this.upscaler.record(commandBuffer, token);
     }
 
     public void recordAfterRayTracing(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token,

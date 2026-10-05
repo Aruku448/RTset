@@ -153,6 +153,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private NativeBuffer lightDataBuffer;
         private NativeBuffer pbrBuffer;
         private PersistentRtLighting persistentLighting;
+        private WorldIrradianceGpu worldIrradiance;
+        private WorldRasterDisplay worldRaster;
+        private WorldRasterSunShadow worldSunShadow;
+        private final WorldDisplaySchedule worldSchedule = new WorldDisplaySchedule();
+        private boolean rasterDisplayFrame, worldUpdateFrame, lastRasterDisplay;
+        private WorldIrradianceField.Grid worldGrid;
+        private SceneGeometry worldGridGeometry;
+        private Object worldGridMedium;
+        private int worldGeneration;
+        private long worldLightIdentity;
         private int lastEvaluationMode = -1;
         private boolean lastPersistentEnabled;
         // Optional compute-side terrain traversal resources. They are separate from the RT
@@ -673,6 +683,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             GpuLightTreeBuilder lightTreeBuilder = null;
             NativeBuffer pbrBuffer = null;
             PersistentRtLighting persistentLighting = null;
+            WorldIrradianceGpu worldIrradiance = null;
             NativeBuffer terrainNodeMetadataBuffer = null;
             NativeBuffer terrainBlasAddressBuffer = null;
             NativeBuffer terrainTraversalParamsBuffer = null;
@@ -766,6 +777,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 );
                 cameraBuffer = NativeBuffer.create(device, 304, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
                 persistentLighting = new PersistentRtLighting(device);
+                worldIrradiance = new WorldIrradianceGpu(device);
                 long materialFloatCount = materialFloatCount(geometry, dynamicSlotCapacity);
                 materialBuffer = NativeBuffer.create(
                     device,
@@ -989,7 +1001,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 shaderModules[8] = skyCdfHit.handle;
 
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 42 : 31, stack);
+                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 43 : 32, stack);
+                    bindings.get(physicalAtmosphere ? 42 : 31).binding(42)
+                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                        .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
                     bindings.get(physicalAtmosphere ? 41 : 30).binding(41)
                         .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
                         .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
@@ -1095,7 +1110,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
                     poolSizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(2);
-                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(9);
+                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(10);
                     poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(physicalAtmosphere ? 2 : 1);
                     poolSizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                         .descriptorCount(5 + PLAYER_SKIN_DESCRIPTOR_COUNT);
@@ -1176,7 +1191,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .sType$Default().pAccelerationStructures(stack.longs(skybox.cdfHandle()));
                     var skyCdfMetadataInfo = VkDescriptorBufferInfo.calloc(1, stack)
                         .buffer(skybox.cdfMetadataBuffer()).offset(0).range(SkyCdfGeometry.METADATA_BYTES);
-                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 42 : 31, stack);
+                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 43 : 32, stack);
+                    var worldIrradianceInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(worldIrradiance.buffer.buffer)
+                        .offset(0).range(worldIrradiance.buffer.size);
+                    writes.get(physicalAtmosphere ? 42 : 31).sType$Default().dstSet(descriptorSet).dstBinding(42)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(worldIrradianceInfo);
                     var persistentInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(persistentLighting.buffer.buffer)
                         .offset(0).range(persistentLighting.buffer.size);
                     writes.get(physicalAtmosphere ? 41 : 30).sType$Default().dstSet(descriptorSet).dstBinding(41)
@@ -1437,6 +1456,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     );
                     resources.gpuLightTreeBuilder = lightTreeBuilder;
                     resources.persistentLighting = persistentLighting;
+                    resources.worldIrradiance = worldIrradiance;
                     blasCache.commit(sectionBlas);
                     blasCache.trim(activeKeys);
                     encoder = null;
@@ -1475,6 +1495,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 closeDuringFailure(shaderBindingTable, throwable);
                 closeDuringFailure(pbrBuffer, throwable);
                 closeDuringFailure(persistentLighting, throwable);
+                closeDuringFailure(worldIrradiance, throwable);
                 closeDuringFailure(terrainTraversalParamsBuffer, throwable);
                 closeDuringFailure(terrainBlasAddressBuffer, throwable);
                 closeDuringFailure(terrainNodeMetadataBuffer, throwable);
@@ -2855,7 +2876,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             // Prime offline sessions freeze dynamic geometry together with the camera. Normal
             // rendering also freezes one snapshot until the first/replacement TLAS is complete,
             // then resumes accepting the newest animation frame.
-            if (shouldAdoptDynamicFrame(
+            if (RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.get() || shouldAdoptDynamicFrame(
                     OfflineRenderController.active(), this.topLevelBuilt, this.dynamicFrame == null)) {
                 this.dynamicFrame = dynamicFrame;
             }
@@ -2864,11 +2885,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
             // Retire the previous GPU frame only now, immediately before any mapped buffer or
             // temporal image is written again, so that work can overlap with that capture.
             waitForPreviousFrame(timing);
-            updateAtmosphereMedium();
+            rasterDisplayFrame = RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.get()
+                && !OfflineRenderController.active();
+            long worldNow = System.nanoTime();
+            worldUpdateFrame = worldSchedule.begin(rasterDisplayFrame, worldGridGeometry != this.geometry,
+                worldNow, RayTracingClientConfig.INSTANCE.persistentRtUpdateIntervalMs.get());
+            if (!rasterDisplayFrame || worldUpdateFrame) updateAtmosphereMedium();
             // Cleared before any early return so a frame that did not rebuild its dynamic instances
             // never claims block entities are represented.
             representedBlockEntities = Set.of();
-            if (this.dynamicSlotCapacity > 0 && effectiveDynamicFrame != null) {
+            if ((!rasterDisplayFrame || (!this.topLevelBuilt && worldUpdateFrame))
+                    && this.dynamicSlotCapacity > 0 && effectiveDynamicFrame != null) {
                 long dynamicUpdateStart = System.nanoTime();
                 try {
                     boolean canUpdateTopLevel = this.topLevelBuilt || this.topLevelUpdatePending;
@@ -2888,9 +2915,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     timing.add(RayTracingFrameTiming.Segment.DYNAMIC_UPDATE, dynamicUpdateStart);
                 }
             }
-            if (!this.topLevelBuilt) {
+            if (!this.topLevelBuilt && (!rasterDisplayFrame || worldUpdateFrame)) {
                 this.buildAccelerationStructuresIncrementally(timing);
-                if (!this.topLevelBuilt) {
+                if (!this.topLevelBuilt && !rasterDisplayFrame) {
                     // Keep the last completed RT frame visible while the next batch of
                     // BLAS/TLAS work completes. Falling through to vanilla here causes a
                     // one-frame flash whenever a Section update invalidates the TLAS.
@@ -2922,6 +2949,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastMoonPhaseToken = nextMoonPhaseToken;
                 this.lastMoonIntensity = nextMoonIntensity;
             }
+            if (rasterDisplayFrame != lastRasterDisplay) {
+                this.fsr.requestReset(); lastRasterDisplay = rasterDisplayFrame;
+                if (rasterDisplayFrame && this.terrainTraversalEnabled) {
+                    restoreTerrainTraversalInstances(); this.topLevelUpdatePending = true;
+                    this.terrainTraversalPrimed = false;
+                }
+            }
             int evaluationMode = PersistentRtPolicy.mode(RayTracingClientConfig.INSTANCE.rtEvaluationMode.get());
             boolean persistentEnabled = RayTracingClientConfig.INSTANCE.persistentRtEnabled.get();
             if (evaluationMode != this.lastEvaluationMode || persistentEnabled != this.lastPersistentEnabled) {
@@ -2929,9 +2963,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastEvaluationMode = evaluationMode;
                 this.lastPersistentEnabled = persistentEnabled;
             }
+            this.fsr.setRasterInput(rasterDisplayFrame);
             RtestFsr3Upscaler.FrameToken fsrToken = this.fsr.beginFrame(
                 currentCamera, this.geometry.revision(), this.atlasImageView, this.atlasSampler);
             updateCamera(level, camera, fsrToken, currentCamera);
+            if (rasterDisplayFrame) prepareWorldRaster(currentCamera, effectiveDynamicFrame, fsrToken);
             this.fsr.setSunDirection(
                 this.currentSunDirectionX, this.currentSunDirectionY, this.currentSunDirectionZ);
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -2944,8 +2980,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 VulkanCommandEncoder frameEncoder = this.device.createCommandEncoder();
                 long commandRecordStart = System.nanoTime();
                 try {
-                    holder = recordAccelerationStructuresAndDispatch(
-                        frameEncoder, stack, fsrToken);
+                    holder = rasterDisplayFrame
+                        ? recordWorldRasterDisplay(frameEncoder, stack, fsrToken)
+                        : recordAccelerationStructuresAndDispatch(frameEncoder, stack, fsrToken);
                     frameEncoder.execute(holder.commandBuffer);
                 } finally {
                     timing.add(RayTracingFrameTiming.Segment.COMMAND_RECORD, commandRecordStart);
@@ -2972,10 +3009,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     com.mojang.logging.LogUtils.getLogger().info(
                         "RTest dynamic animation: {} BLAS rebuild submitted before TLAS/trace", rebuiltDynamics);
                 }
-                this.topLevelUpdatePending = false;
-                this.dynamicInstances.historyResetSubmitted();
+                if (!rasterDisplayFrame || holder.tlasBuildRecorded) this.topLevelUpdatePending = false;
+                if (!rasterDisplayFrame || worldUpdateFrame) this.dynamicInstances.historyResetSubmitted();
                 this.fsr.submitted(fsrToken);
-                this.persistentLighting.submitted();
+                if (!rasterDisplayFrame) this.persistentLighting.submitted();
+                else {
+                    this.worldIrradiance.submitted();
+                    if (worldUpdateFrame) worldSchedule.submitted(System.nanoTime(),
+                        RayTracingClientConfig.INSTANCE.persistentRtUpdateIntervalMs.get());
+                }
                 if (frameIndex % 120 == 0) {
                     RayTracingDynamicInstances.Stats dynamicStats = this.dynamicInstances.stats();
                     LOGGER.info(
@@ -3420,6 +3462,206 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.terrainHiZInitialized = true;
         }
 
+        private void prepareWorldRaster(RtestFsrCamera currentCamera, DynamicEntityGeometry.Frame entities, RtestFsr3Upscaler.FrameToken token) {
+            long identity;
+            try (var mapped = this.cameraBuffer.map()) {
+                mapped.flushOnlyWrittenRanges();
+                var b = mapped.buffer();
+                // Broad source bins let a world field mature. These are approximation tolerances,
+                // never a camera-history key; medium and material generation remain exact.
+                identity = 0xcbf29ce484222325L;
+                for (int offset : new int[]{80,84,88,12,124,232})
+                    identity = (identity ^ Math.round(b.getFloat(offset) * 10)) * 0x100000001b3L;
+                for (int offset : new int[]{96,244,248,252})
+                    identity = (identity ^ Math.round(b.getFloat(offset))) * 0x100000001b3L;
+                for (int offset : new int[]{116,120,236,272,280,292})
+                    identity = (identity ^ Integer.toUnsignedLong(b.getInt(offset))) * 0x100000001b3L;
+            }
+            boolean invalid = worldGrid == null || !PersistentRtPolicy.sameStaticScene(worldGridGeometry,this.geometry)
+                || worldGridMedium != this.atmosphere || worldLightIdentity != identity;
+            if (invalid) {
+                if (++worldGeneration == 0) worldGeneration = 1;
+                worldGrid = WorldIrradianceGpu.sceneGrid(this.geometry, worldGeneration, 4, 30000,
+                    (float)((this.geometry.renderDistanceChunks + 1) * 16.0 * Math.sqrt(2.0)));
+                worldUpdateFrame = true;
+                worldLightIdentity = identity; worldGridMedium = this.atmosphere;
+            }
+            worldGridGeometry = this.geometry;
+            this.worldIrradiance.prepare(worldGrid,true,(int)(System.nanoTime()/1_000_000L),
+                this.topLevelBuilt ? RayTracingClientConfig.INSTANCE.worldProbeTrainingBudget.get() : 0,worldUpdateFrame);
+            this.worldIrradiance.bind(this.descriptorSet);
+            if (this.worldRaster == null) this.worldRaster = new WorldRasterDisplay(this.device,
+                this.outputWidth,this.outputHeight,this.atlasImageView,this.atlasSampler);
+            this.worldRaster.publishGeometry(this.geometry,this.materialBuffer.buffer,this.materialBuffer.size);
+            this.worldRaster.setIrradianceBuffer(this.worldIrradiance.buffer.buffer,this.worldIrradiance.buffer.size);
+            WorldRasterDisplay.TextureResolver textureResolver = id -> {
+                long[] handles = resolveTextureHandles(id,this.atlasImageView,this.atlasSampler);
+                return new WorldRasterDisplay.Texture(handles[0],handles[1]);
+            };
+            var snapshot = DynamicRasterSnapshot.from(entities);
+            this.worldRaster.publishDynamics(snapshot,textureResolver);
+            float solarIntensity;
+            try (var mapped = this.cameraBuffer.map()) {
+                mapped.flushOnlyWrittenRanges();
+                var b = mapped.buffer();
+                solarIntensity = this.currentSunDirectionY > 0.0F ? b.getFloat(96) : 0.0F;
+                solarIntensity *= Math.max(0.25F,1.0F-b.getFloat(244)*0.55F-b.getFloat(248)*0.25F);
+            }
+            this.worldRaster.updateLighting(this.currentSunDirectionX,this.currentSunDirectionY,
+                this.currentSunDirectionZ,solarIntensity,1.0F,1.0F,1.0F);
+            if (token.reset() || token.cameraCut()) this.worldRaster.resetHistory();
+            this.worldRaster.updateCamera(currentCamera,token.jitter().x(),token.jitter().y());
+            if (this.worldSunShadow == null) this.worldSunShadow = new WorldRasterSunShadow(this.device,2048);
+            if (worldUpdateFrame) this.worldSunShadow.publishStatic(this.worldRaster.staticShadowDraw(),this.geometry,
+                this.currentSunDirectionX,this.currentSunDirectionY,this.currentSunDirectionZ);
+            this.worldSunShadow.publishDynamics(this.worldRaster.dynamicShadowDraws(textureResolver,snapshot));
+            this.worldRaster.setSunShadow(this.worldSunShadow.staticView(),this.worldSunShadow.dynamicView(),
+                this.worldSunShadow.sampler(),this.worldSunShadow.matrixBuffer(),this.worldSunShadow.matrixBytes());
+        }
+
+        /** Display ray count is zero; optional world work belongs to the low-frequency clock. */
+        private VkCommandBufferHolder recordWorldRasterDisplay(VulkanCommandEncoder frameEncoder,
+                MemoryStack stack, RtestFsr3Upscaler.FrameToken fsrToken) {
+            VkCommandBuffer commandBuffer = frameEncoder.allocateAndBeginTransientCommandBuffer();
+            boolean ended = false;
+            try {
+                if (gpuTimestampsAvailable) VK10.vkCmdResetQueryPool(commandBuffer,gpuTimestampQueryPool,0,GPU_TIMESTAMP_COUNT);
+                writeGpuTimestamp(commandBuffer,6,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                writeGpuTimestamp(commandBuffer,7,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                writeGpuTimestamp(commandBuffer,4,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                List<DynamicCachedBlas> dynamicBuilds = new ArrayList<>();
+                boolean tlasBuildRecorded = false;
+                barrier(commandBuffer,stack,VK10.VK_PIPELINE_STAGE_HOST_BIT,VK10.VK_ACCESS_HOST_WRITE_BIT,
+                    VK10.VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                        | KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                        | KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT
+                        | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                if (worldUpdateFrame && this.topLevelBuilt) {
+            // No outer '!built' gate: an already-built BLAS with new animation vertices also runs.
+            for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
+                if (cached.built && !cached.pendingUpdate) continue;
+                // BUILD into the existing, correctly-sized AS storage. This avoids UPDATE's
+                // strict source-geometry identity contract while retaining stable AS addresses.
+                recordBlas(commandBuffer, stack, cached.bottomLevel, false);
+                dynamicBuilds.add(cached);
+            }
+            tlasBuildRecorded = this.topLevelBuilt && this.topLevelUpdatePending;
+            if (tlasBuildRecorded) {
+                barrier(commandBuffer, stack,
+                    VK10.VK_PIPELINE_STAGE_HOST_BIT,
+                    VK10.VK_ACCESS_HOST_WRITE_BIT,
+                    KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                try (MemoryStack tlasStack = MemoryStack.stackPush()) {
+                    VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevelBuildInfo(
+                        tlasStack, true);
+                    VkAccelerationStructureBuildRangeInfoKHR tlasRange = VkAccelerationStructureBuildRangeInfoKHR
+                        .calloc(tlasStack).primitiveCount(topLevel.primitiveCount);
+                    PointerBuffer tlasRanges = tlasStack.mallocPointer(1).put(tlasRange.address());
+                    tlasRanges.flip();
+                    KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(commandBuffer, tlasInfo, tlasRanges);
+                }
+                barrier(commandBuffer, stack,
+                    KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK12.VK_ACCESS_SHADER_READ_BIT);
+            } else if (!dynamicBuilds.isEmpty()) {
+                // An in-place BLAS rebuild can happen without a TLAS UPDATE when only animated
+                // vertices changed. It still needs an explicit build-write -> trace-read dependency.
+                barrier(commandBuffer, stack,
+                    KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK12.VK_ACCESS_SHADER_READ_BIT);
+            }
+                }
+                writeGpuTimestamp(commandBuffer,5,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                writeGpuTimestamp(commandBuffer,8,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                this.worldIrradiance.recordBeforeUpdate(commandBuffer,stack);
+                writeGpuTimestamp(commandBuffer,9,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                writeGpuTimestamp(commandBuffer,10,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                int worldWork = this.worldIrradiance.trainingCount();
+                if (worldWork > 0) {
+                    VK10.vkCmdBindPipeline(commandBuffer,KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,pipeline);
+                    VK10.vkCmdBindDescriptorSets(commandBuffer,KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                        pipelineLayout,0,stack.longs(descriptorSet),null);
+                    VK10.vkCmdPushConstants(commandBuffer,pipelineLayout,KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+                        0,stack.ints(2));
+                    long address = shaderBindingTable.deviceAddress();
+                    var raygen = VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address).stride(sbtStride).size(sbtStride);
+                    var miss = VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address+sbtStride).stride(sbtStride).size(3L*sbtStride);
+                    var hit = VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address+4L*sbtStride).stride(sbtStride).size(3L*sbtStride);
+                    var callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
+                    KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer,raygen,miss,hit,callable,worldWork,1,1);
+                    barrier(commandBuffer,stack,KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        VK10.VK_ACCESS_SHADER_WRITE_BIT,VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK10.VK_ACCESS_SHADER_READ_BIT);
+                }
+                writeGpuTimestamp(commandBuffer,11,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                this.fsr.prepareForRasterDisplay(commandBuffer);
+                writeGpuTimestamp(commandBuffer,0,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                this.worldSunShadow.record(commandBuffer);
+                this.worldRaster.record(commandBuffer);
+                this.worldRaster.copyOutputs(commandBuffer,this.fsr.sceneColorImage(),this.fsr.depthImage(),
+                    this.fsr.motionImage(),this.fsr.reactiveImage(),this.fsr.transparencyImage());
+                writeGpuTimestamp(commandBuffer,1,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                this.fsr.recordAfterRasterDisplay(commandBuffer,fsrToken);
+                writeGpuTimestamp(commandBuffer,2,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                copyDisplayToTarget(commandBuffer,stack);
+                writeGpuTimestamp(commandBuffer,3,VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                VulkanUtils.crashIfFailure(device,VK10.vkEndCommandBuffer(commandBuffer),"Failed to end world raster command buffer");
+                ended = true;
+                if (frameIndex % 120 == 0) LOGGER.info("RTest world_display frame={} display_trace_calls=0 world_trace_calls={} world_probes={} generation={} world_update={} raster=true",
+                    frameIndex,worldWork>0?1:0,worldWork,worldGeneration,worldUpdateFrame);
+                return new VkCommandBufferHolder(commandBuffer,dynamicBuilds,tlasBuildRecorded);
+            } finally { if (!ended) VK10.vkEndCommandBuffer(commandBuffer); }
+        }
+
+        private void copyDisplayToTarget(VkCommandBuffer commandBuffer,MemoryStack stack) {
+            imageBarrier(commandBuffer, stack,
+                VK12.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK12.VK_ACCESS_SHADER_WRITE_BIT,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                this.fsr.displayImage(),
+                VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_LAYOUT_GENERAL);
+            // The target is Minecraft's main attachment. This command buffer is appended to the
+            // shared encoder after the LevelRenderer frame graph, so synchronize the preceding
+            // color-attachment writes before replacing it with the FSR display image.
+            imageBarrier(commandBuffer, stack,
+                VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
+                targetImage,
+                VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_LAYOUT_GENERAL);
+            VkImageCopy.Buffer imageCopy = VkImageCopy.calloc(1, stack);
+            imageCopy.srcSubresource(VkImageSubresourceLayers.calloc(stack)
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                    .baseArrayLayer(0).layerCount(1));
+            imageCopy.dstSubresource(VkImageSubresourceLayers.calloc(stack)
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
+                    .baseArrayLayer(0).layerCount(1));
+            imageCopy.srcOffset().set(0, 0, 0);
+            imageCopy.dstOffset().set(0, 0, 0);
+            imageCopy.extent().set(displayWidth, displayHeight, 1);
+            VK10.vkCmdCopyImage(commandBuffer, this.fsr.displayImage(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    targetImage, VK10.VK_IMAGE_LAYOUT_GENERAL, imageCopy);
+
+            imageBarrier(commandBuffer, stack,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
+                // The normal frame's final operation is the swapchain transfer blit.
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                targetImage,
+                VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_LAYOUT_GENERAL);
+        }
+
         private VkCommandBufferHolder recordAccelerationStructuresAndDispatch(
             VulkanCommandEncoder frameEncoder,
             MemoryStack stack,
@@ -3806,6 +4048,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(gpuLightTreeBuilder, failure);
             failure = closeAndCapture(lightDataBuffer, failure);
             failure = closeAndCapture(pbrBuffer, failure);
+            failure = closeAndCapture(worldSunShadow, failure);
+            failure = closeAndCapture(worldRaster, failure);
+            failure = closeAndCapture(worldIrradiance, failure);
             failure = closeAndCapture(persistentLighting, failure);
             failure = closeAndCapture(terrainTraversalParamsBuffer, failure);
             failure = closeAndCapture(terrainBlasAddressBuffer, failure);

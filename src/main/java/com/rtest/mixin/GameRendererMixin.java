@@ -22,6 +22,14 @@ public abstract class GameRendererMixin {
         RayTracingProbe.beginRenderFrame();
     }
 
+    @Inject(method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
+        at = @At(value = "INVOKE", target =
+            "Lnet/minecraft/client/renderer/GameRenderer;renderItemInHand(Lnet/minecraft/client/renderer/state/level/CameraRenderState;FLorg/joml/Matrix4fc;)V"))
+    private void rtest$renderWorldRasterBeforeHand(DeltaTracker deltaTracker, CallbackInfo callbackInfo) {
+        if (com.rtest.client.RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.get()
+                && !com.rtest.client.OfflineRenderController.active()) RayTracingProbe.renderRtAfterHandCapture();
+    }
+
     @Inject(
         method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
         at = @At(
@@ -34,7 +42,8 @@ public abstract class GameRendererMixin {
         // The hand submission above produced the current frame's PBR item mesh. RT now consumes
         // that mesh and overwrites the temporary vanilla hand pixels before screen effects/UI.
         // If RT fails, those vanilla pixels remain as the complete fallback.
-        RayTracingProbe.renderRtAfterHandCapture();
+        if (!com.rtest.client.RayTracingClientConfig.INSTANCE.worldRasterDisplayEnabled.get()
+                || com.rtest.client.OfflineRenderController.active()) RayTracingProbe.renderRtAfterHandCapture();
     }
 
     @Inject(
