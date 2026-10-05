@@ -103,3 +103,11 @@ F9 的实验世界光栅显示开关对应 `worldRasterDisplayEnabled`，默认 
 ### Y 方向回归修复
 
 完整 RT 的图像行使用 +camera.up 随 Y 增加，最终合成沿用该合同。初版光栅负 viewport 高度增加了额外翻转，造成世界上下颠倒。修复为正 viewport 高度，同步改为 clockwise 正面判定、previous UV 正 Y，并以 fragCoord+jitter 恢复无抖动坐标。数学回归在修复前输出 rasterY=0.3725、RT Y=0.6275，修复后通过；实际 GPU 回读增加了跨行世界位置与非零抖动下静止运动检查，旧 fragment 失败、新 fragment 通过。完整 check/jar 的 65 个任务成功。
+
+### 太阳阴影自遮挡修复
+
+截图中的重复三角形暗斑有可复现的阴影深度错配原因：显示片元的深度被拿去与附近 shadow texel 中心的深度比较，常数 0.05 方块偏差不能覆盖倾斜接收面的采样误差。改为用 UV/深度屏幕导数求接收平面梯度，在同一个 texel 中心比较接收深度与遮挡深度。静态和动态太阳图共享该合同，不改变 GI 或太阳强度。
+
+GPU 工具增加 `plane` 与 `blocker` 用例，直接执行生产 fragment SPIR-V：旧 shader 的无遮挡平面在像素 (3,4) 错误变暗（0.017822，预期 0.217825）；新 shader 的 55 个平面像素全部保持受光，真实遮挡用例的 55 个像素全部保持阴影。原方向、非零抖动运动、透明裁剪、深度和材质用例继续通过。此测试隔离阴影读取，不替代完整阴影图生成与 Minecraft 画面验证；粗分辨率阴影边界仍有锯齿。
+
+复现命令：先通过 `worldRasterDisplayTest --args=/tmp/world-raster-light-fixed` 导出 SPIR-V，编译 `tools/gpu_world_raster_smoke.c`，分别传入 vertex/fragment 路径及 `plane`、`blocker`。

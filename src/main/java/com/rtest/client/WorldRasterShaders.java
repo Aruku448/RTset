@@ -52,6 +52,15 @@ final class WorldRasterShaders {
             layout(set=0,binding=7) uniform sampler2D staticSunDepth;
             layout(set=0,binding=8) uniform sampler2D dynamicSunDepth;
             layout(set=0,binding=9,std140) uniform SunShadow { mat4 lightMatrix; vec4 params; } shadow;
+            // Compare at the shadow texel center, not the display fragment position.
+            // A constant world-space epsilon cannot cover nearest-texel error on slopes.
+            float sunVisibility(sampler2D depthMap,vec2 coord,float depth,vec2 gradient) {
+                ivec2 size=textureSize(depthMap,0);
+                ivec2 cell=clamp(ivec2(floor(coord*vec2(size))),ivec2(0),size-1);
+                vec2 center=(vec2(cell)+0.5)/vec2(size);
+                float receiverDepth=depth+dot(gradient,center-coord);
+                return receiverDepth-shadow.params.y<=texelFetch(depthMap,cell,0).r?1.0:0.0;
+            }
             WorldDirectSample sunSample(vec3 point) {
                 WorldDirectSample sampleValue;
                 sampleValue.sourceWeight=camera.sunColor.rgb*camera.sun.w;
@@ -59,10 +68,15 @@ final class WorldRasterShaders {
                 if(shadow.params.x<0.5)return sampleValue;
                 vec4 clip=shadow.lightMatrix*vec4(point,1);
                 vec3 p=clip.xyz/max(clip.w,0.0001);
-                if(any(lessThan(p.xy,vec2(-1)))||any(greaterThan(p.xy,vec2(1)))||p.z<0||p.z>1)return sampleValue;
                 vec2 coord=p.xy*0.5+0.5;
-                float staticV=p.z-shadow.params.y<=texture(staticSunDepth,coord).r?1.0:0.0;
-                float dynamicV=p.z-shadow.params.y<=texture(dynamicSunDepth,coord).r?1.0:0.0;
+                vec2 dx=dFdx(coord),dy=dFdy(coord);
+                float zx=dFdx(p.z),zy=dFdy(p.z);
+                float determinant=dx.x*dy.y-dx.y*dy.x;
+                vec2 gradient=abs(determinant)>1e-20?
+                    vec2(zx*dy.y-zy*dx.y,zy*dx.x-zx*dy.x)/determinant:vec2(0);
+                if(any(lessThan(p.xy,vec2(-1)))||any(greaterThan(p.xy,vec2(1)))||p.z<0||p.z>1)return sampleValue;
+                float staticV=sunVisibility(staticSunDepth,coord,p.z,gradient);
+                float dynamicV=sunVisibility(dynamicSunDepth,coord,p.z,gradient);
                 // Joint same-point-source visibility. GI/sky are deliberately untouched.
                 sampleValue.staticVisibility=vec3(staticV);
                 sampleValue.fullVisibility=vec3(staticV*dynamicV);
