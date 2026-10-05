@@ -36,6 +36,8 @@
   "screen.rtest.settings.sunAngleOffset": "太阳时刻偏移（度）：%s",
   "screen.rtest.settings.sunAzimuthOffset": "太阳轨迹方位角（度）：%s",
   "screen.rtest.settings.dynamicEntityMvpEnabled": "实体/方块实体 RT：%s",
+  "screen.rtest.settings.persistentRtEnabled": "持久 RT 缓存（实验）",
+  "screen.rtest.settings.persistentRtEnabled.tip": "复用静态粗糙表面的间接照明，保留实时可见性与直接阴影。开启后使用完整渲染模式；返回游戏后生效。",
   "screen.rtest.settings.giBounces": "GI 路径预算：%s",
   "screen.rtest.settings.giBounces.value.1": "调试（1 GI）",
   "screen.rtest.settings.giBounces.value.2": "性能（2 GI）",

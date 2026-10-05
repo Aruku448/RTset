@@ -229,6 +229,15 @@ public final class RayTracingSettingsScreen extends Screen {
 
     private List<SettingsEntry> pathTracingEntries() {
         return List.of(
+            cycle("screen.rtest.settings.persistentRtEnabled", "screen.rtest.settings.persistentRtEnabled.tip", "off",
+                CycleButton.builder(value -> Component.translatable(value ? "options.on" : "options.off"),
+                        RayTracingClientConfig.INSTANCE.persistentRtEnabled.get())
+                    .withValues(true, false)
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.persistentRtEnabled"),
+                        (button, value) -> {
+                            RayTracingClientConfig.INSTANCE.persistentRtEnabled.set(value);
+                            if (value) RayTracingClientConfig.INSTANCE.rtEvaluationMode.set("full");
+                        })),
             cycle("screen.rtest.settings.giBounces", "screen.rtest.settings.giBounces.tip", "3",
                 CycleButton.builder(value -> Component.translatable("screen.rtest.settings.giBounces.value." + value),
                         RayTracingClientConfig.INSTANCE.giBounces.get())

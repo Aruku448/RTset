@@ -36,6 +36,8 @@
   "screen.rtest.settings.sunAngleOffset": "Sun time offset (degrees): %s",
   "screen.rtest.settings.sunAzimuthOffset": "Sun path azimuth (degrees): %s",
   "screen.rtest.settings.dynamicEntityMvpEnabled": "Entity/block-entity RT: %s",
+  "screen.rtest.settings.persistentRtEnabled": "Persistent RT cache (experimental)",
+  "screen.rtest.settings.persistentRtEnabled.tip": "Reuse indirect lighting on static rough surfaces while keeping current visibility and direct shadows. Enabling selects full rendering; takes effect when you return to the game.",
   "screen.rtest.settings.giBounces": "GI path budget: %s",
   "screen.rtest.settings.giBounces.value.1": "Debug (1 GI)",
   "screen.rtest.settings.giBounces.value.2": "Performance (2 GI)",
