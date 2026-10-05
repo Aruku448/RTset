@@ -101,6 +101,23 @@ public final class FluidGeometryCapture {
         return result;
     }
 
+    /** Vanilla corner weighting: full columns stay full; tall sources receive tenfold weight. */
+    static float cornerHeight(float self, float first, float second, float corner) {
+        if(self>=1 || first>=1 || second>=1 || corner>=1)return 1;
+        float sum=0,weight=0;
+        for(float h:new float[]{self,first,second,corner})if(h>=0){float w=h>=0.8F?10:1;sum+=h*w;weight+=w;}
+        return weight>0?sum/weight:0;
+    }
+
+    /** NW, SW, SE, NE in sprite-local coordinates, matching the native flowing top face. */
+    static float[] topUv(double x, double z) {
+        if(x==0 && z==0)return new float[]{0,0,0,1,1,1,1,0};
+        double angle=Math.atan2(z,x)-Math.PI/2;
+        float s=(float)Math.sin(angle)*0.25F,c=(float)Math.cos(angle)*0.25F;
+        return new float[]{0.5F-c-s,0.5F-c+s,0.5F-c+s,0.5F+c+s,
+            0.5F+c+s,0.5F+c-s,0.5F+c-s,0.5F-c-s};
+    }
+
     /** Returns the number of triangles emitted by the boundary decisions. */
     public static int triangleCount(Cell cell) {
         int faces = (cell.topBoundary() ? 1 : 0) + (cell.bottomBoundary() ? 1 : 0);

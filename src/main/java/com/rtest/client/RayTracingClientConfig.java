@@ -7,6 +7,7 @@ public final class RayTracingClientConfig {
     public static final ModConfigSpec SPEC;
     public static final RayTracingClientConfig INSTANCE;
 
+    public final PostProcessingSettings post;
     public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
     public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
@@ -87,6 +88,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
+        post = new PostProcessingSettings(builder);
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder
             .comment("Solar source intensity used consistently by direct sunlight, the physical sky and solar atmospheric scattering. Values above 2 allow bright daylight under fixed display exposure.")

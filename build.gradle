@@ -447,3 +447,9 @@ def settingsLayoutTest = tasks.register('settingsLayoutTest', JavaExec) {
     mainClass = 'com.rtest.client.SettingsLayoutTest'
 }
 tasks.named('test') { dependsOn settingsLayoutTest }
+
+def fluidFlowContinuityTest = tasks.register('fluidFlowContinuityTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.FluidFlowContinuityTest'
+}
+tasks.named('test') { dependsOn fluidFlowContinuityTest }

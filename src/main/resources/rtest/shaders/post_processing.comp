@@ -1,0 +1,409 @@
+#version 460
+#extension GL_EXT_samplerless_texture_functions : require
+// Independently expressed display pipeline. Source algorithms and units:
+// docs/sundial-post-processing-research-2026-10-06.md.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform texture2D scene;
+layout(binding = 1) uniform texture2D motion;
+layout(binding = 2) uniform texture2D depth;
+layout(binding = 3, rgba32f) uniform image2D history;
+layout(binding = 4, rgba16f) uniform image2D opticsImage;
+layout(binding = 5) uniform texture2D bloomTexture;
+layout(binding = 6, rgba16f) uniform writeonly image2D bloomLevel;
+layout(binding = 7, rgba16f) uniform image2D gradedImage;
+layout(binding = 8) uniform sampler linearClamp;
+#ifdef HDR_OUTPUT
+layout(binding = 9, rgba16f) uniform writeonly image2D displayImage;
+#else
+layout(binding = 9, rgba8) uniform writeonly image2D displayImage;
+#endif
+layout(binding = 11, rgba16f) uniform image2D dofImage;
+layout(binding = 12, rgba16f) uniform image2D cocImage;
+layout(binding = 10, std140) uniform Parameters {
+  vec4 exposure, grade, grading2, lens, effects, finish, dispersion,
+      environment, frame;
+  uvec4 dimensions;
+  vec4 options;
+}
+p;
+layout(push_constant) uniform Work { uint phase, level, levels, reserved; }
+work;
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+vec3 finiteColor(vec3 x) {
+  return any(isnan(x)) || any(isinf(x)) ? vec3(0)
+                                        : clamp(x, vec3(0), vec3(60000));
+}
+vec3 bt709(vec3 x) {
+  return mat3(1.660491, -0.1245505, -0.0181508, -0.5876411, 1.1328999,
+              -0.1005789, -0.0728499, -0.0083494, 1.1187297) *
+         x;
+}
+vec3 rec2020(vec3 x) {
+  return mat3(.627404, .069097, .016391, .329283, .919540, .088013, .043313,
+              .011362, .895595) *
+         x;
+}
+vec3 sampleScene(vec2 uv) {
+  return finiteColor(textureLod(sampler2D(scene, linearClamp), uv, 0).rgb);
+}
+float viewDepth(vec2 uv) {
+  ivec2 s = textureSize(depth, 0);
+  float d = texelFetch(depth, clamp(ivec2(uv * vec2(s)), ivec2(0), s - 1), 0).r;
+  return d > 1e-8 ? min(p.frame.z, p.frame.y / d) : p.frame.z;
+}
+float coc(float z, float focus) {
+  return clamp((z - focus) / (max(z, .001) * max(focus - p.lens.x, .01)) *
+                   p.lens.y * 15.0,
+               -p.effects.w, p.effects.w);
+}
+vec3 sampleLayer(vec2 uv, bool dof) {
+  vec2 at = clamp(uv * vec2(p.dimensions.xy) - .5, vec2(0),
+                  vec2(p.dimensions.xy) - 1);
+  ivec2 a = ivec2(floor(at)), b = min(a + 1, ivec2(p.dimensions.xy) - 1);
+  vec2 f = fract(at);
+  vec3 aa = dof ? imageLoad(dofImage, a).rgb : imageLoad(opticsImage, a).rgb,
+       ba = dof ? imageLoad(dofImage, ivec2(b.x, a.y)).rgb
+                : imageLoad(opticsImage, ivec2(b.x, a.y)).rgb,
+       ab = dof ? imageLoad(dofImage, ivec2(a.x, b.y)).rgb
+                : imageLoad(opticsImage, ivec2(a.x, b.y)).rgb,
+       bb = dof ? imageLoad(dofImage, b).rgb : imageLoad(opticsImage, b).rgb;
+  return mix(mix(aa, ba, f.x), mix(ab, bb, f.x), f.y);
+}
+vec3 sampleImage(vec2 uv) { return sampleLayer(uv, false); }
+
+vec3 temperature(float k) {
+  float t = k / 100;
+  vec3 x =
+      t <= 66
+          ? vec3(1, clamp(.39008158 * log(t) - .63184144, 0, 1),
+                 t <= 19 ? 0 : clamp(.54320679 * log(t - 10) - 1.196254, 0, 1))
+          : vec3(clamp(1.29293619 * pow(t - 60, -.13320476), 0, 1),
+                 clamp(1.12989086 * pow(t - 60, -.07551485), 0, 1), 1);
+  return pow(x, vec3(2.2));
+}
+vec3 uchimura(vec3 x) {
+  float m = .22, a = p.grade.y, l0 = .78 * .4 / a, s0 = m + l0, s1 = m + a * l0,
+        k = a / (1 - s1);
+  vec3 toe =
+      m * pow(max(x / m, vec3(0)), vec3(1.33 * p.grade.z)) + p.grading2.x;
+  vec3 line = m + a * (x - m), shoulder = 1 - (1 - s1) * exp(-k * (x - s0));
+  vec3 w0 = 1 - smoothstep(vec3(0), vec3(m), x), w2 = step(vec3(s0), x);
+  return toe * w0 + line * (1 - w0 - w2) + shoulder * w2;
+}
+vec3 aces(vec3 x) {
+  mat3 inputTransform = mat3(.59719, .076, .0284, .35458, .90834, .13383,
+                             .04823, .01566, .83777),
+       outputTransform = mat3(1.60475, -.10208, -.00327, -.53108, 1.10813,
+                              -.07276, -.07367, -.00605, 1.07602);
+  vec3 v = inputTransform * (x * 1.7),
+       f = (v * (v + .0245786) - .000090537) /
+           (v * (.983729 * v + .432951) + .238081);
+  return clamp(outputTransform * f, 0, 1);
+}
+vec3 agx(vec3 x) {
+  mat3 inset = mat3(.84247906, .04232824, .04237565, .0784336, .87846864,
+                    .0784336, .07922375, .07916613, .87914297);
+  mat3 outset = mat3(1.196879, -.05289685, -.05297164, -.09802088, 1.15190313,
+                     -.09804345, -.09902974, -.09896118, 1.15107367);
+  vec3 v = clamp((log2(max(inset * (x * 7), vec3(1e-10))) - p.grading2.z) /
+                     (p.grading2.w - p.grading2.z),
+                 0, 1);
+  v = ((((15.5 * v - 40.14) * v + 31.96) * v - 6.868) * v + .4298) * v * v +
+      .1191 * v - .00232;
+  if (p.options.x > 0.5) {
+    if (p.options.x < 1.5)
+      v *= vec3(1, .9, .5);
+    float exponent = p.options.x < 1.5 ? .8 : 1.35,
+          sat = p.options.x < 1.5 ? .8 : 1.4;
+    v = pow(max(v, vec3(0)), vec3(exponent));
+    v = mix(vec3(dot(v, LUMA)), v, sat);
+  }
+  return pow(max(outset * v, vec3(0)), vec3(2.2));
+}
+vec3 encode(vec3 x) {
+  return mix(1.055 * pow(max(x, vec3(0)), vec3(1 / 2.4)) - .055, 12.92 * x,
+             lessThanEqual(x, vec3(.0031308)));
+}
+// Existing Prime display operator, reused for the selectable Prime mode.
+// Prime licensing and permissions are preserved in
+// third_party/PRIME-LICENSE*.txt.
+const vec3 PRIME_NEUTRAL_WEIGHTS =
+    vec3(0.2120053547549465, 0.3921825078090138, 0.3958121374360396);
+const float PRIME_GAMUT_COMPRESSION = 0.04;
+const float PRIME_COMPRESSION_START = 0.18;
+
+vec3 rec2020ToBt709(vec3 color) {
+  return vec3(dot(vec3(1.6604910, -0.5876411, -0.0728499), color),
+              dot(vec3(-0.1245505, 1.1328999, -0.0083494), color),
+              dot(vec3(-0.0181508, -0.1005789, 1.1187297), color));
+}
+vec3 toVirtualRgb(vec3 color) {
+  float neutral = dot(color, PRIME_NEUTRAL_WEIGHTS);
+  return mix(color, vec3(neutral), PRIME_GAMUT_COMPRESSION);
+}
+vec3 fromVirtualRgb(vec3 color) {
+  float neutral = dot(color, PRIME_NEUTRAL_WEIGHTS);
+  return (color - PRIME_GAMUT_COMPRESSION * vec3(neutral)) /
+         (1.0 - PRIME_GAMUT_COMPRESSION);
+}
+float curveComponent(float value) {
+  if (value <= PRIME_COMPRESSION_START)
+    return value;
+  float distance = value - PRIME_COMPRESSION_START;
+  float extent = p.dispersion.w - PRIME_COMPRESSION_START;
+  return PRIME_COMPRESSION_START + extent / (1.0 + extent / distance);
+}
+vec3 encodeSrgb(vec3 linearRgb) {
+  bvec3 cutoff = lessThan(linearRgb, vec3(0.0031308));
+  vec3 higher = 1.055 * pow(max(linearRgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+  vec3 lower = linearRgb * 12.92;
+  return mix(higher, lower, cutoff);
+}
+vec3 rgbToHsv(vec3 color) {
+  float maximum = max(color.x, max(color.y, color.z));
+  float minimum = min(color.x, min(color.y, color.z));
+  float chroma = maximum - minimum;
+  float hue = 0.0;
+  if (chroma > 1.0e-7) {
+    if (maximum == color.x)
+      hue = (color.y - color.z) / chroma;
+    else if (maximum == color.y)
+      hue = (color.z - color.x) / chroma + 2.0;
+    else
+      hue = (color.x - color.y) / chroma + 4.0;
+    hue = fract(hue / 6.0);
+  }
+  return vec3(hue, maximum > 1.0e-7 ? chroma / maximum : 0.0, maximum);
+}
+vec3 hsvToRgb(vec3 hsv) {
+  vec3 primary = clamp(
+      abs(fract(hsv.x + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0,
+      0.0, 1.0);
+  return hsv.z * mix(vec3(1.0), primary, hsv.y);
+}
+vec3 protectHue(vec3 originalLinear, vec3 mappedDisplay) {
+  vec3 originalHsv = rgbToHsv(encodeSrgb(originalLinear));
+  vec3 mappedHsv = rgbToHsv(mappedDisplay);
+  if (originalHsv.y <= 1.0e-7 || mappedHsv.y <= 1.0e-7)
+    return mappedDisplay;
+  float hueOffset = originalHsv.x - mappedHsv.x;
+  hueOffset -= floor(hueOffset + 0.5);
+  mappedHsv.x = fract(mappedHsv.x + 0.5 * hueOffset);
+  return hsvToRgb(mappedHsv);
+}
+vec3 primeRgbReinhard(vec3 linearBt709) {
+  vec3 nonnegative = max(linearBt709, vec3(0.0));
+  vec3 working = toVirtualRgb(nonnegative);
+  vec3 mapped =
+      fromVirtualRgb(vec3(curveComponent(working.x), curveComponent(working.y),
+                          curveComponent(working.z)));
+  return protectHue(nonnegative, encodeSrgb(mapped));
+}
+vec3 decodeSrgb(vec3 c) {
+  return mix(pow((max(c, vec3(0)) + .055) / 1.055, vec3(2.4)), c / 12.92,
+             lessThanEqual(c, vec3(.04045)));
+}
+vec3 tone(vec3 x) {
+  int mode = int(p.finish.w);
+  if (mode == 0)
+    return uchimura(x);
+  if (mode == 1)
+    return aces(x);
+  if (mode == 2)
+    return agx(x);
+  return decodeSrgb(primeRgbReinhard(x));
+}
+vec3 graded(ivec2 at) {
+  return imageLoad(gradedImage, clamp(at, ivec2(0), ivec2(p.dimensions.xy) - 1))
+      .rgb;
+}
+void main() {
+  ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+  vec2 size = vec2(p.dimensions.xy), uv = (vec2(at) + .5) / size;
+  if (work.phase == 0u) {
+    if (any(notEqual(at, ivec2(0))))
+      return;
+    float sum = 0, weights = 0;
+    for (int y = 0; y < 16; y++)
+      for (int x = 0; x < 16; x++) {
+        vec2 q = (vec2(x, y) + .5) / 16., off = q - .5;
+        float w =
+            exp2(-max(off.x * off.x, off.y * off.y) * exp2(2 * p.exposure.z));
+        float b =
+            max(dot(max(bt709(sampleScene(q)), vec3(0)), LUMA) * .01, 1e-8);
+        sum += pow(b, 1 / p.exposure.w) * w;
+        weights += w;
+      }
+    float brightness = pow(sum / max(weights, 1e-8), p.exposure.w),
+          focus = p.lens.w > .5
+                      ? max(max(.3, p.lens.x + .01), viewDepth(vec2(.5)))
+                      : p.lens.z;
+    vec4 previous = p.frame.w > .5 ? vec4(brightness, focus, 1, 0)
+                                   : imageLoad(history, ivec2(0));
+    float rate = 1 - exp(-p.frame.x * (brightness < previous.x ? 4 : 2));
+    brightness = mix(previous.x, brightness, rate);
+    focus = p.lens.w > .5 ? 1.0 / mix(1.0 / max(previous.y, .01), 1.0 / focus,
+                                      1 - exp(-p.frame.x * 8))
+                          : max(focus, p.lens.x + .01);
+    float multiplier =
+        p.exposure.y > 0 ? pow(brightness + 1e-5, -p.exposure.y) * .2 : 1.;
+    imageStore(history, ivec2(0),
+               vec4(brightness, focus,
+                    clamp(multiplier * exp2(p.exposure.x), 1e-4, 1e4), 0));
+    return;
+  }
+  if (work.phase == 2u) {
+    ivec2 extent = imageSize(bloomLevel);
+    if (any(greaterThanEqual(at, extent)))
+      return;
+    vec2 q = (vec2(at) + .5) / vec2(extent);
+    vec3 color = vec3(0);
+    vec2 texel =
+        work.level == 0u
+            ? 1. / size
+            : 1. / vec2(textureSize(bloomTexture, int(work.level) - 1));
+    // Normalized tent filtering of ALL radiance, not a bright-pixel threshold.
+    for (int y = -1; y <= 1; y++)
+      for (int x = -1; x <= 1; x++) {
+        float w = float((x == 0 ? 2 : 1) * (y == 0 ? 2 : 1));
+        vec2 coord = q + vec2(x, y) * texel;
+        color +=
+            (work.level == 0u ? sampleImage(coord)
+                              : textureLod(sampler2D(bloomTexture, linearClamp),
+                                           coord, float(work.level) - 1)
+                                    .rgb) *
+            w / 16.;
+      }
+    imageStore(bloomLevel, at, vec4(finiteColor(color), 1));
+    return;
+  }
+  if (any(greaterThanEqual(at, ivec2(p.dimensions.xy))))
+    return;
+  if (work.phase == 6u) {
+    float focus = imageLoad(history, ivec2(0)).y,
+          original = p.effects.x > .5 ? coc(viewDepth(uv), focus) : 0,
+          nearRadius = min(original, 0);
+    if (p.effects.x > .5)
+      for (int i = 0; i < int(p.options.y); i++) {
+        float r = sqrt((float(i) + .5) / p.options.y) * p.effects.w,
+              a = float(i) * 2.39996323;
+        vec2 q = uv + vec2(cos(a), sin(a)) * r / size;
+        float sampleCoc = coc(viewDepth(q), focus);
+        if (sampleCoc < 0 && -sampleCoc >= r)
+          nearRadius = min(nearRadius, sampleCoc);
+      }
+    imageStore(cocImage, at, vec4(original, nearRadius, 0, 1));
+    return;
+  }
+  if (work.phase == 1u) {
+    float z = viewDepth(uv), focus = imageLoad(history, ivec2(0)).y;
+    vec2 radii = imageLoad(cocImage, at).xy;
+    float r = abs(radii.y) > abs(radii.x) ? radii.y : radii.x;
+    vec3 sum = sampleScene(uv);
+    float weight = 1;
+    int samples = int(p.options.y);
+    if (abs(r) > .25)
+      for (int i = 0; i < samples; i++) {
+        float radius = sqrt((float(i) + .5) / float(samples)),
+              a = float(i) * 2.39996323;
+        vec2 q = uv + vec2(cos(a), sin(a)) * radius * abs(r) / size;
+        float dz = viewDepth(q);
+        float w = dz < z - max(.05, z * .02)
+                      ? step(radius * abs(r), abs(coc(dz, focus)))
+                      : 1.;
+        sum += sampleScene(q) * w;
+        weight += w;
+      }
+    vec3 color = sum / weight;
+    imageStore(dofImage, at, vec4(finiteColor(color), 1));
+    return;
+  }
+  if (work.phase == 5u) {
+    float z = viewDepth(uv);
+    vec3 color = sampleLayer(uv, true);
+    ivec2 msize = textureSize(motion, 0);
+    vec2 velocity =
+        texelFetch(motion, clamp(ivec2(uv * vec2(msize)), ivec2(0), msize - 1),
+                   0)
+            .xy;
+    if (p.frame.w > .5 || any(isnan(velocity)) || any(isinf(velocity)))
+      velocity = vec2(0);
+    vec2 pixels = velocity * size * p.effects.y * .25;
+    pixels *= min(1., 64. / max(length(pixels), 1e-5));
+    if (length(pixels) > .1) {
+      vec3 trail = vec3(0);
+      float total = 0;
+      int n = int(p.options.z);
+      for (int i = 0; i < n; i++) {
+        vec2 q = uv + pixels / size * ((float(i) + .5) / float(n) - .5);
+        float dz = viewDepth(q);
+        float w = dz < z - max(.1, z * .05) ? 0. : 1.;
+        trail += sampleLayer(q, true) * w;
+        total += w;
+      }
+      if (total > 0)
+        color = mix(color, trail / total, clamp(length(pixels) * .3, 0, 1));
+    }
+    imageStore(opticsImage, at, vec4(finiteColor(color), 1));
+    return;
+  }
+  if (work.phase == 3u) {
+    vec2 q = uv, center = uv - .5;
+    float distortion = p.options.w;
+    q = .5 + center * (1 + distortion * dot(center, center)) /
+                 max(1 + distortion * .25, 1 + distortion * .5);
+    vec3 color = vec3(sampleImage(.5 + (q - .5) * (1 - p.dispersion.x)).r,
+                      sampleImage(.5 + (q - .5) * (1 - p.dispersion.y)).g,
+                      sampleImage(.5 + (q - .5) * (1 - p.dispersion.z)).b);
+    vec3 bloom = vec3(0);
+    float weights = 0;
+    for (uint i = 0u; i < work.levels; i++) {
+      float w = pow(.92, float(i) + 1);
+      bloom +=
+          textureLod(sampler2D(bloomTexture, linearClamp), q, float(i)).rgb * w;
+      weights += w;
+    }
+    bloom /= max(weights, 1e-6);
+    float haze = exp2(-p.environment.y * p.environment.y * p.environment.z *
+                      p.environment.x * .03 * viewDepth(q));
+    color = mix(bloom, color, haze);
+    float amount = .2 * p.finish.y + p.environment.w;
+    color = (color + bloom * amount) / (1 + amount * .5);
+    color *= exp(-2 * dot(center, center) * p.finish.x);
+    color = max(bt709(color), vec3(0)) * imageLoad(history, ivec2(0)).z;
+    color = mix(vec3(dot(color, LUMA)), color, p.grade.x) *
+            temperature(p.grading2.y);
+#ifdef HDR_OUTPUT
+    // Native HDR remains scene-linear; SDR operators must not clip highlights
+    // to one.
+    color = pow(clamp(color, vec3(0), vec3(pow(60000.0, p.grade.w))), vec3(1 / p.grade.w));
+    if (p.dimensions.z == 2u)
+      color = rec2020(color);
+#else
+    color = pow(clamp(encode(tone(color)), 0, 1), vec3(1 / p.grade.w));
+#endif
+    imageStore(gradedImage, at, vec4(finiteColor(color), 1));
+    return;
+  }
+  if (work.phase == 4u) {
+    vec3 c = graded(at), b = graded(at + ivec2(0, -1)),
+         d = graded(at + ivec2(-1, 0)), f = graded(at + ivec2(1, 0)),
+         h = graded(at + ivec2(0, 1));
+    vec3 lo = min(min(b, d), min(f, h)), hi = max(max(b, d), max(f, h));
+    float peak = p.dimensions.z == 0u ? 1. : max(1., max(c.r, max(c.g, c.b)));
+    vec3 hitMin = lo / max(4 * hi, vec3(1e-5)),
+         hitMax = (peak - hi) / min(4 * lo - peak, vec3(-1e-5));
+    vec3 lobe = max(-hitMin, hitMax);
+    float scalar =
+        max(-.18, min(max(lobe.r, max(lobe.g, lobe.b)), 0.)) * p.finish.z;
+    c = (c + scalar * (b + d + f + h)) / (1 + 4 * scalar);
+    if (p.dimensions.z == 0u) {
+      uint hash =
+          uint(at.x) * 1973u + uint(at.y) * 9277u + p.dimensions.w * 26699u;
+      hash = (hash ^ (hash >> 16)) * 2246822519u;
+      c += vec3((float(hash & 65535u) / 65535. - .5) * 2. / 255.);
+      c = clamp(c, 0, 1);
+    }
+    imageStore(displayImage, at, vec4(finiteColor(c), 1));
+  }
+}

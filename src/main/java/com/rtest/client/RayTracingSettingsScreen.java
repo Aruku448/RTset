@@ -21,21 +21,23 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.client.gui.narration.NarratableEntry;
 
 public final class RayTracingSettingsScreen extends Screen {
-    private static final int CATEGORY_COUNT = 5;
+    private static final int CATEGORY_COUNT = 6;
     private static final int ROW_HEIGHT = 30;
     private static final String[] CATEGORY_KEYS = {
         "screen.rtest.settings.category.lighting",
         "screen.rtest.settings.category.pathTracing",
         "screen.rtest.settings.category.reconstruction",
         "screen.rtest.settings.category.denoiser",
-        "screen.rtest.settings.category.output"
+        "screen.rtest.settings.category.output",
+        "screen.rtest.settings.category.post"
     };
     private static final String[] CATEGORY_DESCRIPTION_KEYS = {
         "screen.rtest.settings.category.lighting.description",
         "screen.rtest.settings.category.pathTracing.description",
         "screen.rtest.settings.category.reconstruction.description",
         "screen.rtest.settings.category.denoiser.description",
-        "screen.rtest.settings.category.output.description"
+        "screen.rtest.settings.category.output.description",
+        "screen.rtest.settings.category.post.description"
     };
 
     private final Screen parent;
@@ -52,7 +54,7 @@ public final class RayTracingSettingsScreen extends Screen {
 
     @Override
     protected void init() {
-        SettingsLayout layout = SettingsLayout.forScreen(this.width, this.height);
+        SettingsLayout layout = SettingsLayout.forScreen(this.width, this.height, CATEGORY_COUNT);
         int panelWidth = layout.width();
         int left = layout.left();
         this.addRenderableWidget(new StringWidget(left, 6, panelWidth, 20, this.title, this.font));
@@ -105,8 +107,67 @@ public final class RayTracingSettingsScreen extends Screen {
             case 2 -> reconstructionEntries();
             case 3 -> denoiserEntries();
             case 4 -> outputEntries();
+            case 5 -> postEntries();
             default -> List.of();
         };
+    }
+
+    private List<SettingsEntry> postEntries() {
+        var p = RayTracingClientConfig.INSTANCE.post;
+        return List.of(postToggle("enabled", p.enabled), postToggle("depthOfField", p.depthOfField),
+            postToggle("autofocus", p.autofocus), postToggle("rainBloomFog", p.rainBloomFog),
+            cycle("screen.rtest.settings.post.toneMapping", "screen.rtest.settings.post.toneMapping.tip",
+                "uchimura",
+                CycleButton.builder(value -> Component.literal(value.toString()), p.toneMapping.get())
+                    .withValues("uchimura", "aces", "agx", "prime")
+                    .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.post.toneMapping"),
+                        (button, value) -> p.toneMapping.set(value))),
+            slider("screen.rtest.settings.post.dofSamples", "screen.rtest.settings.post.dofSamples.tip", "10",
+                2D, 64D, p.dofSamples.get(), value -> p.dofSamples.set((int) Math.round(value))),
+            slider("screen.rtest.settings.post.motionSamples", "screen.rtest.settings.post.motionSamples.tip",
+                "8", 2D, 32D, p.motionSamples.get(), value -> p.motionSamples.set((int) Math.round(value))),
+            slider("screen.rtest.settings.post.agxLook", "screen.rtest.settings.post.agxLook.tip", "0", 0D,
+                2D, p.agxLook.get(), value -> p.agxLook.set((int) Math.round(value))),
+            postSlider("exposureEV", p.exposureEV, "0", -10D, 10D),
+            postSlider("autoExposureStrength", p.autoExposureStrength, "0.6", 0D, 1D),
+            postSlider("bloomIntensity", p.bloomIntensity, "1.2", 0D, 10D),
+            postSlider("vignetteStrength", p.vignetteStrength, "1", 0D, 5D),
+            postSlider("saturation", p.saturation, "1", 0D, 2D),
+            postSlider("contrast", p.contrast, "1", 0.1D, 2D),
+            postSlider("blackTightness", p.blackTightness, "1", 0.1D, 2D),
+            postSlider("minimumBrightness", p.minimumBrightness, "0", 0D, 0.1D),
+            postSlider("gamma", p.gamma, "1", 0.1D, 2D),
+            postSlider("colorTemperature", p.colorTemperature, "6500", 1000D, 40000D),
+            postSlider("focalLength", p.focalLength, "0.01", 0.001D, 1D),
+            postSlider("apertureScale", p.apertureScale, "0.26", 0.01D, 10D),
+            postSlider("manualFocusDepth", p.manualFocusDepth, "100", 0.1D, 500D),
+            postSlider("maxBlurRadius", p.maxBlurRadius, "16", 1D, 64D),
+            postSlider("motionStrength", p.motionStrength, "1", 0D, 4D),
+            postSlider("sharpenStrength", p.sharpenStrength, "0.5", 0D, 1D),
+            postSlider("chromaticR", p.chromaticR, "0", 0D, 0.3D),
+            postSlider("chromaticG", p.chromaticG, "0", 0D, 0.3D),
+            postSlider("chromaticB", p.chromaticB, "0", 0D, 0.3D),
+            postSlider("distortion", p.distortion, "0", -1D, 1D),
+            postSlider("rainBloomFogDensity", p.rainBloomFogDensity, "1", 0D, 10D),
+            postSlider("centerWeight", p.centerWeight, "4", 1D, 8D),
+            postSlider("exposureTendency", p.exposureTendency, "1", 0.1D, 8D),
+            postSlider("agxMinEV", p.agxMinEV, "-7.5", -15D, 5D),
+            postSlider("agxMaxEV", p.agxMaxEV, "6", 5.1D, 15D));
+    }
+    private SettingsEntry postSlider(String name,
+        net.neoforged.neoforge.common.ModConfigSpec.DoubleValue value, String defaultValue, double min,
+        double max) {
+        return slider("screen.rtest.settings.post." + name, "screen.rtest.settings.post." + name + ".tip",
+            defaultValue, min, max, value.get(), value::set);
+    }
+    private SettingsEntry postToggle(
+        String name, net.neoforged.neoforge.common.ModConfigSpec.BooleanValue value) {
+        return cycle("screen.rtest.settings.post." + name, "screen.rtest.settings.post." + name + ".tip",
+            "on",
+            CycleButton.builder(v -> Component.translatable(v ? "options.on" : "options.off"), value.get())
+                .withValues(true, false)
+                .create(0, 0, 320, 20, Component.translatable("screen.rtest.settings.post." + name),
+                    (button, v) -> value.set(v)));
     }
 
     private List<SettingsEntry> lightingEntries() {

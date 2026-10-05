@@ -88,6 +88,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
     private final Pass debugPass;
     private final Pass offlinePass;
     private final Pass displayPass;
+    private final RtestPostProcessing postProcessing;
 
     private RtestFsrSettings.Jitter previousJitter;
     private RtestFsrCamera previousCamera;
@@ -117,7 +118,8 @@ public final class RtestFsr3Upscaler implements Destroyable {
             Pass[] passes,
             Pass debugPass,
             Pass offlinePass,
-            Pass displayPass) {
+            Pass displayPass,
+            RtestPostProcessing postProcessing) {
         this.context = context;
         this.renderWidth = renderWidth;
         this.renderHeight = renderHeight;
@@ -136,6 +138,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
         this.debugPass = debugPass;
         this.offlinePass = offlinePass;
         this.displayPass = displayPass;
+        this.postProcessing = postProcessing;
     }
 
     public static RtestFsr3Upscaler create(
@@ -162,6 +165,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
         Pass debugPass = null;
         Pass offlinePass = null;
         Pass displayPass = null;
+        RtestPostProcessing postProcessing = null;
         try {
             resources = Resources.create(
                     context,
@@ -234,6 +238,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
                     mainConstants,
                     spdConstants,
                     rcasConstants);
+            postProcessing = new RtestPostProcessing(context,resources.fsrOutput,inputMotion,inputDepth,displayOutput);
             return new RtestFsr3Upscaler(
                     context,
                     renderWidth,
@@ -251,8 +256,9 @@ public final class RtestFsr3Upscaler implements Destroyable {
                     createdPasses.toArray(Pass[]::new),
                     debugPass,
                     offlinePass,
-                    displayPass);
+                    displayPass,postProcessing);
         } catch (RuntimeException | Error exception) {
+            if (postProcessing != null) postProcessing.close();
             if (displayPass != null) {
                 displayPass.destroy();
             }
@@ -377,6 +383,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
                     commandBuffer, this.spdConstants.handle(), 0L, spd);
         }
 
+        writeRcasConstants(this.rcasConstants);
         this.clearPerFrameResources(commandBuffer, reset);
         transferToComputeBarrier(commandBuffer, this.mainConstants, this.spdConstants);
 
@@ -425,19 +432,24 @@ public final class RtestFsr3Upscaler implements Destroyable {
             }
             computeBarrier(commandBuffer);
         }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer displayPush = stack.malloc(20).order(ByteOrder.nativeOrder());
-            displayPush.putInt(0, this.displayWidth);
-            displayPush.putInt(4, this.displayHeight);
-            displayPush.putInt(8,
-                    RayTracingClientConfig.INSTANCE.primeColorManagementEnabled.get() ? 1 : 0);
-            float outputPeak = HdrSupport.isActive() ? 16.0F : 1.0F;
-            PrimeRgbReinhardOutput.Parameters reinhard =
-                    PrimeRgbReinhardOutput.parameters(outputPeak);
-            displayPush.putFloat(12, reinhard.outputPeak());
-            displayPush.putFloat(16, reinhard.curvePeak());
-            this.displayPass.record(
-                    commandBuffer, 0, displayX, displayY, displayPush);
+        if (RayTracingClientConfig.INSTANCE.post.enabled.get() && debugView == RtestFsrDebugView.OFF && RayTracingClientConfig.INSTANCE.debugView.get() == 0) {
+            this.postProcessing.record(commandBuffer, token.deltaSeconds, reset, token.frameIndex);
+        } else {
+            this.postProcessing.disabled();
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                ByteBuffer displayPush = stack.malloc(20).order(ByteOrder.nativeOrder());
+                displayPush.putInt(0, this.displayWidth);
+                displayPush.putInt(4, this.displayHeight);
+                displayPush.putInt(8,
+                        RayTracingClientConfig.INSTANCE.primeColorManagementEnabled.get() ? 1 : 0);
+                float outputPeak = HdrSupport.isActive() ? 16.0F : 1.0F;
+                PrimeRgbReinhardOutput.Parameters reinhard =
+                        PrimeRgbReinhardOutput.parameters(outputPeak);
+                displayPush.putFloat(12, reinhard.outputPeak());
+                displayPush.putFloat(16, reinhard.curvePeak());
+                this.displayPass.record(
+                        commandBuffer, 0, displayX, displayY, displayPush);
+            }
         }
 
     }
@@ -530,7 +542,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
     }
 
     private static void writeRcasConstants(RtestVulkanBuffer destination) {
-        float linearSharpness = RtestFsrSettings.rcasLinearSharpness();
+        float linearSharpness = RayTracingClientConfig.INSTANCE.post.enabled.get() ? 0 : RtestFsrSettings.rcasLinearSharpness();
         int half = Float.floatToFloat16(linearSharpness) & 0xffff;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer buffer = stack.calloc(RCAS_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
@@ -814,6 +826,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
             return;
         }
         this.destroyed = true;
+        this.postProcessing.close();
         this.displayPass.destroy();
         this.offlinePass.destroy();
         this.debugPass.destroy();

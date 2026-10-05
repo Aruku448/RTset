@@ -11,13 +11,13 @@ public final class SettingsLayoutTest {
                 || !screen.contains("this.setX(left)") || !screen.contains("return Math.max(1, this.getWidth() - 20)"))
             throw new AssertionError("list call site must use viewport height, row height and actual panel bounds");
         int cases=0;
-        for(int w=320;w<=1920;w+=13)for(int h=180;h<=1080;h+=17) {
-            var p=SettingsLayout.forScreen(w,h);
+        for(int categories:new int[]{5,6})for(int w=320;w<=1920;w+=13)for(int h=180;h<=1080;h+=17) {
+            var p=SettingsLayout.forScreen(w,h,categories);
             if(p.left()<0 || p.left()+p.width()>w || p.listTop()>=p.listBottom()
                     || p.listBottom()+8>p.footerTop() || p.footerTop()+20>h)
                 throw new AssertionError("viewport/footer overlap at "+w+"x"+h);
             int tw=(p.width()-(p.tabColumns()-1)*4)/p.tabColumns();
-            for(int i=0;i<5;i++) {
+            for(int i=0;i<categories;i++) {
                 int x=p.left()+(i%p.tabColumns())*(tw+4),y=30+(i/p.tabColumns())*24;
                 if(x<p.left() || x+tw>p.left()+p.width() || y+20>p.listTop()-20)
                     throw new AssertionError("category overlaps content");
