@@ -93,3 +93,9 @@ cc -O2 -Wall -Wextra tools/gpu_persistent_rt_smoke.c -lvulkan -o /tmp/gpu_persis
 GPU 测试扩展为四组：原并发 snapshot、串行确定顺序的预算 2/预算 0、运行尺寸 65,536 槽双 bank。运行尺寸测试比较 3,147,015 words，零不合格差异（浮点最大 1 ULP）；6 MiB read→write copy 加 69 个训练/7 个查询的 median 约 0.36 ms。预算顺序 fixture 故意串行以验证确切接纳对象，不将它的时长当作并行吞吐性能。数据来自独立 Vulkan compute fixture，不包含实际 RT tail 或游戏帧率。
 
 生成 fixtures 后分别运行 `/tmp/persistent-rt-cache`、`/tmp/persistent-rt-cache-budget`、`/tmp/persistent-rt-cache-zero`、`/tmp/persistent-rt-cache-large` 对应的 `.spv`、`.seed`、`.expected` 文件即可。
+
+## F9 设置布局修复
+
+修正 Minecraft 26.2 列表构造 API：传入 viewport 高度与默认行高，避免滚动区域覆盖底部“完成”按钮。面板居中，宽度随 GUI 缩放后的屏幕自适应（最大 1000）。窄屏分类按钮分两行，设置单列；面板宽度达到 600 时设置双列，统一 30 的行高和 10 的列间距，底部保留独立区域。
+
+`settingsLayoutTest` 检查 6572 种 GUI 尺寸下的内容、分类、控件列和 footer 边界，并核对实际列表调用点。编译和 JAR 构建通过，尚无游戏内视觉截图验收。

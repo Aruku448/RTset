@@ -22,6 +22,7 @@ import net.minecraft.client.gui.narration.NarratableEntry;
 
 public final class RayTracingSettingsScreen extends Screen {
     private static final int CATEGORY_COUNT = 5;
+    private static final int ROW_HEIGHT = 30;
     private static final String[] CATEGORY_KEYS = {
         "screen.rtest.settings.category.lighting",
         "screen.rtest.settings.category.pathTracing",
@@ -51,54 +52,32 @@ public final class RayTracingSettingsScreen extends Screen {
 
     @Override
     protected void init() {
-        int center = this.width / 2;
-        int panelWidth = Math.min(420, this.width - 32);
-        int left = center - panelWidth / 2;
-
-        this.addRenderableWidget(new StringWidget(
-            center - 180,
-            8,
-            360,
-            20,
-            this.title,
-            this.font
-        ));
+        SettingsLayout layout = SettingsLayout.forScreen(this.width, this.height);
+        int panelWidth = layout.width();
+        int left = layout.left();
+        this.addRenderableWidget(new StringWidget(left, 6, panelWidth, 20, this.title, this.font));
 
         this.categoryButtons.clear();
-        int categoryWidth = panelWidth / CATEGORY_COUNT;
+        int categoryWidth = (panelWidth - (layout.tabColumns() - 1) * 4) / layout.tabColumns();
         for (int index = 0; index < CATEGORY_COUNT; index++) {
             int category = index;
             Button button = this.addRenderableWidget(Button.builder(
-                    Component.translatable(CATEGORY_KEYS[index]),
-                    ignored -> this.selectCategory(category))
-                .bounds(left + index * categoryWidth, 32, categoryWidth - 3, 20)
+                    Component.translatable(CATEGORY_KEYS[index]), ignored -> this.selectCategory(category))
+                .bounds(left + (index % layout.tabColumns()) * (categoryWidth + 4),
+                    30 + (index / layout.tabColumns()) * 24, categoryWidth, 20)
                 .build());
             this.categoryButtons.add(button);
         }
-
         this.categoryDescription = this.addRenderableWidget(new StringWidget(
-            left,
-            56,
-            panelWidth,
-            16,
-            Component.empty(),
-            this.font
-        ));
+            left, layout.listTop() - 20, panelWidth, 16, Component.empty(), this.font));
         this.categoryDescription.setMaxWidth(panelWidth);
-
+        this.categoryDescription.setTooltip(Tooltip.create(
+            Component.translatable(CATEGORY_DESCRIPTION_KEYS[this.selectedCategory])));
         this.settingsList = this.addRenderableWidget(new SettingsList(
-            this.minecraft,
-            panelWidth,
-            this.height,
-            76,
-            Math.max(110, this.height - 42)
-        ));
-
-        this.addRenderableWidget(
-            Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
-                .bounds(left, this.height - 32, panelWidth, 20)
-                .build()
-        );
+            this.minecraft, left, panelWidth, layout.listTop(), layout.listBottom(), layout.columns()));
+        this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
+            .bounds(left + (panelWidth - Math.min(240, panelWidth)) / 2, layout.footerTop(),
+                Math.min(240, panelWidth), 20).build());
         this.selectCategory(Math.min(this.selectedCategory, CATEGORY_COUNT - 1));
     }
 
@@ -106,6 +85,7 @@ public final class RayTracingSettingsScreen extends Screen {
         this.selectedCategory = category;
         if (this.categoryDescription != null) {
             this.categoryDescription.setMessage(Component.translatable(CATEGORY_DESCRIPTION_KEYS[category]));
+            this.categoryDescription.setTooltip(Tooltip.create(Component.translatable(CATEGORY_DESCRIPTION_KEYS[category])));
         }
         for (int index = 0; index < this.categoryButtons.size(); index++) {
             Component title = Component.translatable(CATEGORY_KEYS[index]);
@@ -526,21 +506,46 @@ public final class RayTracingSettingsScreen extends Screen {
     }
 
     private static final class SettingsList extends ContainerObjectSelectionList<SettingsEntry> {
-        private SettingsList(Minecraft minecraft, int width, int height, int top, int bottom) {
-            super(minecraft, width, height, top, bottom);
+        private final int columns;
+
+        private SettingsList(Minecraft minecraft, int left, int width, int top, int bottom, int columns) {
+            // 26.2 API: height and default row height, NOT screen height and bottom Y.
+            super(minecraft, width, bottom - top, top, ROW_HEIGHT);
+            this.columns = columns;
+            this.setX(left);
+            this.centerListVertically = false;
+        }
+
+        @Override
+        public int getRowWidth() {
+            return Math.max(1, this.getWidth() - 20);
         }
 
         private void setEntries(List<SettingsEntry> entries) {
-            this.replaceEntries(entries);
+            List<SettingsEntry> rows = new ArrayList<>();
+            for (int i = 0; i < entries.size(); i += this.columns) {
+                List<AbstractWidget> widgets = new ArrayList<>();
+                for (int j = i; j < Math.min(i + this.columns, entries.size()); j++) {
+                    widgets.addAll(entries.get(j).widgets);
+                }
+                rows.add(new SettingsEntry(widgets, this.columns));
+            }
+            this.replaceEntries(rows);
             this.setScrollAmount(0.0D);
         }
     }
 
     private static final class SettingsEntry extends ContainerObjectSelectionList.Entry<SettingsEntry> {
         private final List<AbstractWidget> widgets;
+        private final int columns;
 
         private SettingsEntry(AbstractWidget widget) {
-            this.widgets = List.of(widget);
+            this(List.of(widget), 1);
+        }
+
+        private SettingsEntry(List<AbstractWidget> widgets, int columns) {
+            this.widgets = List.copyOf(widgets);
+            this.columns = columns;
         }
 
         @Override
@@ -563,7 +568,7 @@ public final class RayTracingSettingsScreen extends Screen {
 
         @Override
         public int getHeight() {
-            return 36;
+            return ROW_HEIGHT;
         }
 
         @Override
@@ -588,10 +593,14 @@ public final class RayTracingSettingsScreen extends Screen {
             if (this.widgets == null || this.widgets.isEmpty()) {
                 return;
             }
-            AbstractWidget widget = this.widgets.get(0);
-            widget.setX(this.getContentX() + 4);
-            widget.setY(this.getContentY() + 6);
-            widget.setWidth(Math.max(100, this.getContentWidth() - 8));
+            int gap = 10;
+            int width = SettingsLayout.controlWidth(this.getContentWidth(), this.columns);
+            for (int i = 0; i < this.widgets.size(); i++) {
+                AbstractWidget widget = this.widgets.get(i);
+                widget.setX(this.getContentX() + 2 + i * (width + gap));
+                widget.setY(this.getContentY() + 3);
+                widget.setWidth(width);
+            }
         }
     }
 

@@ -448,3 +448,9 @@ def persistentRtMathTest = tasks.register('persistentRtMathTest', JavaExec) {
     if (project.hasProperty('persistent_rt_dump')) args project.property('persistent_rt_dump')
 }
 tasks.named('test') { dependsOn persistentRtMathTest }
+
+def settingsLayoutTest = tasks.register('settingsLayoutTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SettingsLayoutTest'
+}
+tasks.named('test') { dependsOn settingsLayoutTest }
