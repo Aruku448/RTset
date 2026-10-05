@@ -6,7 +6,8 @@ final class RayTracingShaderRaygen {
             String extension = "#extension GL_EXT_ray_tracing : require\n";
             return (first.replace(extension, extension + RayTracingAtmosphereShader.GLSL
                 + RayTracingAtmosphereSegmentShader.GLSL + RayTracingMoonShader.GLSL)
-                + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL);
+                + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL)
+                    .replace("// PERSISTENT_INDIRECT_FUNCTIONS", PersistentRtShader.GLSL);
         }
 
     static final String RAYGEN_SHADER = joinShaderParts("""
@@ -174,6 +175,7 @@ final class RayTracingShaderRaygen {
                 vec4 localPosition;
                 uint dynamicSlot;
                 uint emitterIndex;
+                uint staticBoundary;
             };
             // One traceRayEXT call carries exactly one payload object. Keep all primary
             // hit data in that object instead of assigning unrelated payload locations.
@@ -1405,8 +1407,13 @@ final class RayTracingShaderRaygen {
                 float maxCoord = max(max(abs(point.x), abs(point.y)), abs(point.z));
                 return max(DIELECTRIC_RAY_MIN_OFFSET, maxCoord * DIELECTRIC_RAY_ERROR_SCALE);
             }
+            // PERSISTENT_INDIRECT_FUNCTIONS
             void main() {
                 uint pixelIndex = gl_LaunchIDEXT.x + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y;
+                prtSampledInvocation = (pixelIndex & 255u) == 0u;
+                bool persistentTraining = false;
+                uint persistentKey[10];
+                pathPayload.staticBoundary = 0u;
                 vec2 jitteredPixel = vec2(gl_LaunchIDEXT.xy) + vec2(0.5) + camera.jitter.xy;
                 vec2 pixel = jitteredPixel / vec2(gl_LaunchSizeEXT.xy);
                 vec2 ndc = pixel * 2.0 - 1.0;
@@ -1477,7 +1484,7 @@ final class RayTracingShaderRaygen {
                 float diffuseHitDistance = 0.0;
                 float specularHitDistance = 0.0;
                 int giBounces = clamp(int(camera.parameters.w + 0.5), 1, 4);
-                int maxPathSegments = 1 + giBounces;
+                int maxPathSegments = camera.up.w > 0.5 ? 1 : 1 + giBounces;
                 float previousBsdfPdf = 1.0;
                 int previousSunNeeSamples = 1;
                 vec3 previousSurfaceNormal = vec3(0.0, 1.0, 0.0);
@@ -1507,9 +1514,10 @@ final class RayTracingShaderRaygen {
                     pathBaseColorRoughness = vec4(0.0);
                     pathMaterial = vec4(0.0);
                     pathOpticalLighting = vec4(0.0);
+                    prtCount(bounce == 0 ? 4u : 5u);
                     traceRayEXT(
                         topLevelAS,
-                        0,
+                        pathPayload.staticBoundary != 0u ? gl_RayFlagsNoOpaqueEXT : 0u,
                         (bounce == 0 ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK),
                         0,
                         0,
@@ -1530,6 +1538,7 @@ final class RayTracingShaderRaygen {
                     }
                     vec3 sunTemperatureColor = colorTemperature(camera.environment.y);
                     if (pathPosition.w < 0.5) {
+                        if (camera.up.w > 1.5) break;
                         if (insideMedium) throughput *= exp(-mediumAbsorption * max(camera.sun.w, 0.0));
                         if (bounce == 1) {
                             if (!primaryTransmissionPath
@@ -1669,6 +1678,11 @@ final class RayTracingShaderRaygen {
                         primaryNormal = normal;
                         primaryBaseColor = baseColor;
                         primaryRoughness = roughness;
+                    }
+                    if (camera.up.w > 1.5) {
+                        radiance = baseColor;
+                        emissionRadiance = baseColor;
+                        break;
                     }
                     float metallic = clamp(pathMaterial.x, 0.0, 1.0);
                     float emission = max(pathMaterial.y, 0.0);
@@ -2087,6 +2101,28 @@ final class RayTracingShaderRaygen {
                             spectralMasked = true;
                         }
                     } else {
+                        // Cache the conditional diffuse-proposal tail with the original PBR weights.
+                        // Specular proposals, entities, vegetation, water and special primary materials stay live.
+                        bool persistentEligible = bounce == 0 && prt.words[0] != 0u && !cameraInWater
+                            && !transmission && pathMaterial.w >= 0.0 && metallic <= 0.001
+                            && roughness >= 0.8 && emission == 0.0 && primaryDynamicSlot == 0xffffffffu
+                            && camera.parameters.z == 0.0;
+                        if (persistentEligible) {
+                            prtKey(primaryPosition, normal, viewDirection, baseColor, roughness, reflectivity, persistentKey);
+                            vec3 cachedDiffuse, cachedSpecular;
+                            bool forceRefresh = prt.words[4] != 0u && ((pixelIndex + prt.words[3]) & 15u) == 0u;
+                            if (!forceRefresh && prtLookup(persistentKey, cachedDiffuse, cachedSpecular)) {
+                                // A cache value is reused evidence, not a new NRD Monte Carlo observation.
+                                radiance += cachedDiffuse + cachedSpecular;
+                                emissionRadiance += cachedDiffuse + cachedSpecular;
+                                break;
+                            }
+                            persistentTraining = true;
+                            // Static indirect target: entities retain live primary/direct visibility.
+                            // Do not bake entity secondary visibility or shadow deltas into this cache.
+                            pathPayload.staticBoundary = uint(camera.dynamicParameters.x + 0.5);
+                            shadowExcludeDynamic = 1u;
+                        }
                         rayDirection = sampleCosineHemisphere(normal, scatterSample.xy);
                         BsdfValue sampled = evaluateBsdf(normal, viewDirection, rayDirection, baseColor,
                             roughness, metallic, reflectivity, diffuseMaterialWeight,
@@ -2120,6 +2156,9 @@ final class RayTracingShaderRaygen {
                     rayOrigin = pathPosition.xyz + offsetNormal * rayOffset;
                 }
             """, """
+                if (persistentTraining) prtTrain(persistentKey, indirectDiffuseRadiance, specularRadiance);
+                pathPayload.staticBoundary = 0u;
+                shadowExcludeDynamic = 0u;
                 // Diagnostic views bypass the denoiser by writing into the unfiltered direct/emission
                 // composition terms and zeroing the filtered indirect/specular payload.
                 uint debugView = uint(max(camera.parameters.z, 0.0) + 0.5);

@@ -440,3 +440,11 @@ def gpuLightTreeMathTest = tasks.register('gpuLightTreeMathTest', JavaExec) {
     if (project.hasProperty('gpu_tree_dump')) args 'dump', project.property('gpu_tree_dump'), (project.findProperty('gpu_tree_dump_count') ?: '5003')
 }
 tasks.named('test') { dependsOn gpuLightTreeMathTest }
+
+// Persistent-world research: compile actual cache functions and exercise pure policy math.
+def persistentRtMathTest = tasks.register('persistentRtMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.PersistentRtMathTest'
+    if (project.hasProperty('persistent_rt_dump')) args project.property('persistent_rt_dump')
+}
+tasks.named('test') { dependsOn persistentRtMathTest }

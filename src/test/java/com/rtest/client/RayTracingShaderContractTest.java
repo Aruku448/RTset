@@ -122,7 +122,7 @@ public final class RayTracingShaderContractTest {
         require(shader, "(bounce == 0 ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK)");
         require(shader, "SECONDARY_RAY_MASK,\n");
         require(shader, "int giBounces = clamp(int(camera.parameters.w + 0.5), 1, 4);");
-        require(shader, "int maxPathSegments = 1 + giBounces;");
+        require(shader, "int maxPathSegments = camera.up.w > 0.5 ? 1 : 1 + giBounces;");
         require(shader, "for (int bounce = 0; bounce < 5; bounce++) {");
         require(shader, "floatBitsToUint(camera.random.x)");
         require(shader, "floatBitsToUint(camera.random.y)");

@@ -13,6 +13,7 @@ final class RayTracingShaderStages {
                 vec4 localPosition;
                 uint dynamicSlot;
                 uint emitterIndex;
+                uint staticBoundary;
             };
             layout(location = 0) rayPayloadInEXT PathPayload pathPayload;
             #define pathPosition pathPayload.position
@@ -84,6 +85,7 @@ final class RayTracingShaderStages {
                 vec4 localPosition;
                 uint dynamicSlot;
                 uint emitterIndex;
+                uint staticBoundary;
             };
             layout(location = 0) rayPayloadInEXT PathPayload pathPayload;
             #define pathPosition pathPayload.position
@@ -250,11 +252,16 @@ final class RayTracingShaderStages {
                 vec4 localPosition;
                 uint dynamicSlot;
                 uint emitterIndex;
+                uint staticBoundary;
             };
             layout(location = 0) rayPayloadInEXT PathPayload pathPayload;
             hitAttributeEXT vec2 barycentrics;
             const float ALPHA_CUTOFF = 0.5;
             void main() {
+                if (pathPayload.staticBoundary != 0u && uint(gl_InstanceCustomIndexEXT) >= pathPayload.staticBoundary) {
+                    ignoreIntersectionEXT;
+                    return;
+                }
                 uint materialIndex = (uint(gl_InstanceCustomIndexEXT) + uint(gl_PrimitiveID)) * 7u;
                 vec4 uv2 = materials.entries[materialIndex + 3u];
                 // Ordinary opaque/transmissive hits have no alpha coverage work here.

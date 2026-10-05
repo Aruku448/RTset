@@ -7,6 +7,12 @@ public final class RayTracingClientConfig {
     public static final ModConfigSpec SPEC;
     public static final RayTracingClientConfig INSTANCE;
 
+    public final ModConfigSpec.BooleanValue persistentRtEnabled;
+    public final ModConfigSpec.BooleanValue persistentRtStatistics;
+    public final ModConfigSpec.ConfigValue<String> rtEvaluationMode;
+    public final ModConfigSpec.IntValue persistentRtUpdateIntervalMs;
+    public final ModConfigSpec.IntValue persistentRtMaxAgeMs;
+    public final ModConfigSpec.IntValue persistentRtMinimumSamples;
     public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
     public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
@@ -87,6 +93,18 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
+        persistentRtStatistics = builder.comment("Research counters sample every 256th pixel; logs are sampled counts, not full-image ray counts.")
+            .define("persistentRtStatistics", false);
+        persistentRtEnabled = builder.comment("Research branch: reuse static rough-surface indirect lighting snapshots. Current primary visibility and direct lighting remain live. Default off.")
+            .define("persistentRtEnabled", false);
+        rtEvaluationMode = builder.comment("Research cost probes: full, current_direct (no continuation), current_visibility (material/visibility only). Mode changes reset screen histories.")
+            .define("rtEvaluationMode", "full", value -> value instanceof String text && java.util.Set.of("full", "current_direct", "current_visibility").contains(text));
+        persistentRtUpdateIntervalMs = builder.comment("Minimum interval between cache training batches; not a GPU scheduling guarantee.")
+            .defineInRange("persistentRtUpdateIntervalMs", 50, 16, 1000);
+        persistentRtMaxAgeMs = builder.comment("Maximum age of reusable indirect samples. Expired/missing values trace full continuation.")
+            .defineInRange("persistentRtMaxAgeMs", 500, 50, 5000);
+        persistentRtMinimumSamples = builder.comment("Distinct update epochs needed before using a cache slot.")
+            .defineInRange("persistentRtMinimumSamples", 4, 1, 16);
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder
             .comment("Solar source intensity used consistently by direct sunlight, the physical sky and solar atmospheric scattering. Values above 2 allow bright daylight under fixed display exposure.")

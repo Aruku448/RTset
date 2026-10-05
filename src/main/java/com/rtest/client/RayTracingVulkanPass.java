@@ -152,6 +152,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private NativeBuffer materialBuffer;
         private NativeBuffer lightDataBuffer;
         private NativeBuffer pbrBuffer;
+        private PersistentRtLighting persistentLighting;
+        private int lastEvaluationMode = -1;
+        private boolean lastPersistentEnabled;
         // Optional compute-side terrain traversal resources. They are separate from the RT
         // descriptor set so the fixed ray shader ABI remains unchanged.
         private NativeBuffer terrainNodeMetadataBuffer;
@@ -668,6 +671,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer lightDataBuffer = null;
             GpuLightTreeBuilder lightTreeBuilder = null;
             NativeBuffer pbrBuffer = null;
+            PersistentRtLighting persistentLighting = null;
             NativeBuffer terrainNodeMetadataBuffer = null;
             NativeBuffer terrainBlasAddressBuffer = null;
             NativeBuffer terrainTraversalParamsBuffer = null;
@@ -760,6 +764,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     true
                 );
                 cameraBuffer = NativeBuffer.create(device, 304, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+                persistentLighting = new PersistentRtLighting(device);
                 long materialFloatCount = materialFloatCount(geometry, dynamicSlotCapacity);
                 materialBuffer = NativeBuffer.create(
                     device,
@@ -983,7 +988,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 shaderModules[8] = skyCdfHit.handle;
 
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 42 : 31, stack);
+                    bindings.get(physicalAtmosphere ? 41 : 30).binding(41)
+                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+                        .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
                     bindings.get(physicalAtmosphere ? 39 : 28).binding(39)
                         .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
@@ -1086,7 +1094,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
                     poolSizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(2);
-                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(8);
+                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(9);
                     poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(physicalAtmosphere ? 2 : 1);
                     poolSizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                         .descriptorCount(5 + PLAYER_SKIN_DESCRIPTOR_COUNT);
@@ -1167,7 +1175,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .sType$Default().pAccelerationStructures(stack.longs(skybox.cdfHandle()));
                     var skyCdfMetadataInfo = VkDescriptorBufferInfo.calloc(1, stack)
                         .buffer(skybox.cdfMetadataBuffer()).offset(0).range(SkyCdfGeometry.METADATA_BYTES);
-                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 42 : 31, stack);
+                    var persistentInfo = VkDescriptorBufferInfo.calloc(1, stack).buffer(persistentLighting.buffer.buffer)
+                        .offset(0).range(persistentLighting.buffer.size);
+                    writes.get(physicalAtmosphere ? 41 : 30).sType$Default().dstSet(descriptorSet).dstBinding(41)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(persistentInfo);
                     writes.get(physicalAtmosphere ? 39 : 28).sType$Default().pNext(skyCdfAccelerationInfo)
                         .dstSet(descriptorSet).dstBinding(39).descriptorCount(1)
                         .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
@@ -1421,6 +1433,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         atmosphereRequested
                     );
                     resources.gpuLightTreeBuilder = lightTreeBuilder;
+                    resources.persistentLighting = persistentLighting;
                     blasCache.commit(sectionBlas);
                     blasCache.trim(activeKeys);
                     encoder = null;
@@ -1458,6 +1471,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 closeDuringFailure(topLevel, throwable);
                 closeDuringFailure(shaderBindingTable, throwable);
                 closeDuringFailure(pbrBuffer, throwable);
+                closeDuringFailure(persistentLighting, throwable);
                 closeDuringFailure(terrainTraversalParamsBuffer, throwable);
                 closeDuringFailure(terrainBlasAddressBuffer, throwable);
                 closeDuringFailure(terrainNodeMetadataBuffer, throwable);
@@ -2518,7 +2532,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 buffer.putFloat(12, moonDirectionX);
                 buffer.putFloat(16, forward.x()).putFloat(20, forward.y()).putFloat(24, forward.z()).putFloat(28, (float)Math.toRadians(sunAngularRadiusDegrees));
                 buffer.putFloat(32, -left.x()).putFloat(36, -left.y()).putFloat(40, -left.z()).putFloat(44, sunShadowSamples);
-                buffer.putFloat(48, up.x()).putFloat(52, up.y()).putFloat(56, up.z()).putFloat(60, 0.0F);
+                buffer.putFloat(48, up.x()).putFloat(52, up.y()).putFloat(56, up.z())
+                    .putFloat(60, PersistentRtPolicy.mode(config.rtEvaluationMode.get()));
                 buffer.putFloat(64, tanHalfFov).putFloat(68, aspect)
                     // parameters.z carries the RT diagnostic view selector; it is never used to
                     // scale physical path throughput.
@@ -2588,6 +2603,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     // Previously unused lane: legacy PNG sampling; atmosphere LUT is independent.
                     .putFloat(296, this.skyboxTextureEnabled ? 1.0F : 0.0F)
                     .putFloat(300, pbrParallaxFlags | (cameraInWater ? 4 : 0));
+                int evaluationMode = PersistentRtPolicy.mode(config.rtEvaluationMode.get());
+                if (evaluationMode == 2) {
+                    buffer.putFloat(104, 0.0F);
+                    this.aerialPerspectiveEnabled = false;
+                }
+                this.persistentLighting.prepare(this.descriptorSet, this.geometry, this.atmosphere,
+                    SkyboxOpacityCurve.resolveOpacity(skyboxDaylightOpacityEnabled, skyboxTextureOpacity,
+                        skyLightLevel, level.getOverworldClockTime()), buffer, evaluationMode);
             }
             if (this.atmosphere != null) {
                 this.atmosphereEyeRadiusKm = com.rtest.client.atmosphere.AtmosphereCoordinates.eyeRadiusKm(
@@ -2781,17 +2804,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (this.dynamicBlasRetirement.completed()) this.dynamicInstances.retireCompleted();
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
+                this.persistentLighting.logRetired(this.pendingFrameGpuIndex);
                 double[] gpuMilliseconds = readGpuTimestamps(stack);
                 if (gpuMilliseconds != null && this.pendingFrameGpuIndex % 120 == 0) {
                     LOGGER.info(
-                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={}",
+                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={} pre_trace_ms={} rt_pipeline_ms={}",
                         this.pendingFrameGpuIndex,
                         formatGpuMs(gpuMilliseconds[0]),
                         formatGpuMs(gpuMilliseconds[1]),
                         formatGpuMs(gpuMilliseconds[2]),
                         formatGpuMs(gpuMilliseconds[3]),
                         gpuTimestampPeriodNs,
-                        formatGpuMs(gpuMilliseconds[4]));
+                        formatGpuMs(gpuMilliseconds[4]),
+                        formatGpuMs(gpuMilliseconds[5]),
+                        formatGpuMs(gpuMilliseconds[6]));
                 }
                 if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
                     logTerrainTraversalStats(this.pendingFrameGpuIndex);
@@ -2891,6 +2917,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastMoonPhaseToken = nextMoonPhaseToken;
                 this.lastMoonIntensity = nextMoonIntensity;
             }
+            int evaluationMode = PersistentRtPolicy.mode(RayTracingClientConfig.INSTANCE.rtEvaluationMode.get());
+            boolean persistentEnabled = RayTracingClientConfig.INSTANCE.persistentRtEnabled.get();
+            if (evaluationMode != this.lastEvaluationMode || persistentEnabled != this.lastPersistentEnabled) {
+                this.fsr.requestReset();
+                this.lastEvaluationMode = evaluationMode;
+                this.lastPersistentEnabled = persistentEnabled;
+            }
             RtestFsr3Upscaler.FrameToken fsrToken = this.fsr.beginFrame(
                 currentCamera, this.geometry.revision(), this.atlasImageView, this.atlasSampler);
             updateCamera(level, camera, fsrToken, currentCamera);
@@ -2937,6 +2970,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.topLevelUpdatePending = false;
                 this.dynamicInstances.historyResetSubmitted();
                 this.fsr.submitted(fsrToken);
+                this.persistentLighting.submitted();
                 if (frameIndex % 120 == 0) {
                     RayTracingDynamicInstances.Stats dynamicStats = this.dynamicInstances.stats();
                     LOGGER.info(
@@ -3465,6 +3499,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             writeGpuTimestamp(commandBuffer, 5,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
+            this.persistentLighting.recordBeforeTrace(commandBuffer, stack);
             VK10.vkCmdBindPipeline(commandBuffer, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VK10.vkCmdBindDescriptorSets(
                 commandBuffer,
@@ -3609,13 +3644,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[5];
+            double[] milliseconds = new double[7];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[3] = this.terrainTraversalEnabled
                 ? (values.get(5) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0 : 0.0;
             milliseconds[4] = (values.get(7) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
+            milliseconds[5] = (values.get(0) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0;
+            milliseconds[6] = (values.get(3) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
             return milliseconds;
         }
 
@@ -3746,6 +3783,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(gpuLightTreeBuilder, failure);
             failure = closeAndCapture(lightDataBuffer, failure);
             failure = closeAndCapture(pbrBuffer, failure);
+            failure = closeAndCapture(persistentLighting, failure);
             failure = closeAndCapture(terrainTraversalParamsBuffer, failure);
             failure = closeAndCapture(terrainBlasAddressBuffer, failure);
             failure = closeAndCapture(terrainNodeMetadataBuffer, failure);
