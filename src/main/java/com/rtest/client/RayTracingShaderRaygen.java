@@ -216,6 +216,10 @@ final class RayTracingShaderRaygen {
                 uint vertexIndex;
                 uint pathIndex;
             };
+            bool persistentWorldTransport = false;
+            float persistentWorldRadius = 6360.0;
+            bool persistentUnitSky = false;
+            float physicalAtmSolarIntensity() { return persistentUnitSky ? 12.5 : max(camera.settings.x, 0.0); }
             const uint PRIME_SOBOL_BURLEY_TABLE[4][32] = uint[4][32](
                 uint[32](
                     0x00000001u, 0x00000002u, 0x00000004u, 0x00000008u,
@@ -456,7 +460,7 @@ final class RayTracingShaderRaygen {
                 float aerosolPhase = atmosphereAerosolPhase(phaseCosine);
                 vec3 moonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
                 float lunarIrradiance = moonIrradiance(camera.jitter.w);
-                bool lunarValid = lunarIrradiance > 0.0 && moonDirectionValid(moonDirection);
+                bool lunarValid = !persistentUnitSky && lunarIrradiance > 0.0 && moonDirectionValid(moonDirection);
                 vec3 moon = lunarValid ? normalize(moonDirection) : vec3(0.0, 1.0, 0.0);
                 float lunarRayleighPhase = atmosphereRayleighPhase(dot(direction, moon));
                 float lunarAerosolPhase = atmosphereAerosolPhase(dot(direction, moon));
@@ -645,7 +649,7 @@ final class RayTracingShaderRaygen {
                 }
                 vec3 moonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
                 float lunarIrradiance = moonIrradiance(camera.jitter.w);
-                bool lunarValid = lunarIrradiance > 0.0 && moonDirectionValid(moonDirection);
+                bool lunarValid = !persistentUnitSky && lunarIrradiance > 0.0 && moonDirectionValid(moonDirection);
                 vec3 moon = lunarValid ? normalize(moonDirection) : vec3(0.0, 1.0, 0.0);
                 float lunarNu = dot(ray, moon);
                 float solarPhaseCoordinate = physicalAtmPhaseCoord(nu);
@@ -751,8 +755,8 @@ final class RayTracingShaderRaygen {
                     }
                     vec3 solarResidual = directStep * (rgbShadow - vec3(1.0)) * shadowWeight;
                     inscatter += (directStep * rgbShadow * shadowWeight + multipleStep)
-                        * (max(camera.settings.x, 0.0) / PATM_SPACE_SUN);
-                    skyShadowCorrection += solarResidual * (max(camera.settings.x, 0.0) / PATM_SPACE_SUN);
+                        * (physicalAtmSolarIntensity() / PATM_SPACE_SUN);
+                    skyShadowCorrection += solarResidual * (physicalAtmSolarIntensity() / PATM_SPACE_SUN);
                     if (lunarValid) {
                         vec3 lunarShadow = vec3(1.0);
                         if (shadowWeight > 0.0 && shadowStrength != 0.0
@@ -1407,12 +1411,49 @@ final class RayTracingShaderRaygen {
                 float maxCoord = max(max(abs(point.x), abs(point.y)), abs(point.z));
                 return max(DIELECTRIC_RAY_MIN_OFFSET, maxCoord * DIELECTRIC_RAY_ERROR_SCALE);
             }
+            // World updates evaluate the shared medium at the world vertex, not the display-eye sky LUT.
+            vec3 persistentSunT(vec3 direction) {
+#ifdef RTEST_ATMOSPHERE_LUT
+                if (persistentWorldTransport && physicalAtmosphereEnabled())
+                    return physicalAtmRec2020Transmittance(physicalAtmSunT(
+                        max(persistentWorldRadius - PATM_BOTTOM_KM, 0.0), direction.y));
+#endif
+                return physicalAtmosphereSunTransmittance(direction);
+            }
+            vec3 persistentSky(vec3 direction, vec3 source, bool moon) {
+#ifdef RTEST_ATMOSPHERE_LUT
+                if (persistentWorldTransport && physicalAtmosphereEnabled()) {
+                    PrimeSampleBase skySample = primeMakeSampleBase(uvec2(0u), 0u, 0u, 0u, 0u);
+                    vec3 t, l, correction;
+                    persistentUnitSky = true;
+                    integratePhysicalAtmosphereSegment(vec3(0.0), direction, 1.0e9, source,
+                        persistentWorldRadius, 8, true, 0.0, 1.0, skySample, t, l, correction);
+                    persistentUnitSky = false;
+                    return l;
+                }
+#endif
+                return moon ? physicalAtmosphereMoonSky(direction, source) : physicalAtmosphereSky(direction, source);
+            }
+            layout(push_constant) uniform PersistentWork { uint phase; } persistentWork;
             // PERSISTENT_INDIRECT_FUNCTIONS
             void main() {
                 uint pixelIndex = gl_LaunchIDEXT.x + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y;
                 prtSampledInvocation = (pixelIndex & 255u) == 0u;
-                bool persistentTraining = false;
+                bool persistentWorker = persistentWork.phase == 1u;
+                persistentWorldTransport = persistentWorker;
+                bool persistentQueryPending = false;
                 uint persistentKey[10];
+                uint persistentSlot = 0u;
+                uint persistentSampleIndex = 0u;
+                if (persistentWorker) {
+                    uint jobs = min(prt.words[38], prt.words[8] + 1u);
+                    if (gl_LaunchIDEXT.x >= min(jobs, prt.words[10])) return;
+                    persistentSlot = prt.words[prt.words[39] + (prt.words[11] + gl_LaunchIDEXT.x) % jobs];
+                }
+                vec3 persistentOrigin, persistentDirection;
+                if (persistentWorker && (!prtLoadJob(persistentSlot, persistentKey, persistentOrigin, persistentDirection)
+                    || !prtReserve(persistentKey))) return;
+                if (persistentWorker) persistentSampleIndex = prtNextSample(persistentSlot);
                 pathPayload.staticBoundary = 0u;
                 vec2 jitteredPixel = vec2(gl_LaunchIDEXT.xy) + vec2(0.5) + camera.jitter.xy;
                 vec2 pixel = jitteredPixel / vec2(gl_LaunchSizeEXT.xy);
@@ -1423,11 +1464,16 @@ final class RayTracingShaderRaygen {
                         + camera.up.xyz * (ndc.y * camera.parameters.x)
                 );
                 vec3 rayOrigin = camera.origin.xyz;
+                if (persistentWorker) {
+                    rayOrigin = persistentOrigin - vec3(uintBitsToFloat(prt.words[32]), uintBitsToFloat(prt.words[33]), uintBitsToFloat(prt.words[34]));
+                    rayDirection = persistentDirection;
+                    pathPayload.staticBoundary = uint(camera.dynamicParameters.x + 0.5);
+                }
                 float rayTMin = 0.001;
                 vec3 throughput = vec3(1.0);
                 // A single active medium covers the closed vanilla glass/water surfaces. Nested
                 // media remain a bounded approximation, but each segment gets physical attenuation.
-                bool cameraInWater = (uint(camera.pbrParallaxSettings.w + 0.5) & 4u) != 0u;
+                bool cameraInWater = !persistentWorker && (uint(camera.pbrParallaxSettings.w + 0.5) & 4u) != 0u;
                 vec3 mediumAbsorption = cameraInWater ? vec3(0.09, 0.045, 0.015) : vec3(0.0);
                 bool insideMedium = cameraInWater;
                 vec3 radiance = vec3(0.0);
@@ -1435,7 +1481,7 @@ final class RayTracingShaderRaygen {
                 vec3 specularRadiance = vec3(0.0);
                 vec3 directDiffuseRadiance = vec3(0.0);
                 vec3 directSpecularRadiance = vec3(0.0);
-                shadowExcludeDynamic = 0u;
+                shadowExcludeDynamic = persistentWorker ? 1u : 0u;
                 vec3 dynamicDiffuseDelta = vec3(0.0);
                 vec3 dynamicSpecularDelta = vec3(0.0);
                 float primaryDirectDistance = 0.0;
@@ -1484,7 +1530,7 @@ final class RayTracingShaderRaygen {
                 float diffuseHitDistance = 0.0;
                 float specularHitDistance = 0.0;
                 int giBounces = clamp(int(camera.parameters.w + 0.5), 1, 4);
-                int maxPathSegments = camera.up.w > 0.5 ? 1 : 1 + giBounces;
+                int maxPathSegments = persistentWorker ? giBounces : (camera.up.w > 0.5 ? 1 : 1 + giBounces);
                 float previousBsdfPdf = 1.0;
                 int previousSunNeeSamples = 1;
                 vec3 previousSurfaceNormal = vec3(0.0, 1.0, 0.0);
@@ -1506,6 +1552,13 @@ final class RayTracingShaderRaygen {
                     // Consecutive temporal indices preserve Sobol coverage. Vertex/effect/dimension
                     // seeds already isolate each bounce and sampling domain.
                     sampleBase.sampleIndex = floatBitsToUint(camera.random.x);
+                    if (persistentWorker) sampleBase.sampleIndex = persistentSampleIndex;
+                    if (persistentWorker) {
+                        sampleBase.pixel = uvec2(persistentSlot, 0u);
+                        sampleBase.sampleEpoch = prt.words[35];
+                        persistentWorldRadius = clamp(6360.0 + (rayOrigin.y + uintBitsToFloat(prt.words[33]) + 64.0) * 0.001
+                            + uintBitsToFloat(prt.words[36]) * 0.001, 6360.0, 6479.999);
+                    }
                     pathPosition = vec4(0.0);
                     pathLocalPosition = vec4(0.0);
                     pathDynamicSlot = 0xffffffffu;
@@ -1514,11 +1567,11 @@ final class RayTracingShaderRaygen {
                     pathBaseColorRoughness = vec4(0.0);
                     pathMaterial = vec4(0.0);
                     pathOpticalLighting = vec4(0.0);
-                    prtCount(bounce == 0 ? 4u : 5u);
+                    prtCount(persistentWorker ? 9u : (bounce == 0 ? 4u : 5u));
                     traceRayEXT(
                         topLevelAS,
                         pathPayload.staticBoundary != 0u ? gl_RayFlagsNoOpaqueEXT : 0u,
-                        (bounce == 0 ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK),
+                        ((bounce == 0 && !persistentWorker) ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK),
                         0,
                         0,
                         0,
@@ -1528,6 +1581,21 @@ final class RayTracingShaderRaygen {
                         camera.sun.w,
                         0
                     );
+                    // Confirm current first-secondary visibility before reusing directional incident radiance.
+                    // This preserves primary MIS and rejects current entity occlusion without an extra trace.
+                    if (!persistentWorker && bounce == 1 && persistentQueryPending
+                            && pathPosition.w >= 0.5 && pathMaterial.y <= 0.0 && pathDynamicSlot == 0xffffffffu) {
+                        vec3 incoming, unused;
+                        if (prtLookup(persistentKey, incoming, unused)) {
+                            vec3 cachedContribution = throughput * incoming;
+                            radiance += cachedContribution;
+                            emissionRadiance += cachedContribution;
+                            break;
+                        }
+                        prtCount(2u);
+                    }
+                    // Sky/emitter first-hit paths retain their current primary MIS in the display pass.
+                    if (persistentWorker && bounce == 0 && (pathPosition.w < 0.5 || pathMaterial.y > 0.0)) { prtCount(3u); return; }
                     if (bounce == 0 && pathPosition.w >= 0.5) {
                         primaryPosition = pathPosition.xyz;
                         primaryLocalPosition = pathLocalPosition;
@@ -1536,6 +1604,9 @@ final class RayTracingShaderRaygen {
                         primaryMaterial = pathMaterial;
                         primaryHit = true;
                     }
+                    if (persistentWorker && pathPosition.w >= 0.5)
+                        persistentWorldRadius = clamp(6360.0 + (pathPosition.y + uintBitsToFloat(prt.words[33]) + 64.0) * 0.001
+                            + uintBitsToFloat(prt.words[36]) * 0.001, 6360.0, 6479.999);
                     vec3 sunTemperatureColor = colorTemperature(camera.environment.y);
                     if (pathPosition.w < 0.5) {
                         if (camera.up.w > 1.5) break;
@@ -1564,7 +1635,7 @@ final class RayTracingShaderRaygen {
                             vec3 skyRadiance;
                             if (physicalAtmosphereEnabled()) {
                                 // LUT is already linear Rec.2020, calibrated at sun scale 12.5.
-                                skyRadiance = throughput * physicalAtmosphereSky(rayDirection, camera.sun.xyz)
+                                skyRadiance = throughput * persistentSky(rayDirection, camera.sun.xyz, false)
                                     * (camera.settings.x / 12.5) * weatherVisibility;
                                 vec3 moonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
                                 float moonIrradianceValue = moonIrradiance(camera.jitter.w);
@@ -1572,7 +1643,7 @@ final class RayTracingShaderRaygen {
                                     // The reflected-solar Moon spectrum is an explicit approximation:
                                     // share the solved medium and scale its unit-solar response by
                                     // the phase-resolved lunar irradiance.
-                                    skyRadiance += throughput * physicalAtmosphereMoonSky(rayDirection, moonDirection)
+                                    skyRadiance += throughput * persistentSky(rayDirection, moonDirection, true)
                                         * (moonIrradianceValue / 12.5) * weatherVisibility;
                                 }
 #ifdef RTEST_ATMOSPHERE_LUT
@@ -1613,7 +1684,7 @@ final class RayTracingShaderRaygen {
                                 if (physicalAtmosphereEnabled()) {
                                     // Clip/transmit the actual disk ray, not the sun centre.
                                     skyRadiance += throughput * vec3(camera.settings.x / max(sunSolidAngle(), 1.0e-8))
-                                        * physicalAtmosphereSunTransmittance(rayDirection) * sunMisWeight * weatherVisibility;
+                                        * persistentSunT(rayDirection) * sunMisWeight * weatherVisibility;
                                 } else {
                                     skyRadiance += throughput * vec3(camera.settings.x / max(sunSolidAngle(), 1.0e-8))
                                         * sunTemperatureColor * sunMisWeight * daylight * weatherVisibility;
@@ -1625,7 +1696,7 @@ final class RayTracingShaderRaygen {
                                 vec3(camera.origin.w, camera.environment.w, camera.jitter.z), camera.jitter.w);
                             if (dot(moonRadiance, vec3(1.0)) > 0.0) {
                                 vec3 moonTransmittance = physicalAtmosphereEnabled()
-                                    ? physicalAtmosphereSunTransmittance(rayDirection)
+                                    ? persistentSunT(rayDirection)
                                     : vec3(rayDirection.y > 0.0 ? 1.0 : 0.0);
                                 float moonMisWeight = (bounce == 0 || previousWasDelta) ? 1.0
                                     : powerHeuristic(previousBsdfPdf, 1.0 / max(moonSolidAngle(), 1e-8));
@@ -1679,7 +1750,7 @@ final class RayTracingShaderRaygen {
                         primaryBaseColor = baseColor;
                         primaryRoughness = roughness;
                     }
-                    if (camera.up.w > 1.5) {
+                    if (!persistentWorker && camera.up.w > 1.5) {
                         radiance = baseColor;
                         emissionRadiance = baseColor;
                         break;
@@ -1754,7 +1825,7 @@ final class RayTracingShaderRaygen {
                     float night = clamp(camera.environmentState.w, 0.0, 1.0);
                     float daylight = 1.0 - night;
                     float weatherVisibility = clamp(1.0 - rain * 0.55 - thunder * 0.25, 0.25, 1.0);
-                    int sunSampleCount = bounce == 0
+                    int sunSampleCount = bounce == 0 && !persistentWorker
                         ? clamp(int(camera.right.w + 0.5), 1, 16) : 1;
                     previousSunNeeSamples = sunSampleCount;
                     float vegetationKind = transmission ? 0.0 : max(-pathMaterial.w, 0.0);
@@ -1780,7 +1851,7 @@ final class RayTracingShaderRaygen {
                             ? vegetationSunResponse(normal, viewDirection, sampledSunDirection,
                                 roughness, vegetationKind) : 0.0;
                         vec3 sunResponse = physicalAtmosphereEnabled()
-                            ? physicalAtmosphereSunTransmittance(sampledSunDirection)
+                            ? persistentSunT(sampledSunDirection)
                             : sunTemperatureColor * daylight;
                         if (all(equal(sunResponse, vec3(0.0)))) continue;
                         shadowTransmittance = vec3(1.0);
@@ -1854,7 +1925,7 @@ final class RayTracingShaderRaygen {
                             sampleBase, PRIME_SAMPLE_EFFECT_DIRECT_MOON, uint(bounce)));
                         float moonCosine = max(dot(normal, sampledMoonDirection), 0.0);
                         vec3 lunarT = physicalAtmosphereEnabled()
-                            ? physicalAtmosphereSunTransmittance(sampledMoonDirection)
+                            ? persistentSunT(sampledMoonDirection)
                             : vec3(sampledMoonDirection.y > 0.0 ? 1.0 : 0.0);
                         vec3 lunarLi = visibleMoonRadiance(sampledMoonDirection, moonDirection, camera.jitter.w) * lunarT;
                         if (moonCosine > 0.0 && dot(lunarLi, vec3(1.0)) > 0.0) {
@@ -1955,12 +2026,12 @@ final class RayTracingShaderRaygen {
                                 - clamp(camera.environmentState.z, 0.0, 1.0) * 0.25, 0.25, 1.0);
 #ifdef RTEST_ATMOSPHERE_LUT
                             if (physicalAtmosphereEnabled()) {
-                                incidentSky = physicalAtmosphereSky(sampledSkyDirection, camera.sun.xyz)
+                                incidentSky = persistentSky(sampledSkyDirection, camera.sun.xyz, false)
                                     * (max(camera.settings.x, 0.0) / 12.5) * skyWeather;
                                 vec3 skyMoonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
                                 float skyMoonIrradiance = moonIrradiance(camera.jitter.w);
                                 if (skyMoonIrradiance > 0.0 && moonDirectionValid(skyMoonDirection)) {
-                                    incidentSky += physicalAtmosphereMoonSky(sampledSkyDirection, skyMoonDirection)
+                                    incidentSky += persistentSky(sampledSkyDirection, skyMoonDirection, true)
                                         * (skyMoonIrradiance / 12.5) * skyWeather;
                                 }
                                 if (camera.pbrParallaxSettings.z > 0.5 && atmosphereCamera.parameters.y > 0.0) {
@@ -2101,38 +2172,24 @@ final class RayTracingShaderRaygen {
                             spectralMasked = true;
                         }
                     } else {
-                        // Cache the conditional diffuse-proposal tail with the original PBR weights.
-                        // Specular proposals, entities, vegetation, water and special primary materials stay live.
-                        bool persistentEligible = bounce == 0 && prt.words[0] != 0u && !cameraInWater
-                            && !transmission && pathMaterial.w >= 0.0 && metallic <= 0.001
-                            && roughness >= 0.8 && emission == 0.0 && primaryDynamicSlot == 0xffffffffu
-                            && camera.parameters.z == 0.0;
-                        if (persistentEligible) {
-                            prtKey(primaryPosition, normal, viewDirection, baseColor, roughness, reflectivity, persistentKey);
-                            vec3 cachedDiffuse, cachedSpecular;
-                            bool forceRefresh = prt.words[4] != 0u && ((pixelIndex + prt.words[3]) & 15u) == 0u;
-                            bool cacheHit = prtLookup(persistentKey, cachedDiffuse, cachedSpecular);
-                            persistentTraining = (!cacheHit || forceRefresh) && prtReserve(persistentKey);
-                            if (cacheHit && !persistentTraining) {
-                                // A cache value is reused evidence, not a new NRD Monte Carlo observation.
-                                radiance += cachedDiffuse + cachedSpecular;
-                                emissionRadiance += cachedDiffuse + cachedSpecular;
-                                break;
-                            }
-                            prtCount(cacheHit ? 3u : 2u);
-                            if (persistentTraining) {
-                                // Static indirect target; unreserved misses use the full live fallback.
-                                pathPayload.staticBoundary = uint(camera.dynamicParameters.x + 0.5);
-                                shadowExcludeDynamic = 1u;
-                            }
-                        }
                         rayDirection = sampleCosineHemisphere(normal, scatterSample.xy);
                         BsdfValue sampled = evaluateBsdf(normal, viewDirection, rayDirection, baseColor,
                             roughness, metallic, reflectivity, diffuseMaterialWeight,
                             diffuseProbability, specularProbability, receiverEnergy);
                         float sampledCosine = max(dot(normal, rayDirection), 0.0);
                         if (bounce == 0) primaryDiffuseShare = bsdfDiffuseShare(sampled);
-                        throughput *= sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);
+                        vec3 scatterWeight = sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);
+                        bool persistentEligible = !persistentWorker && bounce == 0 && prt.words[0] != 0u
+                            && !cameraInWater && !transmission && pathMaterial.w >= 0.0 && metallic <= 0.001
+                            && roughness >= 0.8 && emission == 0.0 && primaryDynamicSlot == 0xffffffffu
+                            && camera.parameters.z == 0.0;
+                        if (persistentEligible) {
+                            vec3 worldOrigin = vec3(uintBitsToFloat(prt.words[32]),uintBitsToFloat(prt.words[33]),uintBitsToFloat(prt.words[34]));
+                            prtKey(primaryPosition + worldOrigin, normal, rayDirection, baseColor, roughness, reflectivity, persistentKey);
+                            persistentQueryPending = true;
+                            prtEnqueue(persistentKey, primaryPosition + worldOrigin + normal * 0.003, rayDirection);
+                        }
+                        throughput *= scatterWeight;
                         previousBsdfPdf = sampled.pdf;
                         previousWasDelta = false;
                     }
@@ -2159,7 +2216,10 @@ final class RayTracingShaderRaygen {
                     rayOrigin = pathPosition.xyz + offsetNormal * rayOffset;
                 }
             """, """
-                if (persistentTraining) prtStoreReserved(persistentKey, indirectDiffuseRadiance, specularRadiance);
+                if (persistentWorker) {
+                    prtStoreReserved(persistentKey, radiance, vec3(0.0));
+                    return; // Worker never writes display pixels, NRD guides, motion or atmosphere segments.
+                }
                 pathPayload.staticBoundary = 0u;
                 shadowExcludeDynamic = 0u;
                 // Diagnostic views bypass the denoiser by writing into the unfiltered direct/emission

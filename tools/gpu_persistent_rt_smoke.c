@@ -29,6 +29,8 @@ int main(int argc,char **argv) {
     size_t code_bytes,seed_bytes,expected_bytes;
     uint32_t *code=read_file(argv[1],&code_bytes),*seed=read_file(argv[2],&seed_bytes),*expected=read_file(argv[3],&expected_bytes);
     if(seed_bytes!=expected_bytes || seed_bytes<256 || (seed[8]!=255 && seed[8]!=65535)){fprintf(stderr,"bad seed\n");return 1;}
+    int world=seed[42]==0x50525432u;
+    uint32_t trainers=seed[world?41:33],queries=seed[world?44:35],output=seed[world?45:36];
     VkApplicationInfo app={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="RTest persistent cache smoke",.apiVersion=VK_API_VERSION_1_2};
     VkInstanceCreateInfo ici={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app};
     VkInstance instance;CHECK(vkCreateInstance(&ici,NULL,&instance));
@@ -99,10 +101,14 @@ int main(int argc,char **argv) {
     barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_HOST_WRITE_BIT;
     barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
-    dispatch(cmd,layout,0,seed[33],0);
+    dispatch(cmd,layout,0,trainers,0);
     barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
-    dispatch(cmd,layout,0,seed[35],1);
+    if(world) {
+        dispatch(cmd,layout,0,trainers,1);
+        vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
+    }
+    dispatch(cmd,layout,0,queries,world?2:1);
     barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
     vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&barrier,0,NULL,0,NULL);
     vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,query_pool,1);
@@ -124,15 +130,25 @@ int main(int argc,char **argv) {
     size_t mismatches=0;uint32_t *actual=mapped;
     uint32_t max_ulp=0;
     for(size_t i=0;i<seed_bytes/4;i++)if(actual[i]!=expected[i]) {
+        if(world && i>=seed[39] && i<seed[39]+expected[38])continue;
         int float_word=(i>=seed[1] && i<seed[2]+(seed[2]-seed[1]) && (i-seed[1])%24>=12 && (i-seed[1])%24<=17)
-            || (i>=seed[36] && (i-seed[36])%7!=0);
+            || (i>=output && (i-output)%7!=0);
         uint32_t ulp=actual[i]>expected[i]?actual[i]-expected[i]:expected[i]-actual[i];
         if(float_word && expected[i]<0x7f800000u && actual[i]<0x7f800000u && ulp<=2) {if(ulp>max_ulp)max_ulp=ulp;continue;}
         if(mismatches<8) {fprintf(stderr,"word %zu expected %08x got %08x\n",i,expected[i],actual[i]);}
         mismatches++;
     }
+    if(world) {
+        // Compact list insertion order is nondeterministic; verify the same unique slot set.
+        for(uint32_t j=0;j<expected[38];j++) {
+            uint32_t slot=actual[seed[39]+j]; int found=0;
+            for(uint32_t k=0;k<expected[38];k++)if(expected[seed[39]+k]==slot)found=1;
+            for(uint32_t k=0;k<j;k++)if(actual[seed[39]+k]==slot)found=0;
+            if(!found){fprintf(stderr,"invalid/duplicate job slot %u\n",slot);mismatches++;}
+        }
+    }
     printf("Float average maximum ULP difference: %u (limit 2); integer/key comparisons exact\n",max_ulp);
-    printf("GPU persistent cache on %s: trainers=%u queries=%u compared_words=%zu mismatches=%zu\n",props.deviceName,seed[33],seed[35],seed_bytes/4,mismatches);
+    printf("GPU persistent cache on %s: trainers=%u queries=%u compared_words=%zu mismatches=%zu\n",props.deviceName,trainers,queries,seed_bytes/4,mismatches);
     vkDestroyQueryPool(device,query_pool,NULL);
     vkDestroyFence(device,fence,NULL);vkDestroyCommandPool(device,command_pool,NULL);vkDestroyPipeline(device,pipeline,NULL);
     vkDestroyPipelineLayout(device,layout,NULL);vkDestroyDescriptorPool(device,pool,NULL);vkDestroyDescriptorSetLayout(device,set_layout,NULL);

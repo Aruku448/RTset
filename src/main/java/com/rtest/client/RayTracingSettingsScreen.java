@@ -218,6 +218,12 @@ public final class RayTracingSettingsScreen extends Screen {
                             RayTracingClientConfig.INSTANCE.persistentRtEnabled.set(value);
                             if (value) RayTracingClientConfig.INSTANCE.rtEvaluationMode.set("full");
                         })),
+            slider("screen.rtest.settings.persistentWorldTrainingBudget", "screen.rtest.settings.persistentWorldTrainingBudget.tip",
+                "8192", 0.0D, 65536.0D, RayTracingClientConfig.INSTANCE.persistentWorldTrainingBudget.get(),
+                value -> RayTracingClientConfig.INSTANCE.persistentWorldTrainingBudget.set((int)Math.round(value))),
+            slider("screen.rtest.settings.persistentWorldMaxAgeMs", "screen.rtest.settings.persistentWorldMaxAgeMs.tip",
+                "2000", 100.0D, 10000.0D, RayTracingClientConfig.INSTANCE.persistentWorldMaxAgeMs.get(),
+                value -> RayTracingClientConfig.INSTANCE.persistentWorldMaxAgeMs.set((int)Math.round(value))),
             cycle("screen.rtest.settings.giBounces", "screen.rtest.settings.giBounces.tip", "3",
                 CycleButton.builder(value -> Component.translatable("screen.rtest.settings.giBounces.value." + value),
                         RayTracingClientConfig.INSTANCE.giBounces.get())

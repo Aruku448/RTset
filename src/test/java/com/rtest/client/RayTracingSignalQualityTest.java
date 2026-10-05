@@ -25,7 +25,9 @@ public final class RayTracingSignalQualityTest {
         String scatter = shader.substring(shader.indexOf("if (canTransmit && choice"),
             shader.indexOf("// RR follows emission"));
         equal(count(scatter, "if (bounce == 0) primaryDiffuseShare = bsdfDiffuseShare(sampled);"), 2);
-        equal(count(scatter, "throughput *= sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);"), 2);
+        equal(count(scatter, "throughput *= sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);"), 1);
+        require(scatter, "vec3 scatterWeight = sampled.f * sampledCosine / max(sampled.pdf, 1.0e-6);");
+        require(scatter, "throughput *= scatterWeight;");
         require(scatter, "throughput *= transmissionColor;");
         require(scatter, "throughput *= mirrorF / max(specularProbability, 1.0e-6);");
         reject(scatter, "primaryDiffuseShare = vec3(1.0)");
@@ -49,7 +51,7 @@ public final class RayTracingSignalQualityTest {
         require(shader, "float diffuseSignalDistance = diffuseHitDistance;");
         require(shader, "float specularSignalDistance = specularHitDistance;");
         reject(shader, "primaryHitDistance > 0.0 ? primaryHitDistance");
-        require(shader, "sampleBase.sampleIndex = floatBitsToUint(camera.random.x);");
+        require(shader, "if (persistentWorker) sampleBase.sampleIndex = persistentSampleIndex;");
         reject(shader, "floatBitsToUint(camera.random.x) * 4u");
         require(shader, "sampleBase.vertexIndex = uint(bounce);");
         require(function(shader, "uint primeSampleBaseSeed("), "return primeHashCombine(seed, base.vertexIndex);");

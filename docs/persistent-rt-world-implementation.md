@@ -1,101 +1,81 @@
-# Persistent RT World：首阶段运行实现
+# Persistent RT World：独立世界照明更新原型
 
-日期：2026-10-05。研究分支：`persistent-rt-world-research`。
+本阶段替换原先 inline、带主表面权重的尾部缓存。世界照明和显示追踪现在使用两个独立 RT dispatch，仍在同一 Vulkan 队列顺序执行。默认关闭，通过 F9 → 路径追踪 → 持久 RT 缓存（实验）开启。
 
-## 实际交付
+## 当前实现
 
-每个显示帧继续计算当前 primary visibility、材质、直接太阳/月光/天空/面光源、实体和动态阴影。仅在静态、非发光、不透明、非草木、非金属、roughness >= 0.8 的主表面选择 diffuse proposal 时，查询持久的间接路径尾部缓存。缓存失效或未成熟时执行原来的 continuation。镜面 proposal、透明、水下、实体主表面、特殊材质和诊断视图仍走实时路径。
+```text
+当前相机 → primary + direct + 第一条 secondary 可见性
+                        ├─ 成熟世界缓存 → 当前 PBR 权重 × incident radiance
+                        └─ 缺失/过期 → 完整实时 continuation
+                        ↓ 发布世界射线种子
+独立世界 dispatch（默认间隔 50 ms，最多 8192 seeds）
+    → 轮询持久任务表 → 静态多跳追踪 → 写入下一快照
+    → 下一帧发布，不依赖任务仍在屏幕内
+```
 
-缓存目标是**带主表面 PBR 权重、以 diffuse proposal 为条件的路径尾部贡献**，保存 diffuse/specular 两个分量。它不是通用 irradiance，也不是完整屏幕颜色。保留原来的混合 BSDF PDF、RR 和介质吞吐权重，不除以反照率，不重复累加主表面 NEE。specular proposal 完整追踪，因此缓存的条件期望只替换对应 proposal 的尾部。
+缓存目标是世界坐标位置沿某个入射方向的 `Li`。显示路径使用当前视角的 `f * cos / proposalPdf` 权重，世界任务不包含主表面的观察方向或吞吐权重。天空/发光面作为第一条 secondary 命中时继续实时计算，保留主表面 MIS；实体遮挡第一条 secondary 时也不复用静态估计。镜面 proposal、透明、水下、实体主表面和诊断视图继续实时。
 
-训练的尾部忽略动态二次几何及其阴影；实体 primary/direct 和直接动态阴影继续按当前帧计算。**动态实体对间接照明的影响尚未实现**。启用实验会改变这部分间接照明，不能将它当作与完整实时参考完全等价的优化。
+独立任务从种子的第一条 secondary 开始追踪，最多 `giBounces` 个路径段。当前主表面直接照明不包含在缓存内，因此不会重复累加 NEE。世界任务忽略动态二次几何及阴影；更深层动态间接照明仍未覆盖。查询的第一条 secondary 可见性保留实时，命中后省去该表面的着色和后续路径，而非省去全部 secondary traversal。
+
+世界任务的大气查询使用世界顶点高度与共享介质、消光和多重散射表，避免采样显示相机高度的天空 LUT。天空源按单位太阳响应分别计算太阳与月亮，再应用照明强度。使用 8 步大气积分，地表天空边界闭合仍是近似；与显示天空 LUT 不保证逐像素相等。天空 CDF 可以继续作为重要性采样 proposal，它的 PDF 配套使用，不作为世界照明目标。
 
 ## 资源与同步
 
-- Binding 41：32 个 uint 的控制/统计头，两个 bank，每个 bank 65,536 个 24-word 槽。约 12 MiB；禁用时只分配 128-byte dummy。
-- 当前 GPU 帧退役后 CPU 更新头；仅训练刷新帧将 read bank 复制到独立 write bank，RT 只查询 read bank；其余帧不复制也不交换 bank。
-- 在追踪尾部前，每个槽每个训练帧最多一个 invocation 通过 CAS 获得写入权；唯一槽位预留使用原子 ticket，接纳数严格不超过配置预算（默认 4096）。其他 invocation 不读取该 write 槽的键和值。跨帧发布依赖现有提交、barrier 和 fence，而非槽 owner 字段。
-- 训练帧提交成功后选择下一读 bank；下一帧使用它前等待上一帧结束。场景或光照失效时清空两个 bank。
-- 最多累计 16 个更新样本，随后使用 1/16 EMA；样本非有限、负值或任一通道超过 8192 时拒绝训练。有效零值可命中。
-- 每个槽最低默认 4 个更新样本才可复用。默认最大年龄 500 ms，按实际单调时钟计算，支持 uint 毫秒环绕。更新批次默认间隔 50 ms，低显示帧率会延迟批次；成熟槽在更新帧按屏幕像素和 epoch 轮换选择约 1/16 强制刷新。
+Binding 41：64-word 头、两个 65,536 × 24-word 照明 bank、一个同大小任务 bank、65,536 个紧凑任务索引；约 18.25 MiB。禁用时只使用 256-byte dummy。
 
-键包含 0.5-block 空间单元、量化法线、量化观察方向、精确 RGB/roughness/reflectivity。观察方向属于键，承认目标的 PBR 视角依赖；正常相机移动不全局清空缓存，新键未命中后补路径。Hash 冲突进行完整键比较，不将碰撞值当作命中。空间、方向量化会带来偏差，且相邻表面存在漏光风险；仍需要游戏内对照。
+1. 上一 GPU 帧退役后，CPU 更新控制头；几何或照明失效时准备清空。
+2. 刷新帧复制 read → write（6 MiB），非刷新帧不复制、不交换 bank。
+3. 显示 dispatch 只查询旧照明快照，CAS 发布每槽最多一个世界种子。新槽一次性加入紧凑索引表。
+4. RT write → RT read/write barrier 后执行世界 dispatch，按 cursor 轮询任务。每槽每批最多一次写入；过期任务跳过，且不会产生额外追踪。
+5. 提交成功后选择新 read bank，下一帧 fence 保证写入完成。每个种子独立递增 Sobol 序号，避免轮询间隔冻结低位序列；任务键被碰撞替换时重置该序号。世界任务在图像、NRD guides、motion、大气视线合成之前返回。
 
-几何对象替换（包括保持 temporal revision 的增量区块更新）、大气 LUT 对象替换、启停及照明状态改变触发清空。方向、太阳强度、天气和天空盒不透明度采用有限量化容差；其余相关 camera 照明/材质参数精确比较。新视线的大气仍按当前帧计算。
+世界种子最后发现时间超过 10 秒后不再训练，但索引槽保留以避免重复入队。最多累计 16 个更新样本，然后使用 1/16 EMA；非有限、负值或任一通道大于 8192 的目标被拒绝。有效黑值允许命中。
 
-## NRD 合同
+键：0.5-block 空间单元、量化法线、量化入射方向、精确主表面 RGB/roughness/reflectivity。完整键比较防止 hash 碰撞误命中。观察方向不在键内。空间/方向量化仍可能漏光或偏差；远世界坐标的 float 精度仍有限。
 
-缓存命中绕过 NRD，借用已有 unfiltered emission/composite 通道累加复用贡献，不将同一个缓存估计反复作为新 Monte Carlo 观测。新直接照明和真正新采样的路径仍保留原来的 NRD AOV；实体直接阴影的 signed residual 保持现有独立处理。缓存目标在大气前生成，当前视线合成仍为 `surface * T_new + L_new`。切换评估模式或启停实验请求屏幕历史重置。
+相机位姿变化不全局失效。相同静态区块仅重打包、相对几何原点变化时可以保留缓存；真实区块增删、顶点/材质改变、场景 revision、大气资源或照明状态改变仍全量清空。区块流入流出会影响预热，这是尚未实现区域失效的限制。太阳方向/强度等采用有限量化容差，其他相关照明参数精确比较。
 
-命中与未命中的 AOV 分配不同、条件 proposal 选择、离散键与 EMA 均可能造成闪烁或收敛差异。这一合同通过编译和源契约检查，尚未获得游戏内运动画质验证。
+## NRD 与显示合成
 
-## 使用与测量
+缓存估计借用已有 unfiltered composition 通道，不反复充当 NRD 的新 Monte Carlo 样本。新直接照明和实时 fallback 继续原 NRD AOV；实体直接阴影 signed residual 保持独立。缓存目标在大气前生成，当前视线仍按 `surface * T_new + L_new` 合成。
 
-按 F9，进入“路径追踪”，第一项“持久 RT 缓存（实验）”可直接开关。返回游戏后生效，关闭设置界面沿用原有配置保存流程。开启时选择 `full` 渲染模式，避免成本探针模式禁用缓存。
+命中与未命中的 AOV 分配、量化键、EMA 会带来闪烁或收敛差异，尚需游戏内相同轨迹对照。
 
-`rtest-client.toml` 的 RT 配置区：
+## 设置和测量
 
 ```toml
 persistentRtEnabled = true
 persistentRtStatistics = true
 rtEvaluationMode = "full"
 persistentRtUpdateIntervalMs = 50
-persistentRtMaxAgeMs = 500
+persistentWorldTrainingBudget = 8192
+persistentWorldMaxAgeMs = 2000
 persistentRtMinimumSamples = 4
-persistentRtTrainingBudget = 4096
 ```
 
-默认 `persistentRtEnabled = false`、`persistentRtStatistics = false`。此次不替换正式实例 mod。
+F9 可直接设置世界更新预算和寿命。旧 `persistentRtTrainingBudget`、`persistentRtMaxAgeMs` 保留配置兼容，独立任务不再使用它们。预算 0 暂停训练，缺失/过期缓存仍走实时 fallback。
 
-成本对照模式：
+默认 8192 种子、65536 个已发现槽时，一轮约 400 ms，4 次更新约需 1.6 秒；任务增长、低帧率及区块失效会延长预热。预算是任务数量上限，不是 GPU 时间上限。
 
-| 模式 | 用途 |
-| --- | --- |
-| `full` + cache off | 原完整路径参考 |
-| `full` + cache on | 持久间接尾部实验 |
-| `current_direct` | 当前 primary + direct，无 continuation 的成本探针 |
-| `current_visibility` | 当前 primary + 材质，无 direct/continuation/大气的成本探针 |
+`world_lighting_ms` 独立报告世界 dispatch；`rt_ms` 报告显示 dispatch。`rt_pipeline_ms` 包含两者及相关处理。统计中的 sampled_primary/secondary 仅显示路径；sampled_world_segments 单列世界路径，active_jobs 是已发现槽数。每 256 个 invocation 抽样，shadow/volume 未包括，不是完整射线数。exact_reservation_attempts/exact_admitted 是所有世界任务预留数。
 
-后两者是成本探针，终止路径会改变 MIS 和图像，不作为画质等价参考。`current_visibility` 仍有材质计算、后处理和相关资源更新，并不等于孤立 primary traversal benchmark。
+## 验证
 
-开启统计时每 256 个像素抽样一个 invocation，约每 120 帧日志包含 sampled_queries、sampled_hits、sampled_primary、sampled_secondary、sampled_writes。统计数不是全图射线数；primary/secondary 不包含 shadow/volume，hit ratio 只针对尝试查询的 invocation，所有符合条件的主表面都先查询缓存，强制刷新也计入命中分母。新增 sampled_fallback（查询未命中后继续追踪）、sampled_forced（已命中但获得训练预留）、sampled_claim_losses、sampled_budget_denied；exact_reservation_attempts 与 exact_admitted 是全图唯一预留计数，后者包括随后被拒绝的非有限训练目标。它们不是完整 shadow/GI ray 数。`snapshot_copy_bytes` 直接报告本帧记录的复制字节数，非刷新帧为 0。
+- `./gradlew check jar --offline`：62 个任务，实际 raygen 的两种大气 variant 编译及现有数学/NRD/GUI 契约检查通过。
+- 相机位姿不进入光照 identity、uint 毫秒环绕、相同世界区块重打包保留、顶点改变/区块移动和删除失效。
+- 实际 runtime GLSL 的 Vulkan 回读：RX 7800 XT，旧缓存 4 个 fixture 和新增世界任务 3 个 fixture 全部无不合格差异；整数/键精确，浮点平均最大 1 ULP（上限 2）。
+- 世界 fixture 检验并发重复入队、紧凑索引唯一性、每种子连续序号、独立 load/reserve/store dispatch、旧快照隔离、有效黑值、过期、样本不足、full-key 碰撞、NaN 拒绝、预算 2/0。
+- 大世界 fixture 比较 4,785,415 words，包含 6 MiB snapshot copy 的 synthetic enqueue/consume/query median 约 0.371 ms；不是游戏 RT 训练耗时或 FPS 收益。
 
-GPU 日志新增 `pre_trace_ms`（terrain/AS/缓存准备等）与 `rt_pipeline_ms`（大气预处理至 RT 输出复制结束），另有 `cache_prepare_ms`（transfer 阶段的缓存准备区间，含清空/复制与统计头重置）。后者不包含 Minecraft 全部渲染或显示等待。持续记录命中率和完整 GPU critical path，比较 warmed cache 的相同轨迹；默认开关关闭不代表开启后必定更快。
-
-## 已验证
-
-- `./gradlew check jar --offline`：61 项 task 的构建/检查流程通过。
-- actual raygen 两种大气 variant 编译；raygen/miss/hit payload 新字段契约检查通过。
-- policy：相机位姿不进入光照 identity、强度容差、强度变化失效、uint age 环绕、评估模式 ABI。
-- 实际 runtime cache GLSL 的独立 Vulkan GPU 回读：RX 7800 XT，69 个并发训练 invocation、7 个查询，比较 13,575 words。覆盖重复槽竞争、有效黑值、样本不足、过期、full-key 碰撞、NaN 拒绝，以及训练后仍读取旧快照；零不合格差异，浮点平均最大误差 1 ULP（限 2 ULP），整数与键精确比较。
-- 该小 fixture copy/train/query GPU median 约 0.021 ms，**不是 12 MiB 实际缓存成本或游戏加速数据**。
-
-复现 GPU 测试：
+复现：
 
 ```bash
-./gradlew persistentRtMathTest -Ppersistent_rt_dump=/tmp/persistent-rt-cache --offline
+./gradlew persistentRtMathTest -Ppersistent_rt_dump=/tmp/persistent-world --offline
 cc -O2 -Wall -Wextra tools/gpu_persistent_rt_smoke.c -lvulkan -o /tmp/gpu_persistent_rt_smoke
-/tmp/gpu_persistent_rt_smoke /tmp/persistent-rt-cache.{spv,seed,expected}
+/tmp/gpu_persistent_rt_smoke /tmp/persistent-world-world.{spv,seed,expected}
 ```
 
-## 尚未完成的后续阶段
+## 还没有实现
 
-尚无独立 30–60 Hz RT world worker、异步队列、严格 GPU 更新预算、compacted repair list、区域失效或独立高频显示重建。每帧仍有完整 primary/direct 与部分实时 continuation；静态尾部训练预留有槽位数预算，但刷新帧和其他帧的 live fallback 没有总射线或毫秒预算。当前实现提供运行接缝、可靠快照和成本探针，不能宣称达成 120–240 Hz。
-
-下一阶段优先采集游戏内固定轨迹的数据，验证偏差与缓存收益，再将失效/训练任务 compact 成短批次并加入更新预算。动态间接影响需单独设计，不能简单缓存完整实体阴影。
-
-## 追加：训练预算与完整 bank 回读
-
-刷新前获得槽位和全局 ticket，超出训练预算则：已有有效缓存继续复用；未命中仍走完整 live fallback，不为了满足预算写黑色。抢到槽但训练目标不合法仍消耗该预留，保证额外训练路径数不突破上限。预算为 0 时不会提交训练目标。当前采用先到先得，不保证每个空间槽公平更新；高预算压力下槽可能迟迟未成熟或超过年龄，这需要日志和后续 compact/priority 调度来解决。
-
-预算并不表示总 GI ray budget：未命中时重复像素仍可能执行 live fallback，且每条尾部可含多个 segment/NEE。单帧 GPU deadline 和严格时间预算尚未实现。
-
-GPU 测试扩展为四组：原并发 snapshot、串行确定顺序的预算 2/预算 0、运行尺寸 65,536 槽双 bank。运行尺寸测试比较 3,147,015 words，零不合格差异（浮点最大 1 ULP）；6 MiB read→write copy 加 69 个训练/7 个查询的 median 约 0.36 ms。预算顺序 fixture 故意串行以验证确切接纳对象，不将它的时长当作并行吞吐性能。数据来自独立 Vulkan compute fixture，不包含实际 RT tail 或游戏帧率。
-
-生成 fixtures 后分别运行 `/tmp/persistent-rt-cache`、`/tmp/persistent-rt-cache-budget`、`/tmp/persistent-rt-cache-zero`、`/tmp/persistent-rt-cache-large` 对应的 `.spv`、`.seed`、`.expected` 文件即可。
-
-## F9 设置布局修复
-
-修正 Minecraft 26.2 列表构造 API：传入 viewport 高度与默认行高，避免滚动区域覆盖底部“完成”按钮。面板居中，宽度随 GUI 缩放后的屏幕自适应（最大 1000）。窄屏分类按钮分两行，设置单列；面板宽度达到 600 时设置双列，统一 30 的行高和 10 的列间距，底部保留独立区域。
-
-`settingsLayoutTest` 检查 6572 种 GUI 尺寸下的内容、分类、控件列和 footer 边界，并核对实际列表调用点。编译和 JAR 构建通过，尚无游戏内视觉截图验收。
+异步计算队列、独立后台世界时钟、广 FOV 可见性缓存、depth reprojection、hole repair、高频纯重建显示帧。当前只分离世界照明更新与显示追踪；每个显示帧仍追踪 primary 和直接照明。世界任务由已观察表面发现，并非完整未知世界探针。游戏内画质、相机运动和净性能收益未验证，不能宣称已实现 120–240 Hz 重建显示。

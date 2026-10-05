@@ -14,6 +14,8 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.IntValue persistentRtMaxAgeMs;
     public final ModConfigSpec.IntValue persistentRtMinimumSamples;
     public final ModConfigSpec.IntValue persistentRtTrainingBudget;
+    public final ModConfigSpec.IntValue persistentWorldMaxAgeMs;
+    public final ModConfigSpec.IntValue persistentWorldTrainingBudget;
     public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
     public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
@@ -94,17 +96,21 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
-        persistentRtStatistics = builder.comment("Research counters sample every 256th pixel; logs are sampled counts, not full-image ray counts.")
+        persistentRtStatistics = builder.comment("Research counters sample every 256th display/world invocation; logs are sampled counts, not complete ray counts.")
             .define("persistentRtStatistics", false);
-        persistentRtEnabled = builder.comment("Research branch: reuse static rough-surface indirect lighting snapshots. Current primary visibility and direct lighting remain live. Default off.")
+        persistentRtEnabled = builder.comment("Research branch: independent persistent world lighting updates for static rough surfaces. Current primary/first-secondary visibility and direct lighting remain live. Default off.")
             .define("persistentRtEnabled", false);
         rtEvaluationMode = builder.comment("Research cost probes: full, current_direct (no continuation), current_visibility (material/visibility only). Mode changes reset screen histories.")
             .define("rtEvaluationMode", "full", value -> value instanceof String text && java.util.Set.of("full", "current_direct", "current_visibility").contains(text));
         persistentRtUpdateIntervalMs = builder.comment("Minimum interval between cache training batches; not a GPU scheduling guarantee.")
             .defineInRange("persistentRtUpdateIntervalMs", 50, 16, 1000);
-        persistentRtMaxAgeMs = builder.comment("Maximum age of reusable indirect samples. Expired/missing values trace full continuation.")
+        persistentRtMaxAgeMs = builder.comment("Legacy inline prototype setting, retained for config compatibility; use persistentWorldMaxAgeMs.")
             .defineInRange("persistentRtMaxAgeMs", 500, 50, 5000);
-        persistentRtTrainingBudget = builder.comment("Maximum unique static tail training reservations per refresh. Miss fallback rays are not capped. Zero freezes training.")
+        persistentWorldMaxAgeMs = builder.comment("Independent world-ray cache lifetime; separate from legacy inline tail prototype settings.")
+            .defineInRange("persistentWorldMaxAgeMs", 2000, 100, 10000);
+        persistentWorldTrainingBudget = builder.comment("Maximum world-ray seeds dispatched per update batch. Zero freezes world training.")
+            .defineInRange("persistentWorldTrainingBudget", 8192, 0, 65536);
+        persistentRtTrainingBudget = builder.comment("Legacy inline prototype setting, retained for config compatibility; use persistentWorldTrainingBudget.")
             .defineInRange("persistentRtTrainingBudget", 4096, 0, 65536);
         persistentRtMinimumSamples = builder.comment("Distinct update epochs needed before using a cache slot.")
             .defineInRange("persistentRtMinimumSamples", 4, 1, 16);

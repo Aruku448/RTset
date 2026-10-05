@@ -1,3 +1,5 @@
+> 实现状态（2026-10-05）：已接入同队列独立世界照明 dispatch、持久任务表和当前视角 PBR 重加权；下述内容仍包含后续目标。当前范围及限制见 [实现说明](persistent-rt-world-implementation.md)。
+
 # Persistent RT World + Real-Time View Rendering
 
 状态：研究设计，未实现运行管线。分支：`persistent-rt-world-research`。

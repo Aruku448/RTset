@@ -249,7 +249,7 @@ public final class RayTracingAtmosphereShaderTest {
 
     private static void verifySkyboxBlendContract() {
         String source = RayTracingShaderRaygen.RAYGEN_SHADER;
-        int physicalSky = source.indexOf("skyRadiance = throughput * physicalAtmosphereSky(");
+        int physicalSky = source.indexOf("skyRadiance = throughput * persistentSky(");
         int blend = source.indexOf("skyRadiance = mix(skyRadiance, textureRadiance,");
         int solar = source.indexOf("bool sunIsValid", blend);
         if (physicalSky < 0 || blend < physicalSky || solar < blend

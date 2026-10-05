@@ -297,8 +297,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private int pendingFrameTimingFrame;
         private int pendingFrameGpuIndex;
         private boolean closed;
-        // 0..3 retain RT/post/total; 4..5 bracket traversal/AS; 6..7 isolate dynamic sky LUT work.
-        private static final int GPU_TIMESTAMP_COUNT = 10;
+        // 0..3 retain display RT/post/total; 4..5 bracket traversal/AS, 6..7 sky LUT,
+        // 8..9 snapshot preparation, 10..11 independent world lighting dispatch.
+        private static final int GPU_TIMESTAMP_COUNT = 12;
         private final long gpuTimestampQueryPool;
         private final double gpuTimestampPeriodNs;
         private final boolean gpuTimestampsAvailable;
@@ -1288,7 +1289,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VK10.vkUpdateDescriptorSets(vkDevice, writes, null);
 
                     VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                        .pSetLayouts(stack.longs(descriptorSetLayout));
+                        .pSetLayouts(stack.longs(descriptorSetLayout))
+                        .pPushConstantRanges(org.lwjgl.vulkan.VkPushConstantRange.calloc(1, stack)
+                            .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR).offset(0).size(4));
                     VulkanUtils.crashIfFailure(
                         device,
                         VK10.vkCreatePipelineLayout(vkDevice, pipelineLayoutInfo, null, handle),
@@ -2808,7 +2811,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 double[] gpuMilliseconds = readGpuTimestamps(stack);
                 if (gpuMilliseconds != null && this.pendingFrameGpuIndex % 120 == 0) {
                     LOGGER.info(
-                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={} pre_trace_ms={} rt_pipeline_ms={} cache_prepare_ms={}",
+                        "RTest gpu_timing frame={} rt_ms={} post_rt_ms={} total_ms={} terrain_traversal_ms={} period_ns={} atmosphere_lut_ms={} pre_trace_ms={} rt_pipeline_ms={} cache_prepare_ms={} world_lighting_ms={}",
                         this.pendingFrameGpuIndex,
                         formatGpuMs(gpuMilliseconds[0]),
                         formatGpuMs(gpuMilliseconds[1]),
@@ -2818,7 +2821,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         formatGpuMs(gpuMilliseconds[4]),
                         formatGpuMs(gpuMilliseconds[5]),
                         formatGpuMs(gpuMilliseconds[6]),
-                        formatGpuMs(gpuMilliseconds[7]));
+                        formatGpuMs(gpuMilliseconds[7]),
+                        formatGpuMs(gpuMilliseconds[8]));
                 }
                 if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
                     logTerrainTraversalStats(this.pendingFrameGpuIndex);
@@ -3520,9 +3524,23 @@ import com.rtest.client.fsr.RtestFsrSettings;
             VkStridedDeviceAddressRegionKHR hit = VkStridedDeviceAddressRegionKHR.calloc(stack)
                 .deviceAddress(sbtAddress + 4L * sbtStride).stride(sbtStride).size(3L * sbtStride);
             VkStridedDeviceAddressRegionKHR callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
+            VK10.vkCmdPushConstants(commandBuffer, pipelineLayout,
+                KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, stack.ints(0));
             writeGpuTimestamp(commandBuffer, 0, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, outputWidth, outputHeight, 1);
             writeGpuTimestamp(commandBuffer, 1, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+            writeGpuTimestamp(commandBuffer, 10, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+            int worldWork = this.persistentLighting.trainingCount();
+            if (worldWork > 0) {
+                barrier(commandBuffer, stack, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK10.VK_ACCESS_SHADER_WRITE_BIT | VK10.VK_ACCESS_SHADER_READ_BIT,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT);
+                VK10.vkCmdPushConstants(commandBuffer, pipelineLayout,
+                    KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR, 0, stack.ints(1));
+                KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, worldWork, 1, 1);
+            }
+            writeGpuTimestamp(commandBuffer, 11, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             this.fsr.recordAfterRayTracing(commandBuffer, fsrToken, this.aerialPerspectiveEnabled);
             this.terrainTraversalPrimed = this.terrainTraversalEnabled;
             writeGpuTimestamp(commandBuffer, 2, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -3647,7 +3665,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[8];
+            double[] milliseconds = new double[9];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
@@ -3657,6 +3675,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             milliseconds[5] = (values.get(0) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[6] = (values.get(3) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[7] = (values.get(9) - values.get(8)) * gpuTimestampPeriodNs / 1_000_000.0;
+            milliseconds[8] = (values.get(11) - values.get(10)) * gpuTimestampPeriodNs / 1_000_000.0;
             return milliseconds;
         }
 

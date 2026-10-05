@@ -23,8 +23,22 @@ public final class PersistentRtMathTest {
                 || PersistentRtPolicy.fresh(100,101,200)) throw new AssertionError("unsigned age / wrap");
         if (PersistentRtPolicy.mode("current_direct") != 1 || PersistentRtPolicy.mode("current_visibility") != 2
                 || PersistentRtPolicy.mode("full") != 0) throw new AssertionError("mode ABI");
+        var ctor = RayTracingScene.SceneGeometry.SectionGeometry.class.getDeclaredConstructor(int.class,int.class,int.class,float[].class,float[].class);
+        ctor.setAccessible(true);
+        float[] triangle = {0,0,0, 1,0,0, 0,0,1}, material = new float[28];
+        var section = ctor.newInstance(0,0,0,triangle,material);
+        var clone = ctor.newInstance(0,0,0,triangle,material);
+        var moved = ctor.newInstance(16,0,0,triangle,material);
+        if (!PersistentRtPolicy.sameSections(java.util.List.of(section),java.util.List.of(clone))
+                || PersistentRtPolicy.sameSections(java.util.List.of(section),java.util.List.of(moved))
+                || PersistentRtPolicy.sameSections(java.util.List.of(section),java.util.List.of()))
+            throw new AssertionError("world section identity / addition / removal");
+        triangle[3]=2;
+        var changed=ctor.newInstance(0,0,0,triangle,material);
+        if(PersistentRtPolicy.sameSections(java.util.List.of(section),java.util.List.of(changed)))
+            throw new AssertionError("changed geometry retained cache");
         String ray = RayTracingShaders.RAYGEN_SHADER;
-        if (!ray.contains("emissionRadiance += cachedDiffuse + cachedSpecular;")
+        if (!ray.contains("emissionRadiance += cachedContribution;")
                 || !ray.contains("pathPayload.staticBoundary = 0u;")) throw new AssertionError("composition / boundary reset");
         String payload = payload(ray);
         for (String stage : new String[]{RayTracingShaders.MISS_SHADER, RayTracingShaders.CLOSEST_HIT_SHADER, RayTracingShaders.ANY_HIT_SHADER})
@@ -33,18 +47,24 @@ public final class PersistentRtMathTest {
             throw new AssertionError("static training cannot exclude opaque dynamic geometry");
         String scheduler=Files.readString(Path.of("src/main/java/com/rtest/client/PersistentRtLighting.java"));
         if (!scheduler.contains("if (enabled && refresh) {")
-                || !scheduler.contains("if (enabled && refresh) { readBank = 1 - readBank;"))
+                || !scheduler.contains("readBank = 1 - readBank;"))
             throw new AssertionError("read snapshot must stay published between training batches");
-        int reserve=ray.indexOf("persistentTraining = (!cacheHit || forceRefresh) && prtReserve(persistentKey);");
-        int sample=ray.indexOf("rayDirection = sampleCosineHemisphere(normal, scatterSample.xy);",reserve);
-        if(reserve<0 || sample<reserve || !ray.contains("if (cacheHit && !persistentTraining)"))
-            throw new AssertionError("reserve before tracing, reuse hit when budget is exhausted");
+        int workerExit=ray.indexOf("return; // Worker never writes display pixels");
+        int compose=ray.indexOf("vec3 unfilteredRadiance = emissionRadiance;");
+        if(workerExit<0 || compose<workerExit || !ray.contains("throughput * incoming")
+                || !ray.contains("prtKey(primaryPosition + worldOrigin, normal, rayDirection")
+                || ray.contains("persistentTraining")) throw new AssertionError("worker target/display weight separation");
         byte[] spv = compileShader();
+        compileShader(true);
         if (args.length > 0) {
             dump(args[0], spv, 65536, false, 256);
             dump(args[0]+"-large", spv, 65536, false, 65536);
             dump(args[0]+"-budget", spv, 2, true, 256);
             dump(args[0]+"-zero", spv, 0, true, 256);
+            byte[] worldSpv = compileShader(true);
+            dump(args[0]+"-world", worldSpv, 65536, false, 65536, true);
+            dump(args[0]+"-world-budget", worldSpv, 2, true, 256, true);
+            dump(args[0]+"-world-zero", worldSpv, 0, true, 256, true);
         }
         System.out.println("Persistent RT policy, shader compilation and GPU fixtures passed; device readback is a separate test");
     }
@@ -56,11 +76,16 @@ public final class PersistentRtMathTest {
     static int[] key(int tag) { return new int[]{tag, -1, 2, 3, 4, 5, 6, 7, 8, 9}; }
     static int row(int[] key, int bank, int mask) { return bank + PersistentRtPolicy.hash(key,mask) * 24; }
     static void dump(String prefix, byte[] spv, int budget, boolean serial, int slots) throws Exception {
+        dump(prefix,spv,budget,serial,slots,false);
+    }
+    static void dump(String prefix, byte[] spv, int budget, boolean serial, int slots, boolean world) throws Exception {
         int mask=slots-1, bank=slots*24, read=READ, write=read+bank;
-        int trainCount = 69, queryCount = 7, train = write + bank, query = train + trainCount*16, out = query + queryCount*10;
+        int job = write + bank, index = job + (world ? bank : 0);
+        int trainCount = 69, queryCount = 7, train = index + (world ? slots : 0), query = train + trainCount*16, out = query + queryCount*10;
         int[] seed = new int[out + queryCount*7];
         seed[0]=1; seed[1]=read; seed[2]=write; seed[3]=100; seed[4]=1; seed[5]=100; seed[6]=200; seed[7]=3; seed[8]=mask; seed[10]=budget;
-        seed[32]=train; seed[33]=trainCount; seed[34]=query; seed[35]=queryCount; seed[36]=out; seed[37]=serial?1:0;
+        if(world) { seed[13]=job; seed[39]=index; seed[40]=train; seed[41]=trainCount; seed[42]=0x50525432; seed[43]=query; seed[44]=queryCount; seed[45]=out; seed[46]=serial?1:0; }
+        else {seed[32]=train; seed[33]=trainCount; seed[34]=query; seed[35]=queryCount; seed[36]=out; seed[37]=serial?1:0;}
         int[][] keys = new int[7][]; boolean[] used = new boolean[slots]; int tag=0;
         for(int i=0;i<keys.length;i++) { while(used[PersistentRtPolicy.hash(key(tag),mask)])tag++; keys[i]=key(tag++); used[PersistentRtPolicy.hash(keys[i],mask)]=true; }
         for(int i=0;i<7;i++) {
@@ -78,13 +103,24 @@ public final class PersistentRtMathTest {
             for(int c=0;c<6;c++)seed[p+10+c]=Float.floatToIntBits(4);
             if(which==4)seed[p+10]=Float.floatToIntBits(Float.NaN);
         }
-        int[] expected=seed.clone(); expected[30]=6;
+        int[] expected=seed.clone(); expected[30]=world ? Math.min(6,budget) : 6;
+        if(world) {
+            expected[38]=6;
+            for(int i=0;i<6;i++) {
+                int slot=PersistentRtPolicy.hash(keys[i],mask), r=job+slot*24;
+                expected[index+i]=slot; expected[r]=100; expected[r+11]=1; expected[r+19]=100;
+                expected[r+20]=i<budget?36:0; // 5 warmup + 31 device submissions
+                System.arraycopy(keys[i],0,expected,r+1,10);
+                for(int c=0;c<6;c++)expected[r+12+c]=Float.floatToIntBits(4);
+                if(i==4)expected[r+12]=Float.floatToIntBits(Float.NaN);
+            }
+        }
         for(int i=0;i<6;i++) {
-            int r=row(keys[i],write,mask); expected[r]=100;
+            int r=row(keys[i],write,mask); if(!world || i<budget)expected[r]=100;
             if(i==4 || i>=budget)continue;
             int n=i==3||i==5?0:i==2?2:3;
             expected[r]=100; System.arraycopy(keys[i],0,expected,r+1,10); expected[r+11]=n+1; expected[r+19]=100;
-            for(int c=0;c<6;c++)expected[r+12+c]=Float.floatToIntBits(((i==1?0:2)*n+4f)/(n+1));
+            for(int c=0;c<6;c++)expected[r+12+c]=Float.floatToIntBits(((i==1?0:2)*n+(world?(c<3?8f:0f):4f))/(n+1));
         }
         for(int i=0;i<7;i++) {
             boolean valid=i==0||i==1||i==4;
@@ -96,7 +132,8 @@ public final class PersistentRtMathTest {
     static void write(String path,int[] words) throws Exception {
         var b=ByteBuffer.allocate(words.length*4).order(ByteOrder.LITTLE_ENDIAN); b.asIntBuffer().put(words); Files.write(Path.of(path),b.array());
     }
-    static byte[] compileShader() {
+    static byte[] compileShader() { return compileShader(false); }
+    static byte[] compileShader(boolean world) {
         String source="#version 460\n"+PersistentRtShader.GLSL.replace("binding = 41", "binding = 0")+"""
             layout(local_size_x=128) in;
             layout(push_constant) uniform TestPhase { uint unused; uint count; uint phase; } test;
@@ -120,6 +157,38 @@ public final class PersistentRtMathTest {
                 }
             }
             """;
+        if(world) {
+            source=source.substring(0,source.indexOf("void train(uint i)"))+"""
+                void enqueue(uint i) {
+                    uint key[10]; uint p=prt.words[40]+i*16u;
+                    for(uint j=0u;j<10u;j++)key[j]=prt.words[p+j];
+                    vec3 origin=vec3(uintBitsToFloat(prt.words[p+10u]),uintBitsToFloat(prt.words[p+11u]),uintBitsToFloat(prt.words[p+12u]));
+                    vec3 dir=vec3(uintBitsToFloat(prt.words[p+13u]),uintBitsToFloat(prt.words[p+14u]),uintBitsToFloat(prt.words[p+15u]));
+                    prtEnqueue(key,origin,dir);
+                }
+                void main() {
+                    uint i=gl_GlobalInvocationID.x; if(i>=test.count)return;
+                    if(test.phase==0u) {
+                        if(prt.words[46]!=0u) {if(i==0u)for(uint k=0u;k<test.count;k++)enqueue(k);}
+                        else enqueue(i);
+                    } else if(test.phase==1u) {
+                        uint jobs=min(prt.words[38],prt.words[8]+1u);
+                        if(i>=min(jobs,prt.words[10]))return;
+                        uint slot=prt.words[prt.words[39]+(prt.words[11]+i)%jobs];
+                        uint key[10]; vec3 origin,dir;
+                        if(prtLoadJob(slot,key,origin,dir) && prtReserve(key)) {
+                            uint sequence=prtNextSample(slot);
+                            prtStoreReserved(key,origin+dir+vec3(float(sequence)*0.0),vec3(0.0));
+                        }
+                    } else {
+                        uint key[10]; uint p=prt.words[43]+i*10u;
+                        for(uint j=0u;j<10u;j++)key[j]=prt.words[p+j];
+                        vec3 d,s; bool valid=prtLookup(key,d,s); uint o=prt.words[45]+i*7u; prt.words[o]=valid?1u:0u;
+                        for(uint j=0u;j<3u;j++){prt.words[o+1u+j]=floatBitsToUint(d[j]);prt.words[o+4u+j]=floatBitsToUint(s[j]);}
+                    }
+                }
+                """;
+        }
         long compiler=Shaderc.shaderc_compiler_initialize(),options=Shaderc.shaderc_compile_options_initialize(),result=0;
         var bytes=org.lwjgl.system.MemoryUtil.memUTF8(source,false);
         var name=org.lwjgl.system.MemoryUtil.memASCII("persistent-cache-test.comp",true);
