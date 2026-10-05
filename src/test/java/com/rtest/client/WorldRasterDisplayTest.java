@@ -46,9 +46,14 @@ public final class WorldRasterDisplayTest {
             for(int row=0;row<4;row++)for(int col=0;col<4;col++)clip[row]+=matrix.getFloat((col*4+row)*4)*point[col];
             check(clip[0],2*1.3);check(clip[1],3*1.7);check(clip[2],.05);check(clip[3],20);
             if(Math.abs(clip[2]/clip[3]-.0025)>1e-6)throw new AssertionError("Reversed Z contract");
-            // Negative viewport Y and UV motion are both top-down: a static camera yields zero.
-            double rasterY=.5-.5*clip[1]/clip[3],previousY=.5-.5*clip[1]/clip[3];
+            // Positive viewport Y matches RT image rows: a static camera yields zero.
+            double rasterY=.5+.5*clip[1]/clip[3],previousY=.5+.5*clip[1]/clip[3];
             if(rasterY!=previousY)throw new AssertionError("UV motion sign");
+            // The full RT ray generator maps image Y as +camera.up. The shared
+            // FSR/presentation path must receive the same row for this world point.
+            double rtImageY=.5+.5*(3*1.7/20);
+            if(Math.abs(rasterY-rtImageY)>1e-6)
+                throw new AssertionError("Raster world upside down relative to RT presentation: rasterY="+rasterY+", rtY="+rtImageY);
         }
         compile(WorldRasterShaders.VERTEX,Shaderc.shaderc_glsl_vertex_shader,args.length>0?args[0]+".vert.spv":null);
         compile(WorldRasterShaders.fragment(),Shaderc.shaderc_glsl_fragment_shader,args.length>0?args[0]+".frag.spv":null);

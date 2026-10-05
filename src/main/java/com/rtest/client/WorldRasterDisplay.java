@@ -199,11 +199,12 @@ final class WorldRasterDisplay implements AutoCloseable {
         try(var mapped=camera.map()) {
             ByteBuffer out=mapped.buffer().order(ByteOrder.nativeOrder());
             writeProjection(out,0,latest,geometry.originX,geometry.originY,geometry.originZ);
-            // Pixel ray jitter and negative viewport: translate clip XY by a multiple of clip W.
+            // Match RT image rows: +camera.up increases image Y. RT rays sample pixel+jitter,
+            // so raster geometry moves by -jitter in both image axes.
             for(int column=0;column<4;column++) {
                 float w=out.getFloat(column*16+12);
                 out.putFloat(column*16,out.getFloat(column*16)-2*jitterX/width*w);
-                out.putFloat(column*16+4,out.getFloat(column*16+4)+2*jitterY/height*w);
+                out.putFloat(column*16+4,out.getFloat(column*16+4)-2*jitterY/height*w);
             }
             writeProjection(out,64,previousCamera==null?latest:previousCamera,geometry.originX,geometry.originY,geometry.originZ);
             out.putFloat(128,(float)geometry.originX).putFloat(132,(float)geometry.originY).putFloat(136,(float)geometry.originZ).putFloat(140,0);
@@ -393,11 +394,11 @@ final class WorldRasterDisplay implements AutoCloseable {
                 stages.get(1).sType$Default().stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fs).pName(stack.UTF8("main"));
                 VkPipelineVertexInputStateCreateInfo vertex=VkPipelineVertexInputStateCreateInfo.calloc(stack).sType$Default();
                 VkPipelineInputAssemblyStateCreateInfo assembly=VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType$Default().topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-                // Negative viewport preserves the RT/FSR upper-left image convention.
-                VkViewport.Buffer viewport=VkViewport.calloc(1,stack).x(0).y(height).width(width).height(-height).minDepth(0).maxDepth(1);
+                // Match the existing RT/FSR presentation row convention; do not add a Y flip.
+                VkViewport.Buffer viewport=VkViewport.calloc(1,stack).x(0).y(0).width(width).height(height).minDepth(0).maxDepth(1);
                 VkRect2D.Buffer scissor=VkRect2D.calloc(1,stack);scissor.extent().set(width,height);
                 VkPipelineViewportStateCreateInfo viewportState=VkPipelineViewportStateCreateInfo.calloc(stack).sType$Default().pViewports(viewport).pScissors(scissor);
-                VkPipelineRasterizationStateCreateInfo raster=VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default().polygonMode(VK_POLYGON_MODE_FILL).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE).lineWidth(1);
+                VkPipelineRasterizationStateCreateInfo raster=VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default().polygonMode(VK_POLYGON_MODE_FILL).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_CLOCKWISE).lineWidth(1);
                 VkPipelineMultisampleStateCreateInfo samples=VkPipelineMultisampleStateCreateInfo.calloc(stack).sType$Default().rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
                 VkPipelineDepthStencilStateCreateInfo depthState=VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default().depthTestEnable(true).depthWriteEnable(true).depthCompareOp(VK_COMPARE_OP_GREATER);
                 VkPipelineColorBlendAttachmentState.Buffer blendAttachments=VkPipelineColorBlendAttachmentState.calloc(6,stack);

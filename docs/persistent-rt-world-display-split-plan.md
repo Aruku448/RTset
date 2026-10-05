@@ -99,3 +99,7 @@ F9 的实验世界光栅显示开关对应 `worldRasterDisplayEnabled`，默认 
 日志 `world_display` 报告 `display_trace_calls=0`、世界 trace 次数、探针数、generation 和更新标记。实机应分别测普通显示帧与世界更新帧的 CPU/GPU 时间、字段覆盖率、运动拖影、实体阴影延迟、模式切换和区块重建。下一阶段首先处理并发发布/预算与光栅剔除，再恢复缺失的画质贡献。
 
 本轮验证：`check jar` 65 个任务成功；RX 7800 XT 的实际光栅管线回读通过，世界辐照度 GPU 回读 12 项、0 差异。已备份并替换 RTest 实例 jar，未开启实验配置；Minecraft 实机画面与帧时间尚未验证。
+
+### Y 方向回归修复
+
+完整 RT 的图像行使用 +camera.up 随 Y 增加，最终合成沿用该合同。初版光栅负 viewport 高度增加了额外翻转，造成世界上下颠倒。修复为正 viewport 高度，同步改为 clockwise 正面判定、previous UV 正 Y，并以 fragCoord+jitter 恢复无抖动坐标。数学回归在修复前输出 rasterY=0.3725、RT Y=0.6275，修复后通过；实际 GPU 回读增加了跨行世界位置与非零抖动下静止运动检查，旧 fragment 失败、新 fragment 通过。完整 check/jar 的 65 个任务成功。

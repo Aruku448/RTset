@@ -109,8 +109,8 @@ final class WorldRasterShaders {
                 diffuse+=worldDirectTotal(solar);
                 sceneColor=vec4(diffuse*(1.0-clamp(surface.y,0.0,1.0))+albedo*max(surface.z,0.0),1);
                 reversedDepth=gl_FragCoord.z;
-                vec2 currentUv=(gl_FragCoord.xy-camera.lighting.zw)/camera.lighting.xy;
-                vec2 previousUv=previousClip.xy/max(previousClip.w,0.0001)*vec2(0.5,-0.5)+0.5;
+                vec2 currentUv=(gl_FragCoord.xy+camera.lighting.zw)/camera.lighting.xy;
+                vec2 previousUv=previousClip.xy/max(previousClip.w,0.0001)*vec2(0.5,0.5)+0.5;
                 motion=previousClip.w>0.05?previousUv-currentUv:vec2(0);
                 normalRoughness=vec4(n,clamp(surface.x,0.0,1.0));
                 albedoMetallic=vec4(albedo,clamp(surface.y,0.0,1.0));
