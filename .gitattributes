@@ -1,0 +1,5 @@
+# These vendored text files are hashed byte-for-byte by the atmosphere integrity gate.
+# Windows checkout must preserve the reviewed LF bytes, not convert to CRLF.
+/third_party/prime-atmosphere-26.3/**/*.slang text eol=lf
+/third_party/prime-atmosphere-26.3/**/*.json text eol=lf
+/third_party/prime-atmosphere-26.3/*.json text eol=lf

@@ -35,6 +35,24 @@ public final class AccelerationStructureSynchronizationTest {
         }
         if (traceReads != 3 || computeInputs != 1 || hostInputs != 4)
             throw new AssertionError("Missing actual build/traversal or terrain input path");
-        System.out.println("Actual AS synchronization access classes passed (not GPU runtime validation)");
+        String allocationSource = Files.readString(Path.of("src/main/java/com/rtest/client/VulkanAccelerationResources.java")).replace("\r\n", "\n");
+        if (!Pattern.compile("BUILD_INPUT_READ_ONLY_BIT_KHR\\) != 0\\s*\\? 16L : 1L", Pattern.DOTALL)
+                .matcher(allocationSource).find()
+                || !allocationSource.contains("vmaCreateBufferWithAlignment(device.vma(), bufferInfo, allocationInfo,\n                    alignment, bufferHandle")
+                || !allocationSource.contains("return createAligned(device, size, usage, hostVisible, alignment);")) {
+            throw new AssertionError("AS input allocation must explicitly guarantee 16-byte alignment");
+        }
+        if (!Pattern.compile("shaderBindingTable = NativeBuffer.createAligned\\(.*?true, baseAlignment", Pattern.DOTALL)
+                .matcher(source).find() || !source.contains("sbtAddress & (baseAlignment - 1L)")) {
+            throw new AssertionError("SBT allocation must guarantee and validate shaderGroupBaseAlignment");
+        }
+        int tlasRecorder = source.indexOf("private VkAccelerationStructureBuildGeometryInfoKHR.Buffer topLevelBuildInfo(");
+        int tlasRecorderEnd = source.indexOf("private void buildAccelerationStructuresIncrementally", tlasRecorder);
+        String tlasSource = source.substring(tlasRecorder, tlasRecorderEnd);
+        if (!tlasSource.contains("update = update && !RayTracingClientConfig.INSTANCE.forceTlasBuild.get();")
+                || !tlasSource.contains("return this.topLevel.buildInfo(stack, inputAddress, scratchAddress, update);")) {
+            throw new AssertionError("Diagnostic full BUILD must govern the shared TLAS recorder");
+        }
+        System.out.println("AS synchronization, input/SBT allocation and TLAS diagnostic contracts passed (not GPU runtime validation)");
     }
 }

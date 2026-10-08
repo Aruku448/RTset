@@ -980,6 +980,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     }
                 }
                 boolean physicalAtmosphere = atmosphere != null;
+                long rtShaderStart = System.nanoTime();
                 String raygenSource = physicalAtmosphere
                     ? RayTracingShaders.RAYGEN_SHADER.replace("#version 460",
                         "#version 460\n#define RTEST_ATMOSPHERE_LUT 1")
@@ -987,7 +988,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 raygenSource = RayTracingRestirShader.variant(raygenSource, RayTracingRestirShader.requestedMode());
                 RayTracingCostAudit.Profile audit = RayTracingCostAudit.requested();
                 raygenSource = RayTracingCostAudit.raygen(raygenSource, audit);
-                LOGGER.info("RTest ray cost audit: profile={}", audit.key());
+                LOGGER.info("RTest ray cost audit: profile={}, forceTlasBuild={}", audit.key(),
+                    RayTracingClientConfig.INSTANCE.forceTlasBuild.get());
                 ShaderModule raygen = ShaderModule.create(device, raygenSource, Shaderc.shaderc_glsl_raygen_shader);
                 shaderModules[0] = raygen.handle;
                 ShaderModule miss = ShaderModule.create(device, RayTracingShaders.MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
@@ -997,6 +999,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 ShaderModule closestHit = ShaderModule.create(device, RayTracingCostAudit.closestHit(
                     RayTracingShaders.CLOSEST_HIT_SHADER, audit), Shaderc.shaderc_glsl_closesthit_shader);
                 shaderModules[3] = closestHit.handle;
+                LOGGER.info("RTest startup: core RT shader compilation wall_ms={}",
+                    (System.nanoTime() - rtShaderStart) / 1_000_000L);
                 ShaderModule anyHit = ShaderModule.create(device, RayTracingShaders.ANY_HIT_SHADER, Shaderc.shaderc_glsl_anyhit_shader);
                 shaderModules[4] = anyHit.handle;
                 ShaderModule shadowClosestHit = ShaderModule.create(device, RayTracingShaders.SHADOW_CLOSEST_HIT_SHADER, Shaderc.shaderc_glsl_closesthit_shader);
@@ -1361,12 +1365,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .anyHitShader(6).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
                     VkRayTracingPipelineCreateInfoKHR.Buffer pipelineInfo = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
                     pipelineInfo.sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(pipelineLayout);
+                    long rtPipelineStart = System.nanoTime();
                     VulkanUtils.crashIfFailure(
                         device,
                         KHRRayTracingPipeline.vkCreateRayTracingPipelinesKHR(vkDevice, 0L, 0L, pipelineInfo, null, handle),
                         "Failed to create ray-tracing pipeline"
                     );
                     pipeline = handle.get(0);
+                    LOGGER.info("RTest startup: RT driver pipeline creation wall_ms={}",
+                        (System.nanoTime() - rtPipelineStart) / 1_000_000L);
 
                     int handleSize = limits.shaderGroupHandleSize();
                     int handleAlignment = limits.shaderGroupHandleAlignment();
@@ -1379,13 +1386,19 @@ import com.rtest.client.fsr.RtestFsrSettings;
                             KHRRayTracingPipeline.vkGetRayTracingShaderGroupHandlesKHR(vkDevice, pipeline, 0, 7, shaderHandles),
                             "Failed to retrieve ray-tracing shader group handles"
                         );
-                        shaderBindingTable = NativeBuffer.create(
+                        shaderBindingTable = NativeBuffer.createAligned(
                             device,
                             (long)stride * 7L,
                             KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR
                                 | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                            true
+                            true, baseAlignment
                         );
+                        long sbtAddress = shaderBindingTable.deviceAddress();
+                        if ((sbtAddress & (baseAlignment - 1L)) != 0L) {
+                            throw new IllegalStateException("Shader binding table device address is misaligned");
+                        }
+                        LOGGER.info("RTest SBT allocation: address=0x{}, baseAlignment={}, stride={}",
+                            Long.toHexString(sbtAddress), baseAlignment, stride);
                         try (NativeBuffer.Mapped mapped = shaderBindingTable.map()) {
                             int[] sbtGroupOrder = {0, 1, 2, 5, 3, 4, 6};
                             for (int i = 0; i < sbtGroupOrder.length; i++) {
@@ -1533,18 +1546,29 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
                 VK12.vkGetPhysicalDeviceProperties(device.vkDevice().getPhysicalDevice(), properties);
                 var limits = properties.limits();
-                if (limits.maxImageDimension2D() < 8193
-                    || limits.maxPerStageDescriptorStorageImages() < 27
-                    || limits.maxDescriptorSetStorageImages() < 27
+                // Vulkan reports uint32_t limits; Windows drivers may expose UINT32_MAX
+                // as -1 through LWJGL. Signed comparisons wrongly disable supported features.
+                if (VulkanUnsignedLimit.below(limits.maxImageDimension2D(), 8193)
+                    || VulkanUnsignedLimit.below(limits.maxPerStageDescriptorStorageImages(), 27)
+                    || VulkanUnsignedLimit.below(limits.maxDescriptorSetStorageImages(), 27)
                     // Includes the pinned medium, sky-CDF metadata and two optional reservoir banks.
-                    || limits.maxPerStageDescriptorStorageBuffers() < 10
-                    || limits.maxDescriptorSetStorageBuffers() < 10
-                    || limits.maxDescriptorSetSamplers() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
-                    || limits.maxDescriptorSetSampledImages() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
-                    || limits.maxPerStageDescriptorUniformBuffers() < 3
-                    || limits.maxDescriptorSetUniformBuffers() < 3
-                    || limits.maxPushConstantsSize() < 128) {
-                    throw new IllegalStateException("Prime atmosphere descriptor/push-constant limits unavailable");
+                    || VulkanUnsignedLimit.below(limits.maxPerStageDescriptorStorageBuffers(), 10)
+                    || VulkanUnsignedLimit.below(limits.maxDescriptorSetStorageBuffers(), 10)
+                    || VulkanUnsignedLimit.below(limits.maxDescriptorSetSamplers(), 5 + PLAYER_SKIN_DESCRIPTOR_COUNT)
+                    || VulkanUnsignedLimit.below(limits.maxDescriptorSetSampledImages(), 5 + PLAYER_SKIN_DESCRIPTOR_COUNT)
+                    || VulkanUnsignedLimit.below(limits.maxPerStageDescriptorUniformBuffers(), 3)
+                    || VulkanUnsignedLimit.below(limits.maxDescriptorSetUniformBuffers(), 3)
+                    || VulkanUnsignedLimit.below(limits.maxPushConstantsSize(), 128)) {
+                    LOGGER.warn("RTest disabled optional Prime atmosphere: maxImageDimension2D={}, "
+                            + "storageImages(stage/set)={}/{}, storageBuffers(stage/set)={}/{}, "
+                            + "samplers={}, sampledImages={}, uniformBuffers(stage/set)={}/{}, pushConstants={}. "
+                            + "Using the non-LUT RT path instead.",
+                        limits.maxImageDimension2D(), limits.maxPerStageDescriptorStorageImages(),
+                        limits.maxDescriptorSetStorageImages(), limits.maxPerStageDescriptorStorageBuffers(),
+                        limits.maxDescriptorSetStorageBuffers(), limits.maxDescriptorSetSamplers(),
+                        limits.maxDescriptorSetSampledImages(), limits.maxPerStageDescriptorUniformBuffers(),
+                        limits.maxDescriptorSetUniformBuffers(), limits.maxPushConstantsSize());
+                    return null;
                 }
             }
             try {
@@ -3318,6 +3342,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
 
         private VkAccelerationStructureBuildGeometryInfoKHR.Buffer topLevelBuildInfo(
             MemoryStack stack, boolean update) {
+            // Single diagnostic switch for both incremental and per-frame TLAS recorders.
+            // Full BUILD keeps the same inputs/allocation but does not read the previous TLAS.
+            update = update && !RayTracingClientConfig.INSTANCE.forceTlasBuild.get();
             if (this.topLevel == null || this.topLevel.closed || this.topLevel.storage.closed
                 || this.topLevel.inputBuffer == null || this.topLevel.inputBuffer.closed) {
                 throw new IllegalStateException("Attempted to build a closed TLAS resource");

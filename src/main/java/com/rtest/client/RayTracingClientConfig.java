@@ -10,6 +10,7 @@ public final class RayTracingClientConfig {
     private final ModConfigSpec restirSpec;
     private final ModConfigSpec auditSpec;
     public final ModConfigSpec.ConfigValue<String> rayCostAuditProfile;
+    public final ModConfigSpec.BooleanValue forceTlasBuild;
     public static final RayTracingClientConfig INSTANCE;
 
     public final PostProcessingSettings post;
@@ -118,6 +119,9 @@ public final class RayTracingClientConfig {
         rayCostAuditProfile = auditBuilder
             .comment("Diagnostic shader ablation. baseline preserves rendering. Other profiles change the image and rebuild the RT pipeline: no_gi, no_sun, no_moon, no_area, no_sky_nee, no_volume, no_restir, no_pom, no_pbr, no_shadow_rays, no_dynamic_delta, primary_material, traversal_only.")
             .define("rayCostAuditProfile", "baseline", value -> value instanceof String name && RayTracingCostAudit.valid(name));
+        forceTlasBuild = auditBuilder
+            .comment("Diagnostic: rebuild TLAS instead of refitting with UPDATE. Keeps scene updates and BLAS work. Not a proven DEVICE_LOST fix; may increase build cost.")
+            .define("forceTlasBuild", false);
         auditSpec = auditBuilder.build();
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder

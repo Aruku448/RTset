@@ -351,6 +351,15 @@ final class NativeBuffer implements AutoCloseable {
     }
 
     static NativeBuffer create(VulkanDevice device, long size, int usage, boolean hostVisible) {
+        long alignment = (usage & KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR) != 0
+            ? 16L : 1L;
+        return createAligned(device, size, usage, hostVisible, alignment);
+    }
+
+    static NativeBuffer createAligned(VulkanDevice device, long size, int usage, boolean hostVisible, long alignment) {
+        if (alignment <= 0 || (alignment & (alignment - 1)) != 0) {
+            throw new IllegalArgumentException("Buffer alignment must be a positive power of two");
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             org.lwjgl.vulkan.VkBufferCreateInfo bufferInfo = org.lwjgl.vulkan.VkBufferCreateInfo.calloc(stack)
                 .sType$Default().size(size).usage(usage).sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
@@ -363,7 +372,10 @@ final class NativeBuffer implements AutoCloseable {
             PointerBuffer allocationHandle = stack.callocPointer(1);
             VulkanUtils.crashIfFailure(
                 device,
-                Vma.vmaCreateBuffer(device.vma(), bufferInfo, allocationInfo, bufferHandle, allocationHandle, null),
+                // Buffer memory requirements alone may not guarantee the device-address
+                // alignment required by TLAS input or shader binding tables.
+                Vma.vmaCreateBufferWithAlignment(device.vma(), bufferInfo, allocationInfo,
+                    alignment, bufferHandle, allocationHandle, null),
                 "Failed to create ray-tracing buffer"
             );
             long buffer = bufferHandle.get(0);

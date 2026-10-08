@@ -568,3 +568,9 @@ tasks.register('modelCaptureBatchTest', JavaExec) {
     mainClass = 'com.rtest.client.ModelCaptureBatchTest'
 }
 tasks.named('test') { dependsOn 'modelCaptureBatchTest' }
+
+tasks.register('vulkanUnsignedLimitTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.VulkanUnsignedLimitTest'
+}
+tasks.named('test') { dependsOn 'vulkanUnsignedLimitTest' }

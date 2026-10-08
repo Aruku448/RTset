@@ -23,7 +23,9 @@ Minecraft 26.2 / NeoForge 26.2 的 Vulkan 光追实验 Mod。它是原型，不�
 ./gradlew installToInstance -Pinstance_directory=/path/to/instance/mods
 ```
 
-Windows 新实例可使用 `setup-windows-instance.ps1`；NRD bridge 的构建方式见 [`native/nrd/README.md`](native/nrd/README.md)。Vulkan 启动需要 NeoForge early window control 关闭；项目的 Gradle 任务和 Windows helper 会处理该设置。
+Windows 新实例无需安装脚本：使用 Minecraft 26.2、对应 NeoForge 和 Java 25，将 Mod JAR 放进实际实例的 `mods`；在该实例的 `config/fml.toml` 设置 `earlyWindowControl = false`，启动器的**游戏参数**添加 `--graphicsBackend vulkan`。完全重启，进入世界按 F8。NRD bridge 构建方式见 [`native/nrd/README.md`](native/nrd/README.md)。
+
+Windows DEVICE_LOST 尚未在所有 GPU 上解决。`config/rtest-audit-client.toml` 的 `forceTlasBuild = true` 可隔离 TLAS UPDATE（默认 false）；`rayCostAuditProfile = "no_volume"` 可隔离体积光，改变画面，不是通用修复。AMD/NVIDIA 实测、性能差异、已修正的对齐/无符号问题及后续验证计划见 [Windows 调查总结](docs/windows-device-lost-2026-10-08.md)。
 
 ## 许可与源码交付
 
