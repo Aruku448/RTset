@@ -166,6 +166,7 @@ public final class RayTracingPbrMaterialsTest {
     }
 
     private static void assertUvTangentEncoding() {
+        assertReversedWindingTangent();
         RayTracingTangent.Frame aligned = RayTracingTangent.fromTriangle(
             0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
             0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F);
@@ -180,7 +181,55 @@ public final class RayTracingPbrMaterialsTest {
         }
     }
 
+    private static void assertReversedWindingTangent() {
+        // The same physical plane and UV derivatives, with opposite vertex winding.
+        // An authored/model normal can retain +Z independently of the triangle order.
+        var frame = RayTracingTangent.fromTriangle(
+            0, 0, 0, 0, 1, 0, 1, 0, 0,
+            0, 0, 0, 1, 1, 0, 0, 0, 1);
+        if (!frame.valid()) throw new AssertionError("Valid reversed-winding UV frame rejected");
+        // For N=+Z, the shader reference tangent is -X and reference bitangent is -Y.
+        double tx = -Math.cos(frame.angle()), ty = -Math.sin(frame.angle());
+        double bx = -ty * frame.handedness(), by = tx * frame.handedness();
+        if (Math.abs(tx - 1) > 1e-5 || Math.abs(ty) > 1e-5
+            || Math.abs(bx) > 1e-5 || Math.abs(by - 1) > 1e-5)
+            throw new AssertionError("PBR reconstructed +V points opposite the actual UV derivative on reversed winding");
+        // All cube faces, both authored normal sides, both windings and mirrored UVs.
+        for (int axis = 0; axis < 3; axis++) {
+            for (int normalSide : new int[] {-1, 1}) {
+                for (int winding : new int[] {-1, 1}) {
+                    for (int uvSide : new int[] {-1, 1}) {
+                        var n = new org.joml.Vector3f().setComponent(axis, normalSide);
+                        var u = new org.joml.Vector3f().setComponent((axis + 1) % 3, 1);
+                        var v = new org.joml.Vector3f().setComponent((axis + 2) % 3, 1);
+                        var p1 = winding > 0 ? u : v;
+                        var p2 = winding > 0 ? v : u;
+                        var f = RayTracingTangent.fromTriangle(0, 0, 0,
+                            p1.x, p1.y, p1.z, p2.x, p2.y, p2.z,
+                            0, 0, winding > 0 ? uvSide : 0, winding > 0 ? 0 : 1,
+                            winding > 0 ? 0 : uvSide, winding > 0 ? 1 : 0, n.x, n.y, n.z);
+                        var reference = n.cross(Math.abs(n.y) < .999f
+                            ? new org.joml.Vector3f(0, 1, 0) : new org.joml.Vector3f(1, 0, 0),
+                            new org.joml.Vector3f()).normalize();
+                        var referenceB = n.cross(reference, new org.joml.Vector3f());
+                        var t = reference.mul((float)Math.cos(f.angle()), new org.joml.Vector3f())
+                            .add(referenceB.mul((float)Math.sin(f.angle()))).normalize();
+                        var b = n.cross(t, new org.joml.Vector3f()).mul(f.handedness());
+                        if (!f.valid() || t.dot(u) * uvSide < .99999f || b.dot(v) < .99999f)
+                            throw new AssertionError("PBR cube-face frame mismatch: axis=" + axis
+                                + " normal=" + normalSide + " winding=" + winding + " mirror=" + uvSide);
+                    }
+                }
+            }
+        }
+    }
+
     private static void assertPbrFormatContract() throws IOException {
+        require(RayTracingShaders.CLOSEST_HIT_SHADER,
+            "pathNormal = vec4(pbrOrientSurfaceNormal(geometricNormal, normal, gl_WorldRayDirectionEXT)");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 normal = normalize(pathNormal.xyz);");
+        if (RayTracingShaders.RAYGEN_SHADER.contains("vec3 geometricNormal = normalize(pathNormal.xyz);"))
+            throw new AssertionError("Mapped normal must not be reclassified as the geometric face");
         String materials = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingPbrMaterials.java"));
         String scene = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingScene.java"));
         String pass = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingVulkanPass.java"));
@@ -222,7 +271,7 @@ public final class RayTracingPbrMaterialsTest {
         String config = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingClientConfig.java"));
         String screen = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingSettingsScreen.java"));
         require(config, "defineInRange(\"pbrEmissionStrength\", 1.0D, 0.0D, 20.0D)");
-        require(screen, "\"1.0\", 0.0D, 20.0D, RayTracingClientConfig.INSTANCE.pbrEmissionStrength.get()");
+        require(screen, "number(\"screen.rtest.settings.pbrEmissionStrength\", c.pbrEmissionStrength, 0.0D, 20.0D)");
     }
 
     private static void assertClose(float expected, float actual, String label) {

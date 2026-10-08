@@ -40,6 +40,11 @@ public final class ItemEntityCaptureMixin {
     private void rtest$beginEntityItemCapture(EntityRenderState state, CameraRenderState camera,
                                         double x, double y, double z, PoseStack pose,
                                         SubmitNodeCollector collector, CallbackInfo callback) {
+        // GUI item renderers (for example Armourer's Workshop mannequin items) submit entity
+        // render states without a world camera. These draws are not world geometry for RT capture.
+        if (camera == null || camera.pos == null) {
+            return;
+        }
         LivingEntityGeometryAdapter.beginEntity(state, camera.pos);
         if (state instanceof ItemEntityRenderState item) {
             ItemModelGeometryAdapter.beginItem(item, camera.pos);
@@ -55,6 +60,9 @@ public final class ItemEntityCaptureMixin {
     private void rtest$endEntityItemCapture(EntityRenderState state, CameraRenderState camera,
                                       double x, double y, double z, PoseStack pose,
                                       SubmitNodeCollector collector, CallbackInfo callback) {
+        if (camera == null || camera.pos == null) {
+            return;
+        }
         if (state instanceof ItemEntityRenderState) {
             ItemModelGeometryAdapter.endItem();
         } else if (state instanceof AvatarRenderState) {

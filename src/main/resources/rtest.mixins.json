@@ -32,7 +32,8 @@
     "CustomGeometryCaptureMixin",
     "LevelPlayerCaptureMixin",
     "MinecraftOfflineRenderMixin",
-    "TextureAtlasOfflineMixin"
+    "TextureAtlasOfflineMixin",
+    "SignTextCaptureMixin"
   ],
   "injectors": {
     "defaultRequire": 1

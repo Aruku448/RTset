@@ -1,0 +1,4946 @@
+{
+  "date": "2026-10-07",
+  "timezone": "Asia/Shanghai",
+  "extent": "854x1074",
+  "restir_mode": 0,
+  "gpu": "AMD Radeon RX 7800 XT",
+  "settings_identical_across_runs": true,
+  "restored_audit_profile": "baseline",
+  "method": "45 seconds per phase after 12 seconds settling; sampled GPU timestamps every 120 frames; hardware sampled at 1 Hz; adaptive clocks, no frequency lock; ablation differences are nonadditive marginal effects, not exclusive times",
+  "runs": [
+    {
+      "raw_directory": "/home/aruku/桌面/Minecraft开发与配置/RT/tmp/profiling/ray-audit-20261007-214835",
+      "summary": [
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "baseline",
+              "start": "2026-10-07T21:48:49",
+              "end": "2026-10-07T21:49:34",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.32,
+                  "p95": 1.365,
+                  "max": 1.372
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.348,
+                  "p95": 0.3625,
+                  "max": 0.366
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 19.746,
+                  "p95": 19.9717,
+                  "max": 20.083
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.005,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.038,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.034,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.032,
+                  "max": 0.032
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.015,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.101,
+                  "p95": 0.103,
+                  "max": 0.103
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.416,
+                  "p95": 0.4226,
+                  "max": 0.424
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.164,
+                  "p95": 22.4244,
+                  "max": 22.542
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.094,
+                  "p95": 0.0953,
+                  "max": 0.096
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.145,
+                  "p95": 0.149,
+                  "max": 0.149
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.017,
+                  "p95": 0.017,
+                  "max": 0.017
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.083,
+                  "p95": 0.0843,
+                  "max": 0.085
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.0443,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.0133,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 46,
+                  "median": 93.0,
+                  "p95": 94.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 46,
+                  "median": 20.0,
+                  "p95": 20.0,
+                  "max": 20.0
+                },
+                "vram_used": {
+                  "n": 46,
+                  "median": 8786845696.0,
+                  "p95": 8808469504.0,
+                  "max": 8812785664.0
+                },
+                "temperature_mC": {
+                  "n": 46,
+                  "median": 56000.0,
+                  "p95": 56000.0,
+                  "max": 56000.0
+                },
+                "hotspot_mC": {
+                  "n": 46,
+                  "median": 80000.0,
+                  "p95": 81000.0,
+                  "max": 81000.0
+                },
+                "power_uW": {
+                  "n": 46,
+                  "median": 207500000.0,
+                  "p95": 210000000.0,
+                  "max": 211000000.0
+                },
+                "power_cap_uW": {
+                  "n": 46,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 46,
+                  "median": 2444.0,
+                  "p95": 2457.75,
+                  "max": 2464.0
+                },
+                "mclk_mhz": {
+                  "n": 46,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0020000000000024443,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 0,
+          "profile": "baseline"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_shadow_rays",
+              "start": "2026-10-07T21:49:52",
+              "end": "2026-10-07T21:50:35",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.9344999999999999,
+                  "p95": 2.2516499999999997,
+                  "max": 2.29
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.504,
+                  "p95": 0.5698,
+                  "max": 0.575
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 14.542,
+                  "p95": 15.61775,
+                  "max": 15.751
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.037,
+                  "p95": 0.03735,
+                  "max": 0.038
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.013,
+                  "p95": 0.013,
+                  "max": 0.013
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.042,
+                  "p95": 0.04335,
+                  "max": 0.044
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.038,
+                  "p95": 0.040350000000000004,
+                  "max": 0.041
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.004,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.042,
+                  "p95": 0.043,
+                  "max": 0.043
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.0155,
+                  "p95": 0.016,
+                  "max": 0.016
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.127,
+                  "p95": 0.13335,
+                  "max": 0.134
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.019,
+                  "p95": 0.02,
+                  "max": 0.02
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.51,
+                  "p95": 0.539,
+                  "max": 0.539
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.009,
+                  "p95": 0.01,
+                  "max": 0.01
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 17.8295,
+                  "p95": 19.3654,
+                  "max": 19.537
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.002,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.027,
+                  "p95": 0.028,
+                  "max": 0.028
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.1165,
+                  "p95": 0.122,
+                  "max": 0.122
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.18,
+                  "p95": 0.18835,
+                  "max": 0.189
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.099,
+                  "p95": 0.103,
+                  "max": 0.103
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.0525,
+                  "p95": 0.05535,
+                  "max": 0.056
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.016,
+                  "p95": 0.017,
+                  "max": 0.017
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 44,
+                  "median": 80.0,
+                  "p95": 80.0,
+                  "max": 80.0
+                },
+                "mem_busy": {
+                  "n": 44,
+                  "median": 11.0,
+                  "p95": 12.0,
+                  "max": 12.0
+                },
+                "vram_used": {
+                  "n": 44,
+                  "median": 8728182784.0,
+                  "p95": 8910175846.4,
+                  "max": 8967700480.0
+                },
+                "temperature_mC": {
+                  "n": 44,
+                  "median": 49000.0,
+                  "p95": 50000.0,
+                  "max": 51000.0
+                },
+                "hotspot_mC": {
+                  "n": 44,
+                  "median": 61000.0,
+                  "p95": 62000.0,
+                  "max": 64000.0
+                },
+                "power_uW": {
+                  "n": 44,
+                  "median": 107000000.0,
+                  "p95": 109850000.0,
+                  "max": 111000000.0
+                },
+                "power_cap_uW": {
+                  "n": 44,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 44,
+                  "median": 1768.5,
+                  "p95": 1836.15,
+                  "max": 1859.0
+                },
+                "mclk_mhz": {
+                  "n": 44,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 1,
+          "profile": "no_shadow_rays"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_dynamic_delta",
+              "start": "2026-10-07T21:50:55",
+              "end": "2026-10-07T21:51:40",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.342,
+                  "p95": 1.3811,
+                  "max": 1.386
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.354,
+                  "p95": 0.36279999999999996,
+                  "max": 0.367
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 19.62,
+                  "p95": 19.8401,
+                  "max": 19.901
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.038,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.027,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.103,
+                  "p95": 0.10429999999999999,
+                  "max": 0.105
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.42,
+                  "p95": 0.4263,
+                  "max": 0.427
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.026,
+                  "p95": 22.3146,
+                  "max": 22.379
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.095,
+                  "p95": 0.097,
+                  "max": 0.097
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.146,
+                  "p95": 0.148,
+                  "max": 0.148
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.084,
+                  "p95": 0.086,
+                  "max": 0.086
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.045,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.0133,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 46,
+                  "median": 91.5,
+                  "p95": 94.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 46,
+                  "median": 17.0,
+                  "p95": 17.0,
+                  "max": 17.0
+                },
+                "vram_used": {
+                  "n": 46,
+                  "median": 8737568768.0,
+                  "p95": 8828843008.0,
+                  "max": 8854593536.0
+                },
+                "temperature_mC": {
+                  "n": 46,
+                  "median": 55000.0,
+                  "p95": 56000.0,
+                  "max": 56000.0
+                },
+                "hotspot_mC": {
+                  "n": 46,
+                  "median": 79000.0,
+                  "p95": 81000.0,
+                  "max": 81000.0
+                },
+                "power_uW": {
+                  "n": 46,
+                  "median": 198000000.0,
+                  "p95": 209750000.0,
+                  "max": 211000000.0
+                },
+                "power_cap_uW": {
+                  "n": 46,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 46,
+                  "median": 2422.0,
+                  "p95": 2466.5,
+                  "max": 2477.0
+                },
+                "mclk_mhz": {
+                  "n": 46,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 2,
+          "profile": "no_dynamic_delta"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_volume",
+              "start": "2026-10-07T21:52:00",
+              "end": "2026-10-07T21:52:44",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.7734999999999999,
+                  "p95": 2.3742,
+                  "max": 2.668
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.461,
+                  "p95": 0.6159499999999999,
+                  "max": 0.705
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 15.118500000000001,
+                  "p95": 18.71005,
+                  "max": 20.623
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.012,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.036,
+                  "p95": 0.03635,
+                  "max": 0.037
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.012,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.0315,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.00835,
+                  "max": 0.009
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.035,
+                  "p95": 0.0414,
+                  "max": 0.044
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.004,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.039,
+                  "p95": 0.04405,
+                  "max": 0.046
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.025,
+                  "p95": 0.02535,
+                  "max": 0.026
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.114,
+                  "p95": 0.13895,
+                  "max": 0.15
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.019,
+                  "p95": 0.02035,
+                  "max": 0.021
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.46599999999999997,
+                  "p95": 0.56295,
+                  "max": 0.6
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.009,
+                  "p95": 0.01,
+                  "max": 0.01
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 18.186500000000002,
+                  "p95": 22.6591,
+                  "max": 25.016
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.021,
+                  "p95": 0.02905,
+                  "max": 0.031
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.1065,
+                  "p95": 0.12825,
+                  "max": 0.138
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.162,
+                  "p95": 0.19669999999999999,
+                  "max": 0.211
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.0915,
+                  "p95": 0.1075,
+                  "max": 0.114
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.048,
+                  "p95": 0.0581,
+                  "max": 0.062
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.0167,
+                  "max": 0.018
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 80.0,
+                  "p95": 80.0,
+                  "max": 81.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 12.0,
+                  "p95": 13.0,
+                  "max": 13.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8657981440.0,
+                  "p95": 8675774464.0,
+                  "max": 8681009152.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 49000.0,
+                  "p95": 50000.0,
+                  "max": 50000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 61000.0,
+                  "p95": 62800.0,
+                  "max": 63000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 115000000.0,
+                  "p95": 116000000.0,
+                  "max": 117000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 1924.0,
+                  "p95": 1939.6,
+                  "max": 1946.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0019999999999988916,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 3,
+          "profile": "no_volume"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_restir",
+              "start": "2026-10-07T21:53:04",
+              "end": "2026-10-07T21:53:47",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.334,
+                  "p95": 1.8793999999999995,
+                  "max": 2.662
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.3555,
+                  "p95": 0.48919999999999986,
+                  "max": 0.692
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 19.846,
+                  "p95": 23.169299999999996,
+                  "max": 28.212
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.0055,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.011,
+                  "p95": 0.012,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.034,
+                  "p95": 0.038099999999999995,
+                  "max": 0.042
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.007,
+                  "p95": 0.00735,
+                  "max": 0.008
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.032,
+                  "p95": 0.034749999999999996,
+                  "max": 0.038
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.0035,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.037,
+                  "p95": 0.0394,
+                  "max": 0.042
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.015,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.103,
+                  "p95": 0.11499999999999999,
+                  "max": 0.128
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.01935,
+                  "max": 0.02
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.4205,
+                  "p95": 0.46459999999999996,
+                  "max": 0.514
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 22.253,
+                  "p95": 26.325849999999996,
+                  "max": 32.443
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.0013499999999999996,
+                  "max": 0.002
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.019,
+                  "p95": 0.021799999999999996,
+                  "max": 0.027
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.0955,
+                  "p95": 0.10595,
+                  "max": 0.117
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.1455,
+                  "p95": 0.16344999999999998,
+                  "max": 0.181
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.084,
+                  "p95": 0.09054999999999999,
+                  "max": 0.099
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.044,
+                  "p95": 0.048799999999999996,
+                  "max": 0.054
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.013,
+                  "p95": 0.0147,
+                  "max": 0.016
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 44,
+                  "median": 91.0,
+                  "p95": 92.0,
+                  "max": 93.0
+                },
+                "mem_busy": {
+                  "n": 44,
+                  "median": 19.0,
+                  "p95": 19.0,
+                  "max": 19.0
+                },
+                "vram_used": {
+                  "n": 44,
+                  "median": 8650682368.0,
+                  "p95": 8673491353.6,
+                  "max": 8679108608.0
+                },
+                "temperature_mC": {
+                  "n": 44,
+                  "median": 55000.0,
+                  "p95": 56000.0,
+                  "max": 56000.0
+                },
+                "hotspot_mC": {
+                  "n": 44,
+                  "median": 78000.0,
+                  "p95": 79000.0,
+                  "max": 80000.0
+                },
+                "power_uW": {
+                  "n": 44,
+                  "median": 199000000.0,
+                  "p95": 203000000.0,
+                  "max": 204000000.0
+                },
+                "power_cap_uW": {
+                  "n": 44,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 44,
+                  "median": 2416.5,
+                  "p95": 2435.85,
+                  "max": 2438.0
+                },
+                "mclk_mhz": {
+                  "n": 44,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 4,
+          "profile": "no_restir"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_gi",
+              "start": "2026-10-07T21:54:09",
+              "end": "2026-10-07T21:54:53",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.85,
+                  "p95": 2.4294,
+                  "max": 2.614
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.4835,
+                  "p95": 0.6209,
+                  "max": 0.656
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 15.0045,
+                  "p95": 17.86505,
+                  "max": 18.387
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.038,
+                  "p95": 0.038,
+                  "max": 0.038
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.0125,
+                  "p95": 0.01435,
+                  "max": 0.015
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.039,
+                  "p95": 0.04635,
+                  "max": 0.047
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.00835,
+                  "max": 0.009
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.036,
+                  "p95": 0.041350000000000005,
+                  "max": 0.042
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.004,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.04,
+                  "p95": 0.04435,
+                  "max": 0.045
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.015,
+                  "p95": 0.01635,
+                  "max": 0.017
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.12,
+                  "p95": 0.1407,
+                  "max": 0.142
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.0195,
+                  "p95": 0.02035,
+                  "max": 0.021
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.487,
+                  "p95": 0.56385,
+                  "max": 0.571
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.009,
+                  "p95": 0.01,
+                  "max": 0.01
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 18.1545,
+                  "p95": 21.87455,
+                  "max": 22.624
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.002,
+                  "p95": 0.002,
+                  "max": 0.002
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.026,
+                  "p95": 0.0287,
+                  "max": 0.03
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.111,
+                  "p95": 0.12975,
+                  "max": 0.133
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.172,
+                  "p95": 0.19970000000000002,
+                  "max": 0.201
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.0945,
+                  "p95": 0.10835,
+                  "max": 0.109
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.0505,
+                  "p95": 0.05835,
+                  "max": 0.059
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.015,
+                  "p95": 0.01735,
+                  "max": 0.018
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 80.0,
+                  "p95": 80.0,
+                  "max": 80.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 9.0,
+                  "p95": 9.0,
+                  "max": 9.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8617140224.0,
+                  "p95": 8666701824.0,
+                  "max": 8670928896.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 49000.0,
+                  "p95": 50000.0,
+                  "max": 50000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 60000.0,
+                  "p95": 62000.0,
+                  "max": 62000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 107000000.0,
+                  "p95": 109000000.0,
+                  "max": 109000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 1836.0,
+                  "p95": 1858.8,
+                  "max": 1864.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0019999999999988916,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 5,
+          "profile": "no_gi"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "baseline",
+              "start": "2026-10-07T21:55:13",
+              "end": "2026-10-07T21:55:56",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.3395000000000001,
+                  "p95": 1.4579,
+                  "max": 1.467
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.353,
+                  "p95": 0.38675,
+                  "max": 0.403
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 19.7865,
+                  "p95": 20.44755,
+                  "max": 20.547
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.01,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.039,
+                  "p95": 0.03935,
+                  "max": 0.04
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.011,
+                  "p95": 0.012,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.034,
+                  "p95": 0.03535,
+                  "max": 0.036
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.037,
+                  "p95": 0.038,
+                  "max": 0.038
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.101,
+                  "p95": 0.1067,
+                  "max": 0.108
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.4155,
+                  "p95": 0.43645,
+                  "max": 0.441
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 22.21,
+                  "p95": 23.0607,
+                  "max": 23.166
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.095,
+                  "p95": 0.09970000000000001,
+                  "max": 0.101
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.144,
+                  "p95": 0.15175,
+                  "max": 0.155
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.083,
+                  "p95": 0.08735,
+                  "max": 0.088
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.0435,
+                  "p95": 0.04535,
+                  "max": 0.046
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 44,
+                  "median": 92.0,
+                  "p95": 92.0,
+                  "max": 93.0
+                },
+                "mem_busy": {
+                  "n": 44,
+                  "median": 19.0,
+                  "p95": 19.0,
+                  "max": 19.0
+                },
+                "vram_used": {
+                  "n": 44,
+                  "median": 8616103936.0,
+                  "p95": 8633711001.6,
+                  "max": 8640335872.0
+                },
+                "temperature_mC": {
+                  "n": 44,
+                  "median": 55000.0,
+                  "p95": 56000.0,
+                  "max": 56000.0
+                },
+                "hotspot_mC": {
+                  "n": 44,
+                  "median": 78000.0,
+                  "p95": 79850.0,
+                  "max": 80000.0
+                },
+                "power_uW": {
+                  "n": 44,
+                  "median": 201000000.0,
+                  "p95": 203850000.0,
+                  "max": 205000000.0
+                },
+                "power_cap_uW": {
+                  "n": 44,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 44,
+                  "median": 2425.0,
+                  "p95": 2437.85,
+                  "max": 2443.0
+                },
+                "mclk_mhz": {
+                  "n": 44,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0019999999999988916,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 6,
+          "profile": "baseline"
+        }
+      ],
+      "comparisons": {
+        "extent": "854x1074",
+        "baseline_bookend_drift_percent": 0.2051048313582493,
+        "rows": [
+          {
+            "phase": 0,
+            "profile": "baseline",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 19.746,
+              "p95": 19.9717,
+              "max": 20.083
+            },
+            "baseline_minus_profile_median_ms": 0.0
+          },
+          {
+            "phase": 1,
+            "profile": "no_shadow_rays",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 14.542,
+              "p95": 15.61775,
+              "max": 15.751
+            },
+            "baseline_minus_profile_median_ms": 5.203999999999999
+          },
+          {
+            "phase": 2,
+            "profile": "no_dynamic_delta",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 19.62,
+              "p95": 19.8401,
+              "max": 19.901
+            },
+            "baseline_minus_profile_median_ms": 0.12599999999999767
+          },
+          {
+            "phase": 3,
+            "profile": "no_volume",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 15.118500000000001,
+              "p95": 18.71005,
+              "max": 20.623
+            },
+            "baseline_minus_profile_median_ms": 4.627499999999998
+          },
+          {
+            "phase": 4,
+            "profile": "no_restir",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 19.846,
+              "p95": 23.169299999999996,
+              "max": 28.212
+            },
+            "baseline_minus_profile_median_ms": -0.10000000000000142
+          },
+          {
+            "phase": 5,
+            "profile": "no_gi",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 15.0045,
+              "p95": 17.86505,
+              "max": 18.387
+            },
+            "baseline_minus_profile_median_ms": 4.7414999999999985
+          },
+          {
+            "phase": 6,
+            "profile": "baseline",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 19.7865,
+              "p95": 20.44755,
+              "max": 20.547
+            },
+            "baseline_minus_profile_median_ms": -0.040500000000001535
+          }
+        ],
+        "note": "Marginal ablations, not exclusive times. Do not add differences. Baseline drift, changed scene, settings or competing GPU work can invalidate attribution."
+      },
+      "settings": {
+        "rtest-client.toml": {
+          "gpuLightTreeEnabled": true,
+          "sunIntensity": 1.0,
+          "sunDaylightIntensityEnabled": true,
+          "sunDaylightPeakIntensity": 16.0,
+          "sunAngularRadiusDegrees": 0.27,
+          "sunShadowSamples": 4,
+          "sunColorTemperature": 6500.0,
+          "ambientColorTemperature": 6500.0,
+          "shadowStrength": 1.0,
+          "skyboxTextureEnabled": true,
+          "skyImportanceSamplingEnabled": true,
+          "skyCdfHardwareEnabled": true,
+          "skyboxDaylightOpacityEnabled": true,
+          "skyboxTextureOpacity": 0.25,
+          "moonEnabled": true,
+          "moonIntensity": 0.06,
+          "primeAtmosphereEnabled": true,
+          "volumetricLightingEnabled": true,
+          "volumetricLightingStrength": 1.0,
+          "volumetricFogDensity": 0.5523242882562278,
+          "atmosphereAltitudeOffsetMeters": 300,
+          "volumetricLightingQuality": 2,
+          "volumetricShadowSamples": 0,
+          "sunAngleOffset": 0.0,
+          "sunAzimuthOffset": 0.0,
+          "giBounces": 4,
+          "pbrFormat": "labpbr",
+          "pbrNormalStrength": 1.0,
+          "pbrTextureAoEnabled": false,
+          "pbrPorosityEnabled": true,
+          "pbrWetnessStrength": 1.0,
+          "pbrEmissionStrength": 1.0,
+          "pbrPredefinedMetalsEnabled": true,
+          "pbrTerrainCpuCaptureEnabled": true,
+          "terrainLodEnabled": true,
+          "terrainLodNativeRadiusChunks": 8,
+          "terrainLodMaxLevel": 2,
+          "terrainLodBuildBudget": 1,
+          "terrainLodQueueLimit": 32,
+          "terrainLodFarCacheEnabled": true,
+          "terrainLodFarRadiusChunks": 64,
+          "terrainLodGpuTraversalEnabled": false,
+          "pbrParallaxEnabled": true,
+          "pbrEntityParallaxEnabled": true,
+          "pbrParallaxDepth": 1.0,
+          "fsrQuality": "native_aa",
+          "hdrEnabled": false,
+          "hdrWideGamutEnabled": false,
+          "nativeColorDecodeEnabled": false,
+          "primeColorManagementEnabled": true,
+          "fluidRtEnabled": true,
+          "dynamicEntityMvpEnabled": true,
+          "nrdEnabled": false,
+          "nrdEntityEnabled": false,
+          "nrdStrength": 1.0,
+          "nrdHitDistanceReconstruction": "area_3x3",
+          "nrdDiffusePrepassBlurRadius": 0.0,
+          "nrdSpecularPrepassBlurRadius": 0.0,
+          "nrdMinHitDistanceWeight": 0.1,
+          "nrdMinBlurRadius": 0.5,
+          "nrdMaxBlurRadius": 8.0,
+          "nrdLobeAngleFraction": 0.15,
+          "nrdRoughnessFraction": 0.15,
+          "nrdPlaneDistanceSensitivity": 0.02,
+          "nrdFastHistoryClampingSigmaScale": 2.0,
+          "nrdFireflySuppressorMinRelativeScale": 1.0,
+          "nrdDisocclusionThreshold": 0.01,
+          "nrdMaxAccumulatedFrameNum": 48,
+          "nrdMaxFastAccumulatedFrameNum": 12,
+          "nrdHistoryFixFrameNum": 3,
+          "nrdAntiFirefly": true,
+          "nrdSpecularPrepassMotionOnly": true,
+          "nrdHistoryFixPixelStride": 4,
+          "nrdConvergenceScale": 1.0,
+          "nrdConvergenceBase": 0.2,
+          "nrdConvergencePercent": 0.8,
+          "nrdDenoisingRange": 60000.0,
+          "debugView": 0,
+          "emissionScale": 25.0,
+          "postProcessing": {
+            "enabled": true,
+            "depthOfField": true,
+            "autofocus": true,
+            "rainBloomFog": true,
+            "dofSamples": 25,
+            "motionSamples": 8,
+            "agxLook": 2,
+            "toneMapping": "agx",
+            "exposureEV": -0.18502557829181576,
+            "autoExposureStrength": 0.19217081850533807,
+            "centerWeight": 1.0,
+            "exposureTendency": 1.0,
+            "bloomIntensity": 3.854085576067616,
+            "vignetteStrength": 1.0,
+            "saturation": 0.8548014902135231,
+            "contrast": 1.0,
+            "blackTightness": 1.0,
+            "minimumBrightness": 0.0,
+            "gamma": 1.0,
+            "colorTemperature": 6500.0,
+            "focalLength": 0.001,
+            "apertureScale": 3.899359083073843,
+            "manualFocusDepth": 100.0,
+            "maxBlurRadius": 51.71392279248221,
+            "motionStrength": 0.4871849455040872,
+            "sharpenStrength": 1.0,
+            "chromaticR": 0.0026690391459074734,
+            "chromaticG": 0.0029891153247330964,
+            "chromaticB": 0.0035229231539145906,
+            "distortion": 0.1693936276690391,
+            "rainBloomFogDensity": 1.0,
+            "agxMinEV": -7.5,
+            "agxMaxEV": 6.0
+          }
+        },
+        "rtest-restir-client.toml": {
+          "restirDirectEnabled": false,
+          "restirSuffixEnabled": false,
+          "restirCandidates": 11,
+          "restirSpatialNeighbors": 2,
+          "restirGatherPrefixes": 2
+        }
+      },
+      "settings_identical_within_run": true
+    },
+    {
+      "raw_directory": "/home/aruku/桌面/Minecraft开发与配置/RT/tmp/profiling/ray-audit-20261007-215601",
+      "summary": [
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "baseline",
+              "start": "2026-10-07T21:56:16",
+              "end": "2026-10-07T21:57:00",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.318,
+                  "p95": 1.379,
+                  "max": 1.407
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.356,
+                  "p95": 0.3659,
+                  "max": 0.368
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 19.818,
+                  "p95": 20.1249,
+                  "max": 20.218
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.005,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.0113,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.035,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.0373,
+                  "max": 0.038
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.103,
+                  "p95": 0.10529999999999999,
+                  "max": 0.106
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.423,
+                  "p95": 0.4289,
+                  "max": 0.431
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008299999999999998,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.245,
+                  "p95": 22.5301,
+                  "max": 22.626
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.096,
+                  "p95": 0.098,
+                  "max": 0.098
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.147,
+                  "p95": 0.14959999999999998,
+                  "max": 0.151
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.085,
+                  "p95": 0.086,
+                  "max": 0.086
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.045,
+                  "p95": 0.045,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 94.0,
+                  "p95": 95.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 20.0,
+                  "p95": 20.0,
+                  "max": 20.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8664297472.0,
+                  "p95": 8730324172.8,
+                  "max": 8747118592.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 57000.0,
+                  "p95": 58000.0,
+                  "max": 58000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 82000.0,
+                  "p95": 83000.0,
+                  "max": 83000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 210000000.0,
+                  "p95": 211800000.0,
+                  "max": 212000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2445.0,
+                  "p95": 2454.0,
+                  "max": 2457.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 0,
+          "profile": "baseline"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_sun",
+              "start": "2026-10-07T21:57:20",
+              "end": "2026-10-07T21:58:05",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.339,
+                  "p95": 1.3592000000000002,
+                  "max": 1.362
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.352,
+                  "p95": 0.3586,
+                  "max": 0.36
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 20.875,
+                  "p95": 21.1277,
+                  "max": 21.274
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.006,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.039,
+                  "p95": 0.0393,
+                  "max": 0.04
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.034,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.031,
+                  "p95": 0.032,
+                  "max": 0.032
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.103,
+                  "p95": 0.10429999999999999,
+                  "max": 0.105
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.419,
+                  "p95": 0.426,
+                  "max": 0.426
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 23.315,
+                  "p95": 23.5538,
+                  "max": 23.712
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.095,
+                  "p95": 0.097,
+                  "max": 0.097
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.145,
+                  "p95": 0.1483,
+                  "max": 0.149
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.084,
+                  "p95": 0.086,
+                  "max": 0.086
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.045,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 46,
+                  "median": 95.0,
+                  "p95": 96.0,
+                  "max": 96.0
+                },
+                "mem_busy": {
+                  "n": 46,
+                  "median": 21.0,
+                  "p95": 21.0,
+                  "max": 21.0
+                },
+                "vram_used": {
+                  "n": 46,
+                  "median": 8703887360.0,
+                  "p95": 8738847744.0,
+                  "max": 8747122688.0
+                },
+                "temperature_mC": {
+                  "n": 46,
+                  "median": 58000.0,
+                  "p95": 58000.0,
+                  "max": 58000.0
+                },
+                "hotspot_mC": {
+                  "n": 46,
+                  "median": 83000.0,
+                  "p95": 83000.0,
+                  "max": 83000.0
+                },
+                "power_uW": {
+                  "n": 46,
+                  "median": 211000000.0,
+                  "p95": 211000000.0,
+                  "max": 212000000.0
+                },
+                "power_cap_uW": {
+                  "n": 46,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 46,
+                  "median": 2473.5,
+                  "p95": 2482.0,
+                  "max": 2485.0
+                },
+                "mclk_mhz": {
+                  "n": 46,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 1,
+          "profile": "no_sun"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_moon",
+              "start": "2026-10-07T21:58:25",
+              "end": "2026-10-07T21:59:09",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.357,
+                  "p95": 1.3633,
+                  "max": 1.364
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.357,
+                  "p95": 0.363,
+                  "max": 0.363
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 19.588,
+                  "p95": 19.8109,
+                  "max": 19.813
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.01,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.034,
+                  "p95": 0.034300000000000004,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.032,
+                  "max": 0.032
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.102,
+                  "p95": 0.104,
+                  "max": 0.104
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.418,
+                  "p95": 0.421,
+                  "max": 0.421
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008299999999999998,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.016,
+                  "p95": 22.2261,
+                  "max": 22.273
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.095,
+                  "p95": 0.0963,
+                  "max": 0.097
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.145,
+                  "p95": 0.147,
+                  "max": 0.147
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.017,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.084,
+                  "p95": 0.0843,
+                  "max": 0.085
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.044,
+                  "max": 0.044
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.013,
+                  "max": 0.013
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 93.0,
+                  "p95": 94.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 18.0,
+                  "p95": 18.0,
+                  "max": 18.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8685678592.0,
+                  "p95": 8767353651.2,
+                  "max": 8788713472.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 59000.0,
+                  "p95": 59000.0,
+                  "max": 59000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 83000.0,
+                  "p95": 84000.0,
+                  "max": 84000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 207000000.0,
+                  "p95": 211000000.0,
+                  "max": 211000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2444.0,
+                  "p95": 2456.6,
+                  "max": 2462.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 2,
+          "profile": "no_moon"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_area",
+              "start": "2026-10-07T21:59:30",
+              "end": "2026-10-07T22:00:14",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.353,
+                  "p95": 1.4064,
+                  "max": 1.419
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.357,
+                  "p95": 0.3796,
+                  "max": 0.381
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 17.583,
+                  "p95": 17.8979,
+                  "max": 18.068
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.01,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.012,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.035,
+                  "p95": 0.036,
+                  "max": 0.036
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.004,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.038,
+                  "p95": 0.038,
+                  "max": 0.038
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.015,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.106,
+                  "p95": 0.107,
+                  "max": 0.107
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018299999999999997,
+                  "max": 0.019
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.429,
+                  "p95": 0.4359,
+                  "max": 0.438
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.009,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 20.012,
+                  "p95": 20.4521,
+                  "max": 20.597
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019299999999999998,
+                  "max": 0.02
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.098,
+                  "p95": 0.0993,
+                  "max": 0.1
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.149,
+                  "p95": 0.1522,
+                  "max": 0.155
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.086,
+                  "p95": 0.087,
+                  "max": 0.087
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.045,
+                  "p95": 0.046,
+                  "max": 0.046
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 87.0,
+                  "p95": 88.0,
+                  "max": 89.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 14.0,
+                  "p95": 14.0,
+                  "max": 14.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8625942528.0,
+                  "p95": 8667616870.4,
+                  "max": 8677523456.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 58000.0,
+                  "p95": 58000.0,
+                  "max": 58000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 79000.0,
+                  "p95": 80000.0,
+                  "max": 80000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 185000000.0,
+                  "p95": 189000000.0,
+                  "max": 190000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2357.0,
+                  "p95": 2377.0,
+                  "max": 2392.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0020000000000024443,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 3,
+          "profile": "no_area"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_sky_nee",
+              "start": "2026-10-07T22:00:35",
+              "end": "2026-10-07T22:01:19",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.339,
+                  "p95": 1.4311,
+                  "max": 1.443
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.358,
+                  "p95": 0.3795,
+                  "max": 0.383
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 17.079,
+                  "p95": 17.1867,
+                  "max": 17.249
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.032,
+                  "max": 0.032
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.035,
+                  "p95": 0.0353,
+                  "max": 0.036
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.0333,
+                  "max": 0.034
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.004,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.0373,
+                  "max": 0.038
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.105,
+                  "p95": 0.10729999999999999,
+                  "max": 0.108
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.429,
+                  "p95": 0.4369,
+                  "max": 0.439
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008299999999999998,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 19.533,
+                  "p95": 19.6904,
+                  "max": 19.829
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.098,
+                  "p95": 0.0993,
+                  "max": 0.1
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.149,
+                  "p95": 0.1533,
+                  "max": 0.154
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.086,
+                  "p95": 0.08729999999999999,
+                  "max": 0.088
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.045,
+                  "p95": 0.0453,
+                  "max": 0.046
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 85.0,
+                  "p95": 87.0,
+                  "max": 87.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 17.0,
+                  "p95": 17.0,
+                  "max": 17.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8669954048.0,
+                  "p95": 8714163814.4,
+                  "max": 8738942976.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 58000.0,
+                  "p95": 59000.0,
+                  "max": 59000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 79000.0,
+                  "p95": 79000.0,
+                  "max": 80000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 185000000.0,
+                  "p95": 188000000.0,
+                  "max": 188000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2336.0,
+                  "p95": 2361.6,
+                  "max": 2365.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 4,
+          "profile": "no_sky_nee"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_pom",
+              "start": "2026-10-07T22:01:39",
+              "end": "2026-10-07T22:02:23",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.344,
+                  "p95": 1.3821999999999999,
+                  "max": 1.399
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.354,
+                  "p95": 0.36719999999999997,
+                  "max": 0.37
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 19.775,
+                  "p95": 20.0303,
+                  "max": 20.276
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.005,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.0113,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.034,
+                  "p95": 0.0353,
+                  "max": 0.036
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007299999999999999,
+                  "max": 0.008
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.004,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.0373,
+                  "max": 0.038
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.103,
+                  "p95": 0.1056,
+                  "max": 0.107
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.421,
+                  "p95": 0.4295,
+                  "max": 0.433
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.201,
+                  "p95": 22.5238,
+                  "max": 22.801
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.096,
+                  "p95": 0.0973,
+                  "max": 0.098
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.146,
+                  "p95": 0.1503,
+                  "max": 0.151
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.084,
+                  "p95": 0.086,
+                  "max": 0.086
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.0453,
+                  "max": 0.046
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 94.0,
+                  "p95": 95.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 20.0,
+                  "p95": 20.0,
+                  "max": 20.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8672509952.0,
+                  "p95": 8792884838.4,
+                  "max": 8995393536.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 60000.0,
+                  "p95": 60000.0,
+                  "max": 60000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 84000.0,
+                  "p95": 85000.0,
+                  "max": 86000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 210000000.0,
+                  "p95": 211000000.0,
+                  "max": 237000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2442.0,
+                  "p95": 2457.6,
+                  "max": 2484.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000001137,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 5,
+          "profile": "no_pom"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "no_pbr",
+              "start": "2026-10-07T22:02:43",
+              "end": "2026-10-07T22:03:27",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 1.345,
+                  "p95": 1.3681,
+                  "max": 1.373
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.356,
+                  "p95": 0.3626,
+                  "max": 0.364
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 20.019,
+                  "p95": 20.1315,
+                  "max": 20.17
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.005,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.038,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.011,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.034,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.032,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.004,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.015,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.102,
+                  "p95": 0.105,
+                  "max": 0.105
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018299999999999997,
+                  "max": 0.019
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.418,
+                  "p95": 0.427,
+                  "max": 0.427
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.008,
+                  "p95": 0.008,
+                  "max": 0.008
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 22.447,
+                  "p95": 22.5657,
+                  "max": 22.6
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.019,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.094,
+                  "p95": 0.097,
+                  "max": 0.097
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.145,
+                  "p95": 0.149,
+                  "max": 0.149
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.084,
+                  "p95": 0.0853,
+                  "max": 0.086
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.044,
+                  "p95": 0.045,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.013,
+                  "p95": 0.0133,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 45,
+                  "median": 94.0,
+                  "p95": 95.0,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 45,
+                  "median": 20.0,
+                  "p95": 20.0,
+                  "max": 20.0
+                },
+                "vram_used": {
+                  "n": 45,
+                  "median": 8598380544.0,
+                  "p95": 8629053849.6,
+                  "max": 8631046144.0
+                },
+                "temperature_mC": {
+                  "n": 45,
+                  "median": 60000.0,
+                  "p95": 60000.0,
+                  "max": 60000.0
+                },
+                "hotspot_mC": {
+                  "n": 45,
+                  "median": 85000.0,
+                  "p95": 85000.0,
+                  "max": 85000.0
+                },
+                "power_uW": {
+                  "n": 45,
+                  "median": 210000000.0,
+                  "p95": 211000000.0,
+                  "max": 211000000.0
+                },
+                "power_cap_uW": {
+                  "n": 45,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 45,
+                  "median": 2439.0,
+                  "p95": 2448.8,
+                  "max": 2453.0
+                },
+                "mclk_mhz": {
+                  "n": 45,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.004000000000001336,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 6,
+          "profile": "no_pbr"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "primary_material",
+              "start": "2026-10-07T22:03:45",
+              "end": "2026-10-07T22:04:30",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 15,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 15,
+                  "median": 2.784,
+                  "p95": 2.7996,
+                  "max": 2.801
+                },
+                "tlas_sync_ms": {
+                  "n": 15,
+                  "median": 0.725,
+                  "p95": 0.7339,
+                  "max": 0.736
+                },
+                "rt_bind_sync_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 15,
+                  "median": 3.045,
+                  "p95": 3.0889,
+                  "max": 3.091
+                },
+                "rt_compute_sync_ms": {
+                  "n": 15,
+                  "median": 0.01,
+                  "p95": 0.0153,
+                  "max": 0.016
+                },
+                "denoise_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 15,
+                  "median": 0.021,
+                  "p95": 0.022,
+                  "max": 0.022
+                },
+                "fsr_prepare_ms": {
+                  "n": 15,
+                  "median": 0.02,
+                  "p95": 0.02,
+                  "max": 0.02
+                },
+                "fsr_inputs_ms": {
+                  "n": 15,
+                  "median": 0.069,
+                  "p95": 0.07,
+                  "max": 0.07
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.017,
+                  "p95": 0.017,
+                  "max": 0.017
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 15,
+                  "median": 0.047,
+                  "p95": 0.0473,
+                  "max": 0.048
+                },
+                "fsr_shading_change_ms": {
+                  "n": 15,
+                  "median": 0.006,
+                  "p95": 0.011,
+                  "max": 0.011
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 15,
+                  "median": 0.061,
+                  "p95": 0.061,
+                  "max": 0.061
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 15,
+                  "median": 0.033,
+                  "p95": 0.033,
+                  "max": 0.033
+                },
+                "fsr_accumulate_ms": {
+                  "n": 15,
+                  "median": 0.201,
+                  "p95": 0.201,
+                  "max": 0.201
+                },
+                "fsr_rcas_ms": {
+                  "n": 15,
+                  "median": 0.027,
+                  "p95": 0.028,
+                  "max": 0.028
+                },
+                "debug_offline_ms": {
+                  "n": 15,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 15,
+                  "median": 0.838,
+                  "p95": 0.84,
+                  "max": 0.84
+                },
+                "output_copy_ms": {
+                  "n": 15,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "command_total_ms": {
+                  "n": 15,
+                  "median": 7.911,
+                  "p95": 7.976,
+                  "max": 7.997
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 15,
+                  "median": 0.003,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "exposure_focus_ms": {
+                  "n": 15,
+                  "median": 0.041,
+                  "p95": 0.0423,
+                  "max": 0.043
+                },
+                "dof_coc_ms": {
+                  "n": 15,
+                  "median": 0.194,
+                  "p95": 0.194,
+                  "max": 0.194
+                },
+                "dof_ms": {
+                  "n": 15,
+                  "median": 0.301,
+                  "p95": 0.3036,
+                  "max": 0.305
+                },
+                "motion_ms": {
+                  "n": 15,
+                  "median": 0.026,
+                  "p95": 0.026299999999999997,
+                  "max": 0.027
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 15,
+                  "median": 0.158,
+                  "p95": 0.1593,
+                  "max": 0.16
+                },
+                "grade_tonemap_ms": {
+                  "n": 15,
+                  "median": 0.087,
+                  "p95": 0.088,
+                  "max": 0.088
+                },
+                "sharpen_dither_ms": {
+                  "n": 15,
+                  "median": 0.025,
+                  "p95": 0.026,
+                  "max": 0.026
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 46,
+                  "median": 48.0,
+                  "p95": 51.0,
+                  "max": 53.0
+                },
+                "mem_busy": {
+                  "n": 46,
+                  "median": 3.0,
+                  "p95": 4.0,
+                  "max": 4.0
+                },
+                "vram_used": {
+                  "n": 46,
+                  "median": 8597184512.0,
+                  "p95": 8624502784.0,
+                  "max": 8625680384.0
+                },
+                "temperature_mC": {
+                  "n": 46,
+                  "median": 48000.0,
+                  "p95": 51000.0,
+                  "max": 53000.0
+                },
+                "hotspot_mC": {
+                  "n": 46,
+                  "median": 59000.0,
+                  "p95": 62000.0,
+                  "max": 66000.0
+                },
+                "power_uW": {
+                  "n": 46,
+                  "median": 60000000.0,
+                  "p95": 61000000.0,
+                  "max": 71000000.0
+                },
+                "power_cap_uW": {
+                  "n": 46,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 46,
+                  "median": 1247.0,
+                  "p95": 1251.0,
+                  "max": 1324.0
+                },
+                "mclk_mhz": {
+                  "n": 46,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0039999999999995595,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 7,
+          "profile": "primary_material"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "traversal_only",
+              "start": "2026-10-07T22:04:48",
+              "end": "2026-10-07T22:05:30",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 2.7945,
+                  "p95": 2.8047,
+                  "max": 2.806
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.7255,
+                  "p95": 0.735,
+                  "max": 0.735
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 3.0275,
+                  "p95": 3.04865,
+                  "max": 3.061
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.016,
+                  "max": 0.016
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.022,
+                  "p95": 0.022,
+                  "max": 0.022
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.0205,
+                  "p95": 0.021,
+                  "max": 0.021
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.07,
+                  "p95": 0.07,
+                  "max": 0.07
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.012,
+                  "p95": 0.013,
+                  "max": 0.013
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.036,
+                  "p95": 0.0377,
+                  "max": 0.039
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.006,
+                  "p95": 0.006,
+                  "max": 0.006
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.059,
+                  "p95": 0.059,
+                  "max": 0.059
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.033,
+                  "p95": 0.034,
+                  "max": 0.034
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.1975,
+                  "p95": 0.198,
+                  "max": 0.198
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.027,
+                  "p95": 0.028,
+                  "max": 0.028
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.8345,
+                  "p95": 0.839,
+                  "max": 0.839
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 7.889,
+                  "p95": 7.92075,
+                  "max": 7.924
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.003,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.041,
+                  "p95": 0.042,
+                  "max": 0.042
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.194,
+                  "p95": 0.194,
+                  "max": 0.194
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.3015,
+                  "p95": 0.306,
+                  "max": 0.306
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.026,
+                  "p95": 0.026,
+                  "max": 0.026
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.157,
+                  "p95": 0.158,
+                  "max": 0.158
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.087,
+                  "p95": 0.08735,
+                  "max": 0.088
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.025,
+                  "p95": 0.026,
+                  "max": 0.026
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 43,
+                  "median": 49.0,
+                  "p95": 50.9,
+                  "max": 54.0
+                },
+                "mem_busy": {
+                  "n": 43,
+                  "median": 3.0,
+                  "p95": 4.0,
+                  "max": 4.0
+                },
+                "vram_used": {
+                  "n": 43,
+                  "median": 8583450624.0,
+                  "p95": 8620254822.4,
+                  "max": 8626651136.0
+                },
+                "temperature_mC": {
+                  "n": 43,
+                  "median": 44000.0,
+                  "p95": 45000.0,
+                  "max": 46000.0
+                },
+                "hotspot_mC": {
+                  "n": 43,
+                  "median": 55000.0,
+                  "p95": 55000.0,
+                  "max": 57000.0
+                },
+                "power_uW": {
+                  "n": 43,
+                  "median": 59000000.0,
+                  "p95": 60000000.0,
+                  "max": 65000000.0
+                },
+                "power_cap_uW": {
+                  "n": 43,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 43,
+                  "median": 1247.0,
+                  "p95": 1250.9,
+                  "max": 1290.0
+                },
+                "mclk_mhz": {
+                  "n": 43,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.004999999999999893,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 8,
+          "profile": "traversal_only"
+        },
+        {
+          "groups": [
+            {
+              "extent": "854x1074",
+              "mode": 0,
+              "audit_profile": "baseline",
+              "start": "2026-10-07T22:05:52",
+              "end": "2026-10-07T22:06:35",
+              "steps_ms": {
+                "atmosphere_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "terrain_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "rt_inputs_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "dynamic_blas_ms": {
+                  "n": 14,
+                  "median": 1.37,
+                  "p95": 1.41545,
+                  "max": 1.42
+                },
+                "tlas_sync_ms": {
+                  "n": 14,
+                  "median": 0.357,
+                  "p95": 0.3715,
+                  "max": 0.378
+                },
+                "rt_bind_sync_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "trace_ms": {
+                  "n": 14,
+                  "median": 20.6555,
+                  "p95": 20.91475,
+                  "max": 20.957
+                },
+                "rt_compute_sync_ms": {
+                  "n": 14,
+                  "median": 0.005,
+                  "p95": 0.014,
+                  "max": 0.014
+                },
+                "denoise_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "aerial_composite_ms": {
+                  "n": 14,
+                  "median": 0.039,
+                  "p95": 0.039,
+                  "max": 0.039
+                },
+                "fsr_prepare_ms": {
+                  "n": 14,
+                  "median": 0.011,
+                  "p95": 0.012,
+                  "max": 0.012
+                },
+                "fsr_inputs_ms": {
+                  "n": 14,
+                  "median": 0.034,
+                  "p95": 0.035,
+                  "max": 0.035
+                },
+                "fsr_luma_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.007,
+                  "p95": 0.007,
+                  "max": 0.007
+                },
+                "fsr_shading_pyramid_ms": {
+                  "n": 14,
+                  "median": 0.032,
+                  "p95": 0.032,
+                  "max": 0.032
+                },
+                "fsr_shading_change_ms": {
+                  "n": 14,
+                  "median": 0.003,
+                  "p95": 0.004,
+                  "max": 0.004
+                },
+                "fsr_prepare_reactivity_ms": {
+                  "n": 14,
+                  "median": 0.037,
+                  "p95": 0.037,
+                  "max": 0.037
+                },
+                "fsr_luma_instability_ms": {
+                  "n": 14,
+                  "median": 0.014,
+                  "p95": 0.015,
+                  "max": 0.015
+                },
+                "fsr_accumulate_ms": {
+                  "n": 14,
+                  "median": 0.1015,
+                  "p95": 0.10435,
+                  "max": 0.105
+                },
+                "fsr_rcas_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "debug_offline_ms": {
+                  "n": 14,
+                  "median": 0.0,
+                  "p95": 0.0,
+                  "max": 0.0
+                },
+                "post_display_ms": {
+                  "n": 14,
+                  "median": 0.416,
+                  "p95": 0.42669999999999997,
+                  "max": 0.428
+                },
+                "output_copy_ms": {
+                  "n": 14,
+                  "median": 0.008,
+                  "p95": 0.00835,
+                  "max": 0.009
+                },
+                "command_total_ms": {
+                  "n": 14,
+                  "median": 23.0975,
+                  "p95": 23.40605,
+                  "max": 23.421
+                }
+              },
+              "nested_post_ms": {
+                "setup_ms": {
+                  "n": 14,
+                  "median": 0.001,
+                  "p95": 0.001,
+                  "max": 0.001
+                },
+                "exposure_focus_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.019,
+                  "max": 0.019
+                },
+                "dof_coc_ms": {
+                  "n": 14,
+                  "median": 0.094,
+                  "p95": 0.09670000000000001,
+                  "max": 0.098
+                },
+                "dof_ms": {
+                  "n": 14,
+                  "median": 0.1445,
+                  "p95": 0.14834999999999998,
+                  "max": 0.149
+                },
+                "motion_ms": {
+                  "n": 14,
+                  "median": 0.018,
+                  "p95": 0.018,
+                  "max": 0.018
+                },
+                "bloom_pyramid_blur_ms": {
+                  "n": 14,
+                  "median": 0.083,
+                  "p95": 0.085,
+                  "max": 0.085
+                },
+                "grade_tonemap_ms": {
+                  "n": 14,
+                  "median": 0.0435,
+                  "p95": 0.04435,
+                  "max": 0.045
+                },
+                "sharpen_dither_ms": {
+                  "n": 14,
+                  "median": 0.013,
+                  "p95": 0.014,
+                  "max": 0.014
+                }
+              },
+              "hardware": {
+                "gpu_busy": {
+                  "n": 44,
+                  "median": 93.0,
+                  "p95": 94.85,
+                  "max": 95.0
+                },
+                "mem_busy": {
+                  "n": 44,
+                  "median": 19.0,
+                  "p95": 19.0,
+                  "max": 19.0
+                },
+                "vram_used": {
+                  "n": 44,
+                  "median": 8614774784.0,
+                  "p95": 8640739942.4,
+                  "max": 8643366912.0
+                },
+                "temperature_mC": {
+                  "n": 44,
+                  "median": 54000.0,
+                  "p95": 56000.0,
+                  "max": 56000.0
+                },
+                "hotspot_mC": {
+                  "n": 44,
+                  "median": 78500.0,
+                  "p95": 81000.0,
+                  "max": 81000.0
+                },
+                "power_uW": {
+                  "n": 44,
+                  "median": 207000000.0,
+                  "p95": 210850000.0,
+                  "max": 211000000.0
+                },
+                "power_cap_uW": {
+                  "n": 44,
+                  "median": 212000000.0,
+                  "p95": 212000000.0,
+                  "max": 212000000.0
+                },
+                "sclk_mhz": {
+                  "n": 44,
+                  "median": 2449.0,
+                  "p95": 2463.85,
+                  "max": 2475.0
+                },
+                "mclk_mhz": {
+                  "n": 44,
+                  "median": 1218.0,
+                  "p95": 1218.0,
+                  "max": 1218.0
+                }
+              },
+              "sum_rounding_error_max_ms": 0.0030000000000036664,
+              "negative_intervals": 0
+            }
+          ],
+          "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent.",
+          "phase": 9,
+          "profile": "baseline"
+        }
+      ],
+      "comparisons": {
+        "extent": "854x1074",
+        "baseline_bookend_drift_percent": 4.225956201433023,
+        "rows": [
+          {
+            "phase": 0,
+            "profile": "baseline",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 19.818,
+              "p95": 20.1249,
+              "max": 20.218
+            },
+            "baseline_minus_profile_median_ms": 0.0
+          },
+          {
+            "phase": 1,
+            "profile": "no_sun",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 20.875,
+              "p95": 21.1277,
+              "max": 21.274
+            },
+            "baseline_minus_profile_median_ms": -1.0569999999999986
+          },
+          {
+            "phase": 2,
+            "profile": "no_moon",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 19.588,
+              "p95": 19.8109,
+              "max": 19.813
+            },
+            "baseline_minus_profile_median_ms": 0.23000000000000043
+          },
+          {
+            "phase": 3,
+            "profile": "no_area",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 17.583,
+              "p95": 17.8979,
+              "max": 18.068
+            },
+            "baseline_minus_profile_median_ms": 2.235000000000003
+          },
+          {
+            "phase": 4,
+            "profile": "no_sky_nee",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 17.079,
+              "p95": 17.1867,
+              "max": 17.249
+            },
+            "baseline_minus_profile_median_ms": 2.7390000000000008
+          },
+          {
+            "phase": 5,
+            "profile": "no_pom",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 19.775,
+              "p95": 20.0303,
+              "max": 20.276
+            },
+            "baseline_minus_profile_median_ms": 0.043000000000002814
+          },
+          {
+            "phase": 6,
+            "profile": "no_pbr",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 20.019,
+              "p95": 20.1315,
+              "max": 20.17
+            },
+            "baseline_minus_profile_median_ms": -0.20099999999999696
+          },
+          {
+            "phase": 7,
+            "profile": "primary_material",
+            "mode": 0,
+            "trace_ms": {
+              "n": 15,
+              "median": 3.045,
+              "p95": 3.0889,
+              "max": 3.091
+            },
+            "baseline_minus_profile_median_ms": 16.773000000000003
+          },
+          {
+            "phase": 8,
+            "profile": "traversal_only",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 3.0275,
+              "p95": 3.04865,
+              "max": 3.061
+            },
+            "baseline_minus_profile_median_ms": 16.7905
+          },
+          {
+            "phase": 9,
+            "profile": "baseline",
+            "mode": 0,
+            "trace_ms": {
+              "n": 14,
+              "median": 20.6555,
+              "p95": 20.91475,
+              "max": 20.957
+            },
+            "baseline_minus_profile_median_ms": -0.8374999999999986
+          }
+        ],
+        "note": "Marginal ablations, not exclusive times. Do not add differences. Baseline drift, changed scene, settings or competing GPU work can invalidate attribution."
+      },
+      "settings": {
+        "rtest-client.toml": {
+          "gpuLightTreeEnabled": true,
+          "sunIntensity": 1.0,
+          "sunDaylightIntensityEnabled": true,
+          "sunDaylightPeakIntensity": 16.0,
+          "sunAngularRadiusDegrees": 0.27,
+          "sunShadowSamples": 4,
+          "sunColorTemperature": 6500.0,
+          "ambientColorTemperature": 6500.0,
+          "shadowStrength": 1.0,
+          "skyboxTextureEnabled": true,
+          "skyImportanceSamplingEnabled": true,
+          "skyCdfHardwareEnabled": true,
+          "skyboxDaylightOpacityEnabled": true,
+          "skyboxTextureOpacity": 0.25,
+          "moonEnabled": true,
+          "moonIntensity": 0.06,
+          "primeAtmosphereEnabled": true,
+          "volumetricLightingEnabled": true,
+          "volumetricLightingStrength": 1.0,
+          "volumetricFogDensity": 0.5523242882562278,
+          "atmosphereAltitudeOffsetMeters": 300,
+          "volumetricLightingQuality": 2,
+          "volumetricShadowSamples": 0,
+          "sunAngleOffset": 0.0,
+          "sunAzimuthOffset": 0.0,
+          "giBounces": 4,
+          "pbrFormat": "labpbr",
+          "pbrNormalStrength": 1.0,
+          "pbrTextureAoEnabled": false,
+          "pbrPorosityEnabled": true,
+          "pbrWetnessStrength": 1.0,
+          "pbrEmissionStrength": 1.0,
+          "pbrPredefinedMetalsEnabled": true,
+          "pbrTerrainCpuCaptureEnabled": true,
+          "terrainLodEnabled": true,
+          "terrainLodNativeRadiusChunks": 8,
+          "terrainLodMaxLevel": 2,
+          "terrainLodBuildBudget": 1,
+          "terrainLodQueueLimit": 32,
+          "terrainLodFarCacheEnabled": true,
+          "terrainLodFarRadiusChunks": 64,
+          "terrainLodGpuTraversalEnabled": false,
+          "pbrParallaxEnabled": true,
+          "pbrEntityParallaxEnabled": true,
+          "pbrParallaxDepth": 1.0,
+          "fsrQuality": "native_aa",
+          "hdrEnabled": false,
+          "hdrWideGamutEnabled": false,
+          "nativeColorDecodeEnabled": false,
+          "primeColorManagementEnabled": true,
+          "fluidRtEnabled": true,
+          "dynamicEntityMvpEnabled": true,
+          "nrdEnabled": false,
+          "nrdEntityEnabled": false,
+          "nrdStrength": 1.0,
+          "nrdHitDistanceReconstruction": "area_3x3",
+          "nrdDiffusePrepassBlurRadius": 0.0,
+          "nrdSpecularPrepassBlurRadius": 0.0,
+          "nrdMinHitDistanceWeight": 0.1,
+          "nrdMinBlurRadius": 0.5,
+          "nrdMaxBlurRadius": 8.0,
+          "nrdLobeAngleFraction": 0.15,
+          "nrdRoughnessFraction": 0.15,
+          "nrdPlaneDistanceSensitivity": 0.02,
+          "nrdFastHistoryClampingSigmaScale": 2.0,
+          "nrdFireflySuppressorMinRelativeScale": 1.0,
+          "nrdDisocclusionThreshold": 0.01,
+          "nrdMaxAccumulatedFrameNum": 48,
+          "nrdMaxFastAccumulatedFrameNum": 12,
+          "nrdHistoryFixFrameNum": 3,
+          "nrdAntiFirefly": true,
+          "nrdSpecularPrepassMotionOnly": true,
+          "nrdHistoryFixPixelStride": 4,
+          "nrdConvergenceScale": 1.0,
+          "nrdConvergenceBase": 0.2,
+          "nrdConvergencePercent": 0.8,
+          "nrdDenoisingRange": 60000.0,
+          "debugView": 0,
+          "emissionScale": 25.0,
+          "postProcessing": {
+            "enabled": true,
+            "depthOfField": true,
+            "autofocus": true,
+            "rainBloomFog": true,
+            "dofSamples": 25,
+            "motionSamples": 8,
+            "agxLook": 2,
+            "toneMapping": "agx",
+            "exposureEV": -0.18502557829181576,
+            "autoExposureStrength": 0.19217081850533807,
+            "centerWeight": 1.0,
+            "exposureTendency": 1.0,
+            "bloomIntensity": 3.854085576067616,
+            "vignetteStrength": 1.0,
+            "saturation": 0.8548014902135231,
+            "contrast": 1.0,
+            "blackTightness": 1.0,
+            "minimumBrightness": 0.0,
+            "gamma": 1.0,
+            "colorTemperature": 6500.0,
+            "focalLength": 0.001,
+            "apertureScale": 3.899359083073843,
+            "manualFocusDepth": 100.0,
+            "maxBlurRadius": 51.71392279248221,
+            "motionStrength": 0.4871849455040872,
+            "sharpenStrength": 1.0,
+            "chromaticR": 0.0026690391459074734,
+            "chromaticG": 0.0029891153247330964,
+            "chromaticB": 0.0035229231539145906,
+            "distortion": 0.1693936276690391,
+            "rainBloomFogDensity": 1.0,
+            "agxMinEV": -7.5,
+            "agxMaxEV": 6.0
+          }
+        },
+        "rtest-restir-client.toml": {
+          "restirDirectEnabled": false,
+          "restirSuffixEnabled": false,
+          "restirCandidates": 11,
+          "restirSpatialNeighbors": 2,
+          "restirGatherPrefixes": 2
+        }
+      },
+      "settings_identical_within_run": true
+    }
+  ]
+}

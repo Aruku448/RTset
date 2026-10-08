@@ -1186,15 +1186,18 @@ public final class RayTracingScene {
                 northEast -= 0.001F;
                 southWest -= 0.001F;
                 southEast -= 0.001F;
+                Vec3 flow = fluidState.getFlow(level, blockPos);
+                TextureAtlasSprite topSprite = flow.x == 0.0 && flow.z == 0.0 ? still : flowing;
+                float[] topUv = FluidGeometryCapture.topUv(flow.x, flow.z);
                 addFluidQuad(
                     vertices,
                     materialData,
                     sectionOrigin,
                     blockPos,
-                    new FluidVertex(0.0F, northWest, 0.0F, still.getU0(), still.getV0()),
-                    new FluidVertex(0.0F, southWest, 1.0F, still.getU0(), still.getV1()),
-                    new FluidVertex(1.0F, southEast, 1.0F, still.getU1(), still.getV1()),
-                    new FluidVertex(1.0F, northEast, 0.0F, still.getU1(), still.getV0()),
+                    new FluidVertex(0.0F, northWest, 0.0F, topSprite.getU(topUv[0]), topSprite.getV(topUv[1])),
+                    new FluidVertex(0.0F, southWest, 1.0F, topSprite.getU(topUv[2]), topSprite.getV(topUv[3])),
+                    new FluidVertex(1.0F, southEast, 1.0F, topSprite.getU(topUv[4]), topSprite.getV(topUv[5])),
+                    new FluidVertex(1.0F, northEast, 0.0F, topSprite.getU(topUv[6]), topSprite.getV(topUv[7])),
                     tint,
                     Float.NaN,
                     Float.NaN,
@@ -1297,8 +1300,13 @@ public final class RayTracingScene {
             var key = BuiltInRegistries.FLUID.getKey(fluid);
             String name = key == null ? "" : key.getPath();
             FluidGeometryCapture.Surface surface = FluidGeometryCapture.surface(name);
+            // Fixed fluid radiance predates the configurable block-light scale. Preserve its
+            // historical calibration while letting the non-PBR control scale it, including zero.
+            float emission = surface.emission()
+                * (RayTracingClientConfig.INSTANCE.emissionScale.get().floatValue()
+                    / RayTracingEmission.LEGACY_REFERENCE_SCALE);
             return new MaterialProperties(
-                surface.roughness(), surface.metallic(), surface.emission(), surface.reflectivity(), 0.0F,
+                surface.roughness(), surface.metallic(), emission, surface.reflectivity(), 0.0F,
                 new OpticalProperties(surface.ior(), surface.absorptionR(), surface.absorptionG(),
                     surface.absorptionB(), surface.opacity(), 0.0F));
         }
@@ -1313,32 +1321,10 @@ public final class RayTracingScene {
         }
 
         private static float averageFluidHeight(ClientLevel level, Fluid fluid, float self, float first, float second, BlockPos corner) {
-            if (first >= 1.0F || second >= 1.0F) {
-                return 1.0F;
-            }
-            float cornerHeight = fluidHeight(level, fluid, corner);
-            if (cornerHeight >= 1.0F) {
-                return 1.0F;
-            }
-            float total = 0.0F;
-            float count = 0.0F;
-            if (cornerHeight >= 0.0F) {
-                total += cornerHeight;
-                count += 1.0F;
-            }
-            if (self >= 0.0F) {
-                total += self;
-                count += 1.0F;
-            }
-            if (first >= 0.0F) {
-                total += first;
-                count += 1.0F;
-            }
-            if (second >= 0.0F) {
-                total += second;
-                count += 1.0F;
-            }
-            return count == 0.0F ? 0.0F : total / count;
+            if (self >= 1.0F || first >= 1.0F || second >= 1.0F) return 1.0F;
+            // Native FluidRenderer queries the diagonal only when a horizontal neighbor has fluid.
+            float cornerHeight = first > 0.0F || second > 0.0F ? fluidHeight(level, fluid, corner) : -1.0F;
+            return FluidGeometryCapture.cornerHeight(self, first, second, cornerHeight);
         }
 
         private static void addFluidQuad(

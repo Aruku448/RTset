@@ -77,7 +77,7 @@ public final class RayTracingAtmosphereShaderTest {
         if (!(phase > function && phase < loop)) {
             throw new AssertionError("Solar phase mapping must be prepared before integration steps");
         }
-        int prepare = source.indexOf("PhysicalAtmIndirectHeight indirectHeight = physicalAtmIndirectHeight(hp);", loop);
+        int prepare = source.indexOf("PhysicalAtmIndirectHeight indirectHeight = physicalAtmCoherentIndirectHeight(hp, previousHeight);", loop);
         int lunar = source.indexOf("lunarMultipleStep = physicalAtmRadiance(", prepare);
         int advance = source.indexOf("spectralTransmittance *= trans;", prepare);
         int visibility = source.indexOf("traceRayEXT(", prepare);

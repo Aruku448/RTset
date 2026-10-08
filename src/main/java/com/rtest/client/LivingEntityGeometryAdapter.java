@@ -36,7 +36,21 @@ public final class LivingEntityGeometryAdapter {
     // sampler and its texture may be an atlas or a direct entity image; resolving only the
     // Identifier later can fall back to the block atlas during an async/reload boundary.
     private static final Map<Integer, TextureBinding> textureBindings = new LinkedHashMap<>();
-    private static final Map<Integer, Snapshot> pending = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<Integer, PendingModel> pending = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.LongAdder customCaptureNanos =
+        new java.util.concurrent.atomic.LongAdder();
+    private static long captureFrame;
+    private static final class PendingModel {
+        final double x, y, z;
+        final ModelMeshAccumulator mesh = new ModelMeshAccumulator();
+        Identifier texture;
+        PendingModel(EntityRenderState state) { x = state.x; y = state.y; z = state.z; }
+        synchronized void append(PlayerModelGeometryAdapter.Mesh part, int slot, Identifier selected) {
+            mesh.append(part, slot);
+            texture = selected;
+        }
+        synchronized Snapshot finish() { return new Snapshot(x, y, z, texture, mesh.finish()); }
+    }
     private static final ThreadLocal<Context> current = new ThreadLocal<>();
 
     private record Context(int entityId, EntityRenderState state,
@@ -197,7 +211,8 @@ public final class LivingEntityGeometryAdapter {
             return false;
         }
         var pipeline = renderType.pipeline();
-        if (pipeline == RenderPipelines.EYES
+        if ((isArmourersSkin(renderType) && pipeline.getShaderDefines().flags().contains("EMISSIVE"))
+            || isBeaconBeam(renderType) || pipeline == RenderPipelines.EYES
             || pipeline == RenderPipelines.ENTITY_TRANSLUCENT_EMISSIVE) {
             return true;
         }
@@ -210,6 +225,15 @@ public final class LivingEntityGeometryAdapter {
             || name.startsWith("entity translucent emissive[");
     }
 
+    static float emissiveOffsetFor(RenderType type) {
+        return isArmourersSkin(type) && isEmissive(type) ? 0.0F : 0.001F;
+    }
+
+    public static boolean isBeaconBeam(RenderType type) {
+        return type != null && (type.pipeline() == RenderPipelines.BEACON_BEAM_OPAQUE
+            || type.pipeline() == RenderPipelines.BEACON_BEAM_TRANSLUCENT);
+    }
+
     /** Radiance assigned to a vanilla full-bright entity layer. */
     public static float emissionFor(RenderType renderType) {
         if (!isEmissive(renderType)) {
@@ -217,8 +241,7 @@ public final class LivingEntityGeometryAdapter {
         }
         // ITRP treats the dedicated eyes/emissive pass as a radiance source, not merely as a
         // full-bright albedo. Reuse the same calibrated scale as authored/block emitters.
-        return Math.max(RayTracingEmission.fromMinecraftLevel(15),
-            RayTracingClientConfig.INSTANCE.emissionScale.get().floatValue());
+        return RayTracingClientConfig.INSTANCE.emissionScale.get().floatValue();
     }
 
     public static TextureBinding textureBinding(int slot) {
@@ -291,17 +314,52 @@ public final class LivingEntityGeometryAdapter {
         RenderType renderType, SubmitNodeCollector.CustomGeometryRenderer renderer
     ) {
         Context context = current.get();
-        if (context == null || (renderType.hasBlending() && !isEmissive(renderType))) {
+        if (context == null || renderType.isOutline() || (renderType.hasBlending() && !isArmourersSkin(renderType) && !isEmissive(renderType) && !WorldTextGeometry.isText(renderType))) {
             return renderer;
         }
         Identifier texture = textureForRenderType(renderType, context.state());
         return (pose, buffer) -> {
-            PlayerModelGeometryAdapter.Capture capture = new PlayerModelGeometryAdapter.Capture(
-                buffer, context.offsetX(), context.offsetY(), context.offsetZ(), null,
-                RayTracingProbe.pbrSampler(), emissionFor(renderType));
-            renderer.render(pose, capture);
-            publishModel(context.entityId(), context.state(), texture, capture.finish());
+            long captureStart = System.nanoTime();
+            try {
+                PlayerModelGeometryAdapter.Capture capture = new PlayerModelGeometryAdapter.Capture(
+                    buffer, context.offsetX(), context.offsetY(), context.offsetZ(), null,
+                    texture, RayTracingProbe.pbrSampler(), emissionFor(renderType), renderType.primitiveTopology())
+                    .emissiveOffset(emissiveOffsetFor(renderType));
+                renderer.render(pose, capture);
+                publishModel(context.entityId(), context.state(), texture, customMaterial(capture.finish(), renderType));
+            } finally {
+                customCaptureNanos.add(System.nanoTime() - captureStart);
+            }
         };
+    }
+
+    /** AW alpha faces belong to the world skin, rather than a separate raster fallback. */
+    public static boolean isArmourersSkin(RenderType type) {
+        var location = type.pipeline().getLocation();
+        return location != null && "armourers_workshop".equals(location.getNamespace())
+            && location.getPath().startsWith("pipeline/");
+    }
+
+    static PlayerModelGeometryAdapter.Mesh customMaterial(PlayerModelGeometryAdapter.Mesh mesh, RenderType type) {
+        if (!isArmourersSkin(type) || !type.hasBlending()) return mesh;
+        float[] materials = mesh.materialData().clone();
+        for (int i=0; i<materials.length; i+=28) {
+            // Alpha blending uses the RT thin transmission contract, not a 50% cutout.
+            materials[i+14] = 0;
+            materials[i+23] = 1.04F;
+            materials[i+27] = 1;
+        }
+        return new PlayerModelGeometryAdapter.Mesh(mesh.vertices(), materials);
+    }
+
+    public static void captureText(com.mojang.blaze3d.vertex.PoseStack pose, float x, float y,
+        net.minecraft.util.FormattedCharSequence text, boolean shadow, net.minecraft.client.gui.Font.DisplayMode mode,
+        int light, int color, int background, int outline) {
+        Context context = current.get();
+        if (context == null) return;
+        WorldTextGeometry.capture(Minecraft.getInstance().font, pose, x, y, text, shadow, mode,
+            light, color, background, outline, context.offsetX(), context.offsetY(), context.offsetZ(),
+            (mesh, texture) -> publishModel(context.entityId(), context.state(), texture, mesh));
     }
 
     public static void publishModel(int entityId, LivingEntityRenderState state,
@@ -316,18 +374,21 @@ public final class LivingEntityGeometryAdapter {
         Identifier selected = texture != null
             ? texture
             : state instanceof LivingEntityRenderState living ? bodyTextures.get(living) : null;
-        Snapshot previous = pending.get(entityId);
-        PlayerModelGeometryAdapter.Mesh tagged = retag(mesh, selected);
-        if (previous == null) {
-            pending.put(entityId, new Snapshot(state.x, state.y, state.z, selected, tagged));
-        } else {
-            pending.put(entityId, new Snapshot(previous.x, previous.y, previous.z, selected,
-                PlayerModelGeometryAdapter.append(previous.mesh, tagged)));
+        int slot = selected == null ? -1 : textureSlot(selected);
+        PendingModel model = pending.get(entityId);
+        if (model == null) {
+            PendingModel candidate = new PendingModel(state);
+            candidate.append(mesh, slot, selected);
+            PendingModel previous = pending.putIfAbsent(entityId, candidate);
+            if (previous == null) return;
+            model = previous;
         }
+        model.append(mesh, slot, selected);
     }
 
     public static void beginWorldDraw() {
         pending.clear();
+        customCaptureNanos.reset();
     }
 
     public static void endWorldDraw() {
@@ -338,6 +399,7 @@ public final class LivingEntityGeometryAdapter {
 
     public static void clear() {
         pending.clear();
+        customCaptureNanos.reset();
         stateIds.clear();
         bodyTextures.clear();
         bodyTextureSlots.clear();
@@ -346,8 +408,25 @@ public final class LivingEntityGeometryAdapter {
     }
 
     static Map<Integer, Snapshot> drain() {
-        Map<Integer, Snapshot> result = Map.copyOf(pending);
+        long sealStart = System.nanoTime();
+        Map<Integer, Snapshot> result = new LinkedHashMap<>();
+        long copiedBytes = 0;
+        int parts = 0;
+        for (var entry : pending.entrySet()) {
+            PendingModel model = entry.getValue();
+            result.put(entry.getKey(), model.finish());
+            copiedBytes += model.mesh.copiedBytes();
+            parts += model.mesh.parts();
+        }
+        result = Map.copyOf(result);
         pending.clear();
+        long customNanos = customCaptureNanos.sumThenReset();
+        if (++captureFrame % 120 == 0) {
+            com.mojang.logging.LogUtils.getLogger().info(
+                "RTest model_capture frame={} owners={} parts={} copied_bytes={} living_custom_us={} seal_us={}",
+                captureFrame, result.size(), parts, copiedBytes, customNanos / 1000,
+                (System.nanoTime() - sealStart) / 1000);
+        }
         return result;
     }
 

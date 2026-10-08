@@ -1,0 +1,287 @@
+{
+  "note": "Static optimized SPIR-V sites, not executed instruction counts, registers, GPU time or speedup. Runtime debug branches and sky CDF trace can remain compiled.",
+  "requested_mode": 1,
+  "atmosphere": true,
+  "profiles": {
+    "baseline": {
+      "mode1-atmotrue": {
+        "bytes": 398204,
+        "static_instructions": 22227,
+        "trace_ray_sites": 20,
+        "shadow_ray_sites": 17,
+        "image_sites": 28,
+        "load_sites": 1015,
+        "loop_sites": 90
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_gi": {
+      "mode1-atmotrue": {
+        "bytes": 367916,
+        "static_instructions": 20636,
+        "trace_ray_sites": 20,
+        "shadow_ray_sites": 17,
+        "image_sites": 28,
+        "load_sites": 985,
+        "loop_sites": 88
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_sun": {
+      "mode1-atmotrue": {
+        "bytes": 382792,
+        "static_instructions": 21357,
+        "trace_ray_sites": 18,
+        "shadow_ray_sites": 15,
+        "image_sites": 28,
+        "load_sites": 995,
+        "loop_sites": 88
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_moon": {
+      "mode1-atmotrue": {
+        "bytes": 384260,
+        "static_instructions": 21441,
+        "trace_ray_sites": 18,
+        "shadow_ray_sites": 15,
+        "image_sites": 28,
+        "load_sites": 1003,
+        "loop_sites": 89
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_area": {
+      "mode1-atmotrue": {
+        "bytes": 301872,
+        "static_instructions": 16870,
+        "trace_ray_sites": 16,
+        "shadow_ray_sites": 13,
+        "image_sites": 18,
+        "load_sites": 704,
+        "loop_sites": 76
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_sky_nee": {
+      "mode1-atmotrue": {
+        "bytes": 344020,
+        "static_instructions": 19097,
+        "trace_ray_sites": 17,
+        "shadow_ray_sites": 15,
+        "image_sites": 26,
+        "load_sites": 924,
+        "loop_sites": 79
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_volume": {
+      "mode1-atmotrue": {
+        "bytes": 284464,
+        "static_instructions": 15941,
+        "trace_ray_sites": 12,
+        "shadow_ray_sites": 9,
+        "image_sites": 12,
+        "load_sites": 632,
+        "loop_sites": 46
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_restir": {
+      "mode1-atmotrue": {
+        "bytes": 340476,
+        "static_instructions": 18999,
+        "trace_ray_sites": 18,
+        "shadow_ray_sites": 15,
+        "image_sites": 24,
+        "load_sites": 824,
+        "loop_sites": 79
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_pom": {
+      "mode1-atmotrue": {
+        "bytes": 398204,
+        "static_instructions": 22227,
+        "trace_ray_sites": 20,
+        "shadow_ray_sites": 17,
+        "image_sites": 28,
+        "load_sites": 1015,
+        "loop_sites": 90
+      },
+      "hit": {
+        "bytes": 21912,
+        "static_instructions": 1278,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 58,
+        "loop_sites": 0
+      }
+    },
+    "no_pbr": {
+      "mode1-atmotrue": {
+        "bytes": 374636,
+        "static_instructions": 20848,
+        "trace_ray_sites": 20,
+        "shadow_ray_sites": 17,
+        "image_sites": 28,
+        "load_sites": 917,
+        "loop_sites": 90
+      },
+      "hit": {
+        "bytes": 11016,
+        "static_instructions": 652,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 35,
+        "loop_sites": 0
+      }
+    },
+    "no_shadow_rays": {
+      "mode1-atmotrue": {
+        "bytes": 394496,
+        "static_instructions": 22040,
+        "trace_ray_sites": 3,
+        "shadow_ray_sites": 0,
+        "image_sites": 28,
+        "load_sites": 996,
+        "loop_sites": 90
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "no_dynamic_delta": {
+      "mode1-atmotrue": {
+        "bytes": 391848,
+        "static_instructions": 21846,
+        "trace_ray_sites": 14,
+        "shadow_ray_sites": 11,
+        "image_sites": 28,
+        "load_sites": 997,
+        "loop_sites": 90
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "primary_material": {
+      "mode1-atmotrue": {
+        "bytes": 59084,
+        "static_instructions": 3279,
+        "trace_ray_sites": 3,
+        "shadow_ray_sites": 1,
+        "image_sites": 2,
+        "load_sites": 198,
+        "loop_sites": 12
+      },
+      "hit": {
+        "bytes": 33988,
+        "static_instructions": 1949,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 6,
+        "load_sites": 81,
+        "loop_sites": 2
+      }
+    },
+    "traversal_only": {
+      "mode1-atmotrue": {
+        "bytes": 59084,
+        "static_instructions": 3279,
+        "trace_ray_sites": 3,
+        "shadow_ray_sites": 1,
+        "image_sites": 2,
+        "load_sites": 198,
+        "loop_sites": 12
+      },
+      "hit": {
+        "bytes": 1552,
+        "static_instructions": 89,
+        "trace_ray_sites": 0,
+        "shadow_ray_sites": 0,
+        "image_sites": 0,
+        "load_sites": 5,
+        "loop_sites": 0
+      }
+    }
+  }
+}

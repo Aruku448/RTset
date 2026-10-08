@@ -88,6 +88,8 @@ public final class DynamicTlasInstanceWriter {
                     || (instance.flags() & DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY) != 0);
             int mask = instance != null && instance.active() && blasAddresses.containsKey(instance.identity())
                 ? (firstPersonBody ? FIRST_PERSON_BODY_MASK
+                    : (instance.flags() & DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW) != 0
+                        ? FIRST_PERSON_ITEM_MASK
                     : instance.family() == DynamicInstanceRegistry.Family.FIRST_PERSON_ITEM
                         ? FIRST_PERSON_ITEM_MASK : ALL_RAY_MASK) : UNTRACED_INSTANCE_MASK;
             destination.putInt(offset + 48, (material & 0x00ffffff) | (mask << 24));

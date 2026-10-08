@@ -31,6 +31,7 @@ const float NRD_MATERIAL_FACTOR_MIN = 0.02;
 const float NRD_ROUGHNESS_FACTOR_MIN = 0.1;
 const uint TRANSMISSIVE = 4u;
 const uint DYNAMIC = 256u;
+const uint BYPASS_MODEL_HISTORY = 512u;
 
 vec3 linearToYCoCg(vec3 color) {
     return vec3(
@@ -181,7 +182,10 @@ void main() {
     imageStore(material, pixel, vec4(hit ? diffuseFactor : vec3(1.0), hit ? roughness : -1.0));
     float compositionMask = ((flags & TRANSMISSIVE) != 0u) ? 1.0 : 0.0;
     imageStore(specularMaterial, pixel, vec4(specularFactor, compositionMask));
-    imageStore(nrdViewZ, pixel, vec4(currentViewZ, 0.0, 0.0, 0.0));
+    // Preserve actual depth/motion for presentation while excluding dynamic models (including
+    // mirror hits) from NRD history. The composite retains the complete current-frame sample.
+    bool bypassModelHistory = (flags & BYPASS_MODEL_HISTORY) != 0u;
+    imageStore(nrdViewZ, pixel, vec4(bypassModelHistory ? SKY_VIEW_Z : currentViewZ, 0.0, 0.0, 0.0));
     imageStore(fsrDepth, pixel, vec4(
         currentViewZ >= SKY_VIEW_Z ? 0.0 : FSR_NEAR_PLANE / currentViewZ));
 

@@ -30,10 +30,11 @@ public final class DynamicEntityGeometry {
     private static final int DYNAMIC_SLOT_CAPACITY = 64;
     // Keep CPU admission identical to RayTracingVulkanPass material ranges. An over-budget mesh
     // must remain an explicit raster fallback; registering it and masking it later would lose it.
-    static final int DYNAMIC_MODEL_TRIANGLE_CAPACITY = 512;
+    static final int DYNAMIC_MODEL_TRIANGLE_CAPACITY = 8192;
     static final int DYNAMIC_ITEM_TRIANGLE_CAPACITY = 1024;
     private static final org.slf4j.Logger LOGGER = LogUtils.getLogger();
     private final DynamicInstanceRegistry registry = new DynamicInstanceRegistry(2, DYNAMIC_SLOT_CAPACITY);
+    private final Map<Integer, Integer> reportedModelParts = new HashMap<>();
 
     public record Instance(DynamicInstanceRegistry.Instance snapshot, Family family, float width,
                            float height, long topology) { }
@@ -66,10 +67,11 @@ public final class DynamicEntityGeometry {
         public Set<Long> representedEntityIds() {
             Set<Long> represented = new java.util.LinkedHashSet<>();
             for (Instance instance : instances) {
-                if (instance.family() != Family.FIRST_PERSON_ITEM
+                if ((instance.snapshot().flags() & DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW) == 0
+                    && instance.family() != Family.FIRST_PERSON_ITEM
                     && instance.family() != Family.BLOCK_ENTITY_MODEL
                     && instance.family() != Family.PARTICLE) {
-                    represented.add(instance.snapshot().identity());
+                    represented.add(DynamicModelChunks.owner(instance.snapshot().identity()));
                 }
             }
             return Set.copyOf(represented);
@@ -79,9 +81,11 @@ public final class DynamicEntityGeometry {
         public int representedEntityCount() {
             int count = 0;
             for (Instance instance : instances) {
-                if (instance.family() != Family.FIRST_PERSON_ITEM
+                if ((instance.snapshot().flags() & DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW) == 0
+                    && instance.family() != Family.FIRST_PERSON_ITEM
                     && instance.family() != Family.BLOCK_ENTITY_MODEL
-                    && instance.family() != Family.PARTICLE) {
+                    && instance.family() != Family.PARTICLE
+                    && !DynamicModelChunks.isChunk(instance.snapshot().identity())) {
                     count++;
                 }
             }
@@ -129,15 +133,33 @@ public final class DynamicEntityGeometry {
             && previous.dynamicFrame().activeCount() > 0;
     }
 
+    /** The camera-only body has different topology from the full shadow/reflection model. */
+    static long modelBlasCacheKey(long id, int flags, boolean blockEntity) {
+        if (blockEntity) return 0x5000000000000000L | (id & 0x0fffffffffffffffL);
+        return ((flags & DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW) != 0
+            ? 0x7100000000000000L : 0x7000000000000000L) | (id & 0x00ffffffffffffffL);
+    }
+
+    /** Custom avatars can hide or replace the entire vanilla body. */
+    static PlayerModelGeometryAdapter.Snapshot playerWithCustomLayers(
+        PlayerModelGeometryAdapter.Snapshot body, LivingEntityGeometryAdapter.Snapshot layers) {
+        if (layers == null) return body;
+        if (body == null) return new PlayerModelGeometryAdapter.Snapshot(
+            layers.x(), layers.y(), layers.z(), null, layers.mesh());
+        return new PlayerModelGeometryAdapter.Snapshot(body.x(), body.y(), body.z(), body.skinTexture(),
+            PlayerModelGeometryAdapter.append(body.mesh(), layers.mesh()));
+    }
+
     /**
      * Consumes the current vanilla draw's living-entity/player/chest vertices and item feature quads;
      * never re-runs setupAnim or invents renderer transforms. The first-person body is explicitly
-     * submitted by the capture mixin so RT can keep it for secondary/reflection rays; visibility
-     * masks, rather than omission, keep it out of the RT primary ray.
+     * submitted by the capture mixin. The complete model serves reflection/shadow rays;
+     * a separate torso/leg view serves primary rays with the same animated world transforms.
      */
     public Frame collect(ClientLevel level, Camera camera, int renderDistanceChunks, float partialTick,
                          Frustum cullFrustum) {
         var nativePlayers = PlayerModelGeometryAdapter.drain();
+        PlayerModelGeometryAdapter.drainFirstPersonViews();
         var nativePlayerItems = ItemModelGeometryAdapter.drainPlayerItems();
         var nativeItems = ItemModelGeometryAdapter.drain();
         var nativeFirstPersonItems = ItemModelGeometryAdapter.drainFirstPersonItems();
@@ -181,41 +203,38 @@ public final class DynamicEntityGeometry {
             double dz = entity.getZ() - camera.position().z;
             if (dx * dx + dy * dy + dz * dz > radiusSquared) continue;
             if (entity instanceof AbstractClientPlayer) {
-                var captured = nativePlayers.get(entity.getId());
-                if (captured == null || captured.mesh().triangleCount() == 0) {
+                var captured = playerWithCustomLayers(nativePlayers.get(entity.getId()),
+                    nativeLiving.get(entity.getId()));
+                if (captured == null) {
                     fallback += recordEntityFallback(failureReasons, "player-mesh-missing", entity, cullFrustum);
                     continue;
                 }
                 var mesh = captured.mesh();
-                var livingLayers = nativeLiving.get(entity.getId());
-                if (livingLayers != null) {
-                    mesh = PlayerModelGeometryAdapter.append(mesh, livingLayers.mesh());
-                }
                 mesh = PlayerModelGeometryAdapter.append(mesh, nativePlayerItems.get(entity.getId()));
-                if (mesh.triangleCount() > DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
-                    fallback += recordEntityFallback(failureReasons, "player-mesh-over-capacity", entity, cullFrustum);
+                if (mesh.triangleCount() == 0) {
+                    fallback += recordEntityFallback(failureReasons, "player-mesh-missing", entity, cullFrustum);
                     continue;
                 }
                 boolean localFirstPerson = entity == Minecraft.getInstance().player
                     && Minecraft.getInstance().options.getCameraType().isFirstPerson();
-                boolean registered = registry.upsert(entity.getId(), localFirstPerson
-                        ? DynamicInstanceRegistry.Family.FIRST_PERSON_BODY
+                var chunks = DynamicModelChunks.publish(registry, entity.getId(), mesh,
+                    localFirstPerson ? DynamicInstanceRegistry.Family.FIRST_PERSON_BODY
                         : DynamicInstanceRegistry.Family.ENTITY,
-                    new DynamicInstanceRegistry.GeometryKey(PLAYER_TOPOLOGY, PLAYER_TOPOLOGY),
+                    PLAYER_TOPOLOGY,
                     DynamicInstanceRegistry.Transform.translation((float)captured.x(), (float)captured.y(), (float)captured.z()),
                     DynamicInstanceRegistry.FLAG_OPAQUE
-                        | (localFirstPerson ? DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY : 0), false);
-                if (!registered) {
-                    fallback += recordEntityFallback(failureReasons, "instance-capacity", entity, cullFrustum);
+                        | (localFirstPerson ? DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY : 0));
+                if (chunks == null) {
+                    fallback += recordEntityFallback(failureReasons, "player-model-slot-capacity", entity, cullFrustum);
                     slotOverflowFallbacks++;
                     continue;
                 }
-                pending.add(new Pending(entity.getId(), localFirstPerson ? Family.FIRST_PERSON_BODY : Family.PLAYER_BODY,
-                    entity.getBbWidth(),
-                    entity.getBbHeight(), PLAYER_TOPOLOGY));
-                playerMeshes.put((long)entity.getId(), mesh);
-                if (captured.skinTexture() != null) {
-                    playerSkinTextures.put((long)entity.getId(), captured.skinTexture());
+                reportModelParts(entity, mesh.triangleCount(), chunks.size());
+                for (var chunk : chunks) {
+                    pending.add(new Pending(chunk.identity(), localFirstPerson ? Family.FIRST_PERSON_BODY : Family.PLAYER_BODY,
+                        entity.getBbWidth(), entity.getBbHeight(), PLAYER_TOPOLOGY));
+                    playerMeshes.put(chunk.identity(), chunk.mesh());
+                    if (captured.skinTexture() != null) playerSkinTextures.put(chunk.identity(), captured.skinTexture());
                 }
             } else if (entity instanceof ItemEntity) {
                 var captured = nativeItems.get(entity.getId());
@@ -249,20 +268,20 @@ public final class DynamicEntityGeometry {
                 // ModelFeatureRenderer capture, including projectiles, vehicles and display
                 // entities that do not extend LivingEntity.
                 var captured = nativeLiving.get(entity.getId());
-                if (captured != null && captured.mesh().triangleCount() > DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
-                    fallback += recordEntityFallback(failureReasons, "entity-mesh-over-capacity", entity, cullFrustum);
-                    continue;
-                }
                 if (captured != null && captured.mesh().triangleCount() > 0) {
-                    Pending living = upsert(entity, DynamicEntityGeometry.Family.LIVING_BODY, LIVING_TOPOLOGY,
-                        LIVING_TOPOLOGY,
-                        DynamicInstanceRegistry.FLAG_CUTOUT, partialTick);
-                    if (living != null) {
-                        pending.add(living);
-                        livingMeshes.put((long)entity.getId(), captured.mesh());
-                        livingTextures.put((long)entity.getId(), captured.texture());
+                    var chunks = DynamicModelChunks.publish(registry, entity.getId(), captured.mesh(),
+                        DynamicInstanceRegistry.Family.ENTITY, LIVING_TOPOLOGY,
+                        DynamicInstanceRegistry.Transform.translation((float)captured.x(), (float)captured.y(), (float)captured.z()),
+                        DynamicInstanceRegistry.FLAG_CUTOUT);
+                    if (chunks != null) {
+                        reportModelParts(entity, captured.mesh().triangleCount(), chunks.size());
+                        for (var chunk : chunks) {
+                            pending.add(new Pending(chunk.identity(), Family.LIVING_BODY, entity.getBbWidth(), entity.getBbHeight(), LIVING_TOPOLOGY));
+                            livingMeshes.put(chunk.identity(), chunk.mesh());
+                            livingTextures.put(chunk.identity(), captured.texture());
+                        }
                     } else {
-                        fallback += recordEntityFallback(failureReasons, "entity-instance-capacity", entity, cullFrustum);
+                        fallback += recordEntityFallback(failureReasons, "entity-model-slot-capacity", entity, cullFrustum);
                         slotOverflowFallbacks++;
                     }
                 } else {
@@ -385,8 +404,17 @@ public final class DynamicEntityGeometry {
             livingTextureSlots, itemMeshes, fallback);
     }
 
+    private void reportModelParts(Entity entity, int triangles, int parts) {
+        Integer previous = reportedModelParts.put(entity.getId(), parts);
+        if (parts > 1 && !Integer.valueOf(parts).equals(previous)) {
+            LOGGER.info("RTest partitioned complete entity model: owner={}, type={}, triangles={}, parts={}",
+                entity.getId(), entity.getType().getDescriptionId(), triangles, parts);
+        }
+    }
+
     void clear() {
         registry.clear();
+        reportedModelParts.clear();
     }
 
     private Pending upsert(Entity entity, Family family, long topology, long materialRevision,

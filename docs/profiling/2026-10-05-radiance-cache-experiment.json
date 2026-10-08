@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-05",
+  "scope": "isolated synthetic Vulkan experiment; not Minecraft frame performance",
+  "implementation": "spatial hash diffuse irradiance, four compute dispatches, no neural network",
+  "device": "AMD Radeon RX 7800 XT (RADV NAVI32)",
+  "memory_flags": "0x7 DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT",
+  "warmup": 5,
+  "timing_samples": 31,
+  "benchmark": {
+    "slots": 65536,
+    "training_samples": 16384,
+    "queries": 1824438,
+    "hits": 1362984,
+    "fallbacks": 461454,
+    "compared_words": 37275208,
+    "mismatches": 0,
+    "max_rgb_absolute_error": 2.38418579e-7,
+    "gpu_median_ms": {"total": 0.660480, "clear": 0.005760, "elect": 0.004800, "accumulate": 0.008800, "query": 0.641760},
+    "total_min_ms": 0.645080,
+    "total_max_ms": 0.749440,
+    "excluded_costs": ["real path target generation", "query record generation", "NRD/composite", "game frame synchronization"]
+  },
+  "contracts": {"queries": 13, "training_samples": 177, "hits": 3, "fallbacks": 10, "compared_words": 4132, "mismatches": 0, "gpu_total_median_ms": 0.009520},
+  "maximal_single_slot": {"training_samples": 32768, "target_rgb": [64, 64, 64], "moment_and_sum_each": 2147483648, "compared_words": 524340, "mismatches": 0, "gpu_total_median_ms": 0.107880},
+  "analytic_environment": {
+    "formula": "L(w)=a+b*cos(theta); E=pi*(a+2*b/3)",
+    "cells": 1024,
+    "hit_cells": 1021,
+    "samples_per_cell": 16,
+    "raw_1spp_rmse": 0.011664517,
+    "cache_16spp_rmse": 0.002938363,
+    "rmse_ratio": 0.251906,
+    "compared_words": 806928,
+    "mismatches": 0,
+    "gpu_total_median_ms": 0.019880,
+    "limitation": "shared sample noise test, not equal sampling cost or geometric leakage validation"
+  },
+  "production_integration": false,
+  "deployed": false
+}

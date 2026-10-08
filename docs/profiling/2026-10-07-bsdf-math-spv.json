@@ -1,0 +1,16 @@
+{
+  "before": {
+    "bytes": 340476,
+    "instructions": 18999,
+    "pow_calls": 68,
+    "sqrt_calls": 100,
+    "trace_sites": 18
+  },
+  "after": {
+    "bytes": 340552,
+    "instructions": 19007,
+    "pow_calls": 57,
+    "sqrt_calls": 100,
+    "trace_sites": 18
+  }
+}

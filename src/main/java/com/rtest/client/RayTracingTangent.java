@@ -108,6 +108,18 @@ final class RayTracingTangent {
         ty /= tangentLength;
         tz /= tangentLength;
 
+        // The UV determinant alone assumes the supplied normal follows vertex winding.
+        // Model normals and mirrored poses need not do so. Resolve +V from the actual
+        // position/UV derivative, then compare it with the shader's cross(N, T).
+        float bx = (e2x * du1 - e1x * du2) * inverse;
+        float by = (e2y * du1 - e1y * du2) * inverse;
+        float bz = (e2z * du1 - e1z * du2) * inverse;
+        float orientation = (ny * tz - nz * ty) * bx
+            + (nz * tx - nx * tz) * by + (nx * ty - ny * tx) * bz;
+        if (!Float.isFinite(orientation) || orientation == 0.0F) {
+            return Frame.INVALID;
+        }
+
         // This is the same deterministic fallback frame used by the shader. Storing only
         // the rotation around the normal is enough because the normal already occupies xyz.
         float referenceX;
@@ -132,6 +144,6 @@ final class RayTracingTangent {
         float bitangentZ = nx * referenceY - ny * referenceX;
         float cosine = tx * referenceX + ty * referenceY + tz * referenceZ;
         float sine = tx * bitangentX + ty * bitangentY + tz * bitangentZ;
-        return new Frame((float)Math.atan2(sine, cosine), determinant < 0.0F ? -1.0F : 1.0F);
+        return new Frame((float)Math.atan2(sine, cosine), orientation < 0.0F ? -1.0F : 1.0F);
     }
 }

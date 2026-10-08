@@ -225,6 +225,30 @@ final class RayTracingAtmosphereSegmentShader {
                 float th = clamp((h - h0) / (h1 - h0), 0.0, 1.0);
                 return PhysicalAtmIndirectHeight(lo, hi, th);
             }
+            // Camera integration visits nearby heights. Reuse or step one table interval;
+            // large jumps fall back to the original binary search, preserving endpoint rules.
+            PhysicalAtmIndirectHeight physicalAtmCoherentIndirectHeight(float h,
+                    PhysicalAtmIndirectHeight previous) {
+                uint lo = previous.lo;
+                uint hi = previous.hi;
+                float h0 = primeAtmData.values[lo].x;
+                float h1 = primeAtmData.values[hi].x;
+                if (h < h0 && lo > 0u) {
+                    hi = lo;
+                    lo -= 1u;
+                    h1 = h0;
+                    h0 = primeAtmData.values[lo].x;
+                } else if (h >= h1 && hi < PATM_DIMS.x - 1u) {
+                    lo = hi;
+                    hi += 1u;
+                    h0 = h1;
+                    h1 = primeAtmData.values[hi].x;
+                }
+                bool lowerCovered = h >= h0 || lo == 0u;
+                bool upperCovered = h < h1 || hi == PATM_DIMS.x - 1u;
+                if (!(lowerCovered && upperCovered)) return physicalAtmIndirectHeight(h);
+                return PhysicalAtmIndirectHeight(lo, hi, clamp((h - h0) / (h1 - h0), 0.0, 1.0));
+            }
             vec4 physicalAtmIndirect(float h, float mu, float sunMu, float nu, PhysicalAtmMedium c,
                     PhysicalAtmIndirectHeight heightStencil, float phaseCoordinate) {
                 uint lo = heightStencil.lo;

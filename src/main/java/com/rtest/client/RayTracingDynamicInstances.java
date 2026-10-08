@@ -23,7 +23,7 @@ import org.slf4j.Logger;
  */
 final class RayTracingDynamicInstances implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int DYNAMIC_BLAS_UPDATE_INTERVAL_FRAMES = 4;
+    private static final int DYNAMIC_BLAS_UPDATE_INTERVAL_FRAMES = 1;
 
     // Player body overlays plus both held-item hands share one dynamic BLAS. Keep enough
     // material slots for a fully decorated body and a high-poly baked item without silently
@@ -73,6 +73,8 @@ final class RayTracingDynamicInstances implements AutoCloseable {
     private long dynamicBlasBuildCommandCount;
     private long dynamicBlasDeferredUpdateCount;
     private long dynamicMaterialUploadCount;
+    private long dynamicMaterialBytes;
+    private long dynamicBlasBatchCount;
     private long dynamicMetadataUploadCount;
 
     // Borrowed for one update; all buffers remain owned by RayTracingVulkanPass.
@@ -118,13 +120,18 @@ final class RayTracingDynamicInstances implements AutoCloseable {
         this.dynamicHistoryResetPending = false;
     }
 
+    void recordBlasBuildBatches(int count) {
+        this.dynamicBlasBatchCount += count;
+    }
+
     void recordBlasBuildCommands(int count) {
         this.dynamicBlasBuildCommandCount += count;
     }
 
     Stats stats() {
         return new Stats(this.dynamicTlasUpdateCount, this.dynamicBlasBuildCommandCount,
-            this.dynamicBlasDeferredUpdateCount, this.dynamicMaterialUploadCount, this.dynamicMetadataUploadCount);
+            this.dynamicBlasDeferredUpdateCount, this.dynamicMaterialUploadCount, this.dynamicMetadataUploadCount,
+            this.dynamicBlasBatchCount, this.dynamicMaterialBytes);
     }
 
     NativeBuffer scratchBuffer() {
@@ -163,7 +170,7 @@ final class RayTracingDynamicInstances implements AutoCloseable {
     }
 
     record Stats(long tlasUpdates, long blasBuildCommands, long deferredBlasUpdates,
-                 long materialUploads, long metadataUploads) {
+                 long materialUploads, long metadataUploads, long blasBuildBatches, long materialBytes) {
     }
 
     private static final class DynamicBlasCache implements AutoCloseable {
@@ -324,6 +331,9 @@ final class RayTracingDynamicInstances implements AutoCloseable {
             this.fingerprint = fingerprint;
             this.triangleCount = triangleCount;
             this.topologyVertices = java.util.Arrays.copyOf(topologyVertices, topologyVertices.length);
+            // The initial upload and topology share one owned, immutable snapshot.
+            // UPDATE replaces uploadedVertices; it never mutates this topology array.
+            this.uploadedVertices = this.topologyVertices;
             this.vertexBuffer = vertexBuffer;
             this.bottomLevel = bottomLevel;
         }
@@ -396,6 +406,7 @@ final class RayTracingDynamicInstances implements AutoCloseable {
             || hasChangedDynamicMaterials(frame);
         try (NativeBuffer.Mapped mapped = materialUploadNeeded ? materialBuffer.map() : null) {
             FloatBuffer materials = mapped == null ? null : mapped.buffer().asFloatBuffer();
+            if (mapped != null) mapped.flushOnlyWrittenRanges();
             for (DynamicEntityGeometry.Instance instance : frame.instances()) {
                 long id = instance.snapshot().identity();
                 int slot = instance.snapshot().slot();
@@ -416,8 +427,7 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                         // Block-entity identities and cache keys occupy their own high-bit
                         // namespace; their per-slot material range is the same bounded model
                         // range as player and living models.
-                        long key = blockEntity ? 0x5000000000000000L | (id & 0x0fffffffffffffffL)
-                            : 0x7000000000000000L | (id & 0xffffffffL);
+                        long key = DynamicEntityGeometry.modelBlasCacheKey(id, instance.snapshot().flags(), blockEntity);
                         Map<Long, DynamicCachedBlas> cacheMap = player ? playerModelBlas
                             : blockEntity ? blockEntityModelBlas : livingModelBlas;
                         DynamicCachedBlas cached = cacheMap.get(id);
@@ -434,14 +444,12 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                             cached.uploadedMaterials = previous.uploadedMaterials;
                             dynamicBlas.remove(previous);
                             dynamicBlas.add(cached);
-                            cached.uploadedVertices = mesh.vertices();
                             cached.lastBlasReplacementFrame = dynamicFrameNumber;
                             cacheMap.put(id, cached);
                             historyResetIdentities.add(id);
                             tlasChanged = true;
                         } else if (cached == null) {
                             cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                            cached.uploadedVertices = mesh.vertices();
                             cached.lastBlasReplacementFrame = dynamicFrameNumber;
                             cacheMap.put(id, cached);
                             dynamicBlas.add(cached);
@@ -453,7 +461,6 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                             // the old one after the frame fence instead.
                             DynamicCachedBlas previous = cached;
                             cached = dynamicBlasCache.replace(device, key, dynamicMesh);
-                            cached.uploadedVertices = java.util.Arrays.copyOf(mesh.vertices(), mesh.vertices().length);
                             cached.uploadedMaterials = previous.uploadedMaterials;
                             dynamicBlas.remove(previous);
                             dynamicBlas.add(cached);
@@ -473,16 +480,14 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                         }
                         int base = geometry.materialLayout.highWaterTriangle() + DYNAMIC_PLACEHOLDER_TRIANGLES
                             + DYNAMIC_ITEM_MATERIAL_TRIANGLES + slot * DYNAMIC_SLOT_MATERIAL_TRIANGLES;
-                        if (materials != null && (this.dynamicMaterialWritePending
-                                || !java.util.Arrays.equals(cached.uploadedMaterials, mesh.materialData()))) {
-                            materials.position(base * MATERIAL_FLOATS_PER_TRIANGLE);
-                        // Each selector-2 triangle already carries its own living-texture
-                        // descriptor index in optical.x. A player BLAS can contain skin,
-                        // several armor PNGs and a trim atlas, so the dynamic/TLAS slot must
-                        // never replace those per-layer texture indices.
-                            materials.put(mesh.materialData());
-                            cached.uploadedMaterials = java.util.Arrays.copyOf(
-                                mesh.materialData(), mesh.materialData().length);
+                        if (materials != null) {
+                            // Each triangle retains its authored texture descriptor index;
+                            // the TLAS slot must not replace skin/armor/trim layer indices.
+                            DynamicMaterialDelta.Upload upload = DynamicMaterialDelta.writeAndRemember(materials, base,
+                                cached.uploadedMaterials, mesh.materialData(), this.dynamicMaterialWritePending,
+                                mapped::flushOnlyRange);
+                            this.dynamicMaterialBytes += upload.bytes();
+                            cached.uploadedMaterials = upload.snapshot();
                         }
                         materialBases.put(id, base);
                         addresses.put(id, cached.bottomLevel.deviceAddress);
@@ -506,14 +511,12 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                             cached.uploadedMaterials = previous.uploadedMaterials;
                             dynamicBlas.remove(previous);
                             dynamicBlas.add(cached);
-                            cached.uploadedVertices = mesh.vertices();
                             cached.lastBlasReplacementFrame = dynamicFrameNumber;
                             itemModelBlas.put(id, cached);
                             historyResetIdentities.add(id);
                             tlasChanged = true;
                         } else if (cached == null) {
                             cached = dynamicBlasCache.acquire(device, key, dynamicMesh);
-                            cached.uploadedVertices = mesh.vertices();
                             cached.lastBlasReplacementFrame = dynamicFrameNumber;
                             itemModelBlas.put(id, cached);
                             dynamicBlas.add(cached);
@@ -522,7 +525,6 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                         } else if (verticesChanged && shouldReplaceDynamicBlas(cached, dynamicFrameNumber)) {
                             DynamicCachedBlas previous = cached;
                             cached = dynamicBlasCache.replace(device, key, dynamicMesh);
-                            cached.uploadedVertices = java.util.Arrays.copyOf(mesh.vertices(), mesh.vertices().length);
                             cached.uploadedMaterials = previous.uploadedMaterials;
                             dynamicBlas.remove(previous);
                             dynamicBlas.add(cached);
@@ -538,12 +540,12 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                             + DYNAMIC_ITEM_MATERIAL_TRIANGLES
                             + slot * DYNAMIC_SLOT_MATERIAL_TRIANGLES
                             + DYNAMIC_PLAYER_MATERIAL_TRIANGLES;
-                        if (materials != null && (this.dynamicMaterialWritePending
-                                || !java.util.Arrays.equals(cached.uploadedMaterials, mesh.materialData()))) {
-                            materials.position(base * MATERIAL_FLOATS_PER_TRIANGLE);
-                            materials.put(mesh.materialData());
-                            cached.uploadedMaterials = java.util.Arrays.copyOf(
-                                mesh.materialData(), mesh.materialData().length);
+                        if (materials != null) {
+                            DynamicMaterialDelta.Upload upload = DynamicMaterialDelta.writeAndRemember(materials, base,
+                                cached.uploadedMaterials, mesh.materialData(), this.dynamicMaterialWritePending,
+                                mapped::flushOnlyRange);
+                            this.dynamicMaterialBytes += upload.bytes();
+                            cached.uploadedMaterials = upload.snapshot();
                         }
                         if (!reportedItemMaterial) {
                             reportedItemMaterial = true;
@@ -630,6 +632,9 @@ final class RayTracingDynamicInstances implements AutoCloseable {
             scratchSize = Math.max(scratchSize, cached.bottomLevel.scratchSize);
         }
         long scratchAlignment = this.scratchAlignment;
+        long[] pendingSizes = dynamicBlas.stream().filter(cached -> !cached.built || cached.pendingUpdate)
+            .mapToLong(cached -> cached.bottomLevel.scratchSize).toArray();
+        scratchSize = Math.max(scratchSize, BlasBuildBatch.plan(pendingSizes, scratchAlignment).bytes());
         long requiredScratchBufferSize = VulkanAccelerationResources.scratchBufferSize(scratchSize, scratchAlignment);
         if (requiredScratchBufferSize > scratchBuffer.size) {
             NativeBuffer replacement = NativeBuffer.create(device, requiredScratchBufferSize,
@@ -648,6 +653,8 @@ final class RayTracingDynamicInstances implements AutoCloseable {
             try (NativeBuffer.Mapped mapped = instanceBuffer.map()) {
                 ByteBuffer buffer = mapped.buffer();
                 buffer.position(sectionBlasCount * VkAccelerationStructureInstanceKHR.SIZEOF);
+                mapped.flushOnlyRange((long)sectionBlasCount * VkAccelerationStructureInstanceKHR.SIZEOF,
+                    (long)dynamicSlotCapacity * VkAccelerationStructureInstanceKHR.SIZEOF);
                 DynamicTlasInstanceWriter.write(buffer, dynamicSlotCapacity, instancesBySlot, addresses,
                     materialBases, fallbackBlasDeviceAddress,
                     (float)geometry.originX, (float)geometry.originY, (float)geometry.originZ);
@@ -666,6 +673,7 @@ final class RayTracingDynamicInstances implements AutoCloseable {
         if (metadataChanged) {
             this.dynamicMetadataUploadCount++;
             try (NativeBuffer.Mapped mapped = dynamicMotionMetadataBuffer.map()) {
+                mapped.flushOnlyRange(0, metadataByteCount);
                 mapped.buffer().put(this.dynamicMotionMetadataScratch, 0, metadataByteCount);
             }
             System.arraycopy(this.dynamicMotionMetadataScratch, 0,
@@ -685,12 +693,9 @@ final class RayTracingDynamicInstances implements AutoCloseable {
 
     private boolean hasChangedDynamicMaterials(DynamicEntityGeometry.Frame frame) {
         Set<Long> changedGeometry = frame.dynamicFrame().changedGeometry();
-        if (changedGeometry.isEmpty()) {
-            return false;
-        }
         for (DynamicEntityGeometry.Instance instance : frame.instances()) {
             long id = instance.snapshot().identity();
-            if (!instance.snapshot().active() || !changedGeometry.contains(id)) {
+            if (!instance.snapshot().active() || instance.snapshot().slot() >= dynamicSlotCapacity) {
                 continue;
             }
             float[] materialData;
@@ -702,7 +707,7 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                     materialData = mesh != null && mesh.triangleCount() <= DYNAMIC_PLAYER_MATERIAL_TRIANGLES
                         ? mesh.materialData() : null;
                 }
-                case LIVING_BODY -> {
+                case LIVING_BODY, PARTICLE -> {
                     PlayerModelGeometryAdapter.Mesh mesh = frame.livingMeshes().get(id);
                     cached = livingModelBlas.get(id);
                     materialData = mesh != null && mesh.triangleCount() <= DYNAMIC_PLAYER_MATERIAL_TRIANGLES
@@ -720,14 +725,15 @@ final class RayTracingDynamicInstances implements AutoCloseable {
                     materialData = mesh != null && mesh.triangleCount() <= DYNAMIC_ITEM_MATERIAL_TRIANGLES
                         ? mesh.materialData() : null;
                 }
-                case PARTICLE -> {
-                    continue;
-                }
                 default -> throw new IllegalStateException(
                     "Unhandled dynamic instance family: " + instance.family());
             }
-            if (materialData != null && (cached == null
-                || !java.util.Arrays.equals(cached.uploadedMaterials, materialData))) {
+            // Inactive GPU entries are released before the registry retires their slots.
+            // Reactivation with the same GeometryKey is absent from changedGeometry, but
+            // the replacement cache still needs an initialized material snapshot.
+            if (materialData != null && (cached == null || cached.uploadedMaterials == null
+                || (changedGeometry.contains(id)
+                    && !java.util.Arrays.equals(cached.uploadedMaterials, materialData)))) {
                 return true;
             }
         }

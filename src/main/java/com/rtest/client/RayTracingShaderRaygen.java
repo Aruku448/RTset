@@ -6,7 +6,10 @@ final class RayTracingShaderRaygen {
             String extension = "#extension GL_EXT_ray_tracing : require\n";
             return (first.replace(extension, extension + RayTracingAtmosphereShader.GLSL
                 + RayTracingAtmosphereSegmentShader.GLSL + RayTracingMoonShader.GLSL)
-                + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL);
+                + middle + bodyTail + last).replace("// SKY_IMPORTANCE_FUNCTIONS", SkyImportanceShader.GLSL)
+                .replace("// RESTIR_DECLARATIONS", RayTracingRestirShader.DECLARATIONS)
+                .replace("// RESTIR_FUNCTIONS", RayTracingRestirShader.FUNCTIONS)
+                .replace("// RESTIR_MAIN", RayTracingRestirShader.MAIN);
         }
 
     static final String RAYGEN_SHADER = joinShaderParts("""
@@ -34,6 +37,7 @@ final class RayTracingShaderRaygen {
             // binding in the active raygen module makes emissive-area sampling agree with the
             // visible surface instead of falling back to the CPU centroid scalar.
             layout(set = 0, binding = 5, std430) readonly buffer PbrData { uint values[]; } pbrData;
+            // RESTIR_DECLARATIONS
             layout(set = 0, binding = 26, std430) readonly buffer LightData { uint values[]; } lightData;
             layout(set = 0, binding = 2, std140) uniform Camera {
                 vec4 origin;
@@ -496,7 +500,7 @@ final class RayTracingShaderRaygen {
                     // therefore every sun shaft. Query the same TLAS and transparent-shadow path as
                     // surface lighting so the Tyndall pattern and RT geometry remain coincident.
                     vec3 volumeSunVisibility = vec3(1.0);
-                    if (sunValid && daylight > 1.0e-4) {
+                    if (sunValid && daylight > 1.0e-4 && camera.settings.y != 0.0) {
                         shadowTransmittance = vec3(1.0);
                         shadowDynamicOccluder = 0u;
                         traceRayEXT(
@@ -519,7 +523,7 @@ final class RayTracingShaderRaygen {
                     if (lunarValid && moon.y > 0.0) {
                         shadowTransmittance = vec3(1.0);
                         shadowDynamicOccluder = 0u;
-                        traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, SECONDARY_RAY_MASK,
+                        if (camera.settings.y != 0.0) traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, SECONDARY_RAY_MASK,
                             1, 1, 1, samplePoint + moon * 0.002, 0.001, moon, camera.sun.w, 1);
                         lunarScattering = (ATMOSPHERE_RAYLEIGH_SCATTERING * rayleighDensity * lunarRayleighPhase
                             + ATMOSPHERE_AEROSOL_SCATTERING * aerosolDensity * lunarAerosolPhase)
@@ -653,6 +657,7 @@ final class RayTracingShaderRaygen {
                 lunarPhase[0] = vec4(3.0 * (1.0 + lunarNu * lunarNu) / (16.0 * PATM_PI));
                 for (uint k = 0u; k < 4u; k++) lunarPhase[k + 1u] = physicalAtmTabulatedPhase(lunarStencil, k);
                 vec4 spectralTransmittance = vec4(1.0);
+                PhysicalAtmIndirectHeight previousHeight = PhysicalAtmIndirectHeight(0u, 1u, 0.0);
                 float previous = 0.0;
                 for (uint i = 1u; i <= count; i++) {
                     float edge = length * float(i) / float(count);
@@ -689,7 +694,8 @@ final class RayTracingShaderRaygen {
                     vec3 lunarDirectStep = vec3(0.0), lunarMultipleStep = vec3(0.0);
                     {
                         // End medium/table/interpolation state before either visibility query.
-                        PhysicalAtmIndirectHeight indirectHeight = physicalAtmIndirectHeight(hp);
+                        PhysicalAtmIndirectHeight indirectHeight = physicalAtmCoherentIndirectHeight(hp, previousHeight);
+                        previousHeight = indirectHeight;
                         PhysicalAtmMedium c = physicalAtmMedium(hp);
                         vec4 direct = vec4(0.0);
                         for (uint k = 0u; k < 5u; k++) {
@@ -795,8 +801,13 @@ final class RayTracingShaderRaygen {
                 float a2 = alpha * alpha;
                 return 2.0 * nDotV / max(nDotV + sqrt(a2 + (1.0 - a2) * nDotV * nDotV), 1.0e-6);
             }
+            // Exact integer exponent on the nonnegative Schlick/Burley domain.
+            float power5(float value) {
+                float square = value * value;
+                return square * square * value;
+            }
             vec3 schlickFresnel(vec3 f0, float vDotH) {
-                float x = pow(clamp(1.0 - vDotH, 0.0, 1.0), 5.0);
+                float x = power5(clamp(1.0 - vDotH, 0.0, 1.0));
                 return f0 + (1.0 - f0) * x;
             }
             // Prime's default closure restores the energy lost by single-scattering GGX. Keep the
@@ -838,6 +849,25 @@ final class RayTracingShaderRaygen {
                 vec2 coefficients = clamp(fit.xy / fit.zw, 0.0, 1.0);
                 return 0.04 * coefficients.x + coefficients.y;
             }
+            // At fixed reference alpha, collect the bivariate fit into a quadratic in x.
+            // Constant vectors are folded at shader compilation; no extra LUT/buffer traffic.
+            float primeReferenceReflectiveDirectionalEnergyFit(float cosineView) {
+                const float y = PRIME_DEFAULT_GGX_ALPHA;
+                const float y2 = y * y;
+                const vec4 constantTerm = vec4(0.1003, 0.9345, 1.0, 1.0)
+                    + vec4(9.748, 2.229, 8.263, 15.94) * y
+                    + vec4(-8.245, -0.7684, -7.507, 41.26) * y2;
+                const vec4 linearTerm = vec4(-0.6303, -2.323, -1.765, 0.2281)
+                    + vec4(-2.038, -3.748, 11.53, -55.83) * y
+                    + vec4(19.99, 0.2913, 15.86, 300.2) * y2;
+                const vec4 quadraticTerm = vec4(29.34, 1.424, 28.96, 13.08)
+                    + vec4(-26.44, 1.436, -36.11, 54.9) * y
+                    + vec4(-5.448, 0.6286, 33.37, -285.1) * y2;
+                float x = clamp(cosineView, 0.0, 1.0);
+                vec4 fit = constantTerm + linearTerm * x + quadraticTerm * (x * x);
+                vec2 coefficients = clamp(fit.xy / fit.zw, 0.0, 1.0);
+                return 0.04 * coefficients.x + coefficients.y;
+            }
             vec2 primeDefaultGgxDirectionalEnergy(float cosineView, float ggxAlpha) {
                 float coordinate = clamp(cosineView, 0.0, 1.0) * 31.0;
                 int lowerIndex = int(floor(coordinate));
@@ -845,7 +875,7 @@ final class RayTracingShaderRaygen {
                 vec2 calibrated = mix(PRIME_DEFAULT_GGX_DIRECTIONAL_ENERGY[lowerIndex],
                     PRIME_DEFAULT_GGX_DIRECTIONAL_ENERGY[upperIndex], coordinate - float(lowerIndex));
                 float reflectionDelta = primeDefaultReflectiveDirectionalEnergyFit(cosineView, ggxAlpha)
-                    - primeDefaultReflectiveDirectionalEnergyFit(cosineView, PRIME_DEFAULT_GGX_ALPHA);
+                    - primeReferenceReflectiveDirectionalEnergyFit(cosineView);
                 float totalResolvedEnergy = calibrated.x + calibrated.y;
                 float reflectedEnergy = clamp(calibrated.x + reflectionDelta, 0.0, totalResolvedEnergy);
                 return vec2(reflectedEnergy, totalResolvedEnergy - reflectedEnergy);
@@ -881,11 +911,13 @@ final class RayTracingShaderRaygen {
                 float alpha = max(roughness * roughness, 0.025);
                 vec3 f0 = mix(vec3(reflectivity), baseColor, metallic);
                 vec3 F = schlickFresnel(f0, iDotH);
-                float specular = ggxD(nDotH, alpha) * ggxG1(nDotI, alpha) * ggxG1(nDotO, alpha)
+                float distribution = ggxD(nDotH, alpha);
+                float incidentMasking = ggxG1(nDotI, alpha);
+                float specular = distribution * incidentMasking * ggxG1(nDotO, alpha)
                     / max(4.0 * nDotI * nDotO, 1.0e-6);
                 // Visible-normal proposal: D(h) G1(wi) |wi.h| / n.wi,
                 // followed by the reflection Jacobian 1 / (4 |wi.h|).
-                float specPdf = ggxD(nDotH, alpha) * ggxG1(nDotI, alpha) / (4.0 * nDotI);
+                float specPdf = distribution * incidentMasking / (4.0 * nDotI);
                 // A perfect mirror is a delta distribution, not a broadened GGX lobe.
                 // Its energy is sampled explicitly by the continuation branch, never by NEE.
                 if (roughness == 0.0) {
@@ -928,8 +960,8 @@ final class RayTracingShaderRaygen {
                 float nl = clamp(dot(shadingNormal, lightDirection), 0.0, 1.0);
                 float nv = clamp(dot(shadingNormal, viewDirection), 0.0, 1.0);
                 float grazing = 0.5 + 2.0 * roughness * lightHalf * lightHalf;
-                float burley = nl * (1.0 + (grazing - 1.0) * pow(1.0 - nl, 5.0))
-                    * (1.0 + (grazing - 1.0) * pow(1.0 - nv, 5.0)) / BSDF_PI;
+                float burley = nl * (1.0 + (grazing - 1.0) * power5(1.0 - nl))
+                    * (1.0 + (grazing - 1.0) * power5(1.0 - nv)) / BSDF_PI;
                 // ITRP blends a BRDF response (already / pi) toward 0.6.
                 return mix(burley, 0.6, kind == 1.0 ? 0.20 : 0.25);
             }
@@ -1005,6 +1037,9 @@ final class RayTracingShaderRaygen {
                 return pbrData.values[offset + y * width + x];
             }
             float evaluateEmitterEmission(float fallbackEmission, uint mapIndex, vec2 atlasUv) {
+                uint packedMode = uint(max(camera.pbrSettings.x, 0.0) + 0.5);
+                uint features = packedMode >> 8u;
+                if ((features & 8u) == 0u) return fallbackEmission;
                 if (mapIndex == 0u || mapIndex > pbrData.values[0]) return fallbackEmission;
                 uint info = 1u + (mapIndex - 1u) * 10u;
                 uint specularOffset = pbrData.values[info + 1u];
@@ -1021,10 +1056,7 @@ final class RayTracingShaderRaygen {
                 vec2 localUv = clamp((atlasUv - vec2(u0, v0)) / span, 0.0, 0.99999994);
                 uint pixel = emitterPbrReadPixel(
                     specularOffset, specularWidth, specularHeight, localUv.x, localUv.y);
-                uint packedMode = uint(max(camera.pbrSettings.x, 0.0) + 0.5);
                 uint format = packedMode & 0xffu;
-                uint features = packedMode >> 8u;
-                if ((features & 8u) == 0u) return fallbackEmission;
                 uint redByte = (pixel >> 16u) & 0xffu;
                 uint greenByte = (pixel >> 8u) & 0xffu;
                 uint blueByte = pixel & 0xffu;
@@ -1189,21 +1221,28 @@ final class RayTracingShaderRaygen {
                 float selectionPdf = 0.5 * (treePdf + 1.0 / float(emitterCount));
                 return sampleAreaLightAtIndex(volumePosition, emitterIndex, selectionPdf, sampleValue.yz);
             }
-            void traceEmitterVisibility(vec3 shadowOrigin, vec3 target) {
-                shadowTransmittance = vec3(1.0);
-                shadowDynamicOccluder = 0u;
+            struct EmitterVisibilityRay { vec3 direction; float tMax; };
+            EmitterVisibilityRay prepareEmitterVisibilityRay(vec3 shadowOrigin, vec3 target) {
                 vec3 delta = target - shadowOrigin;
                 float distance = length(delta);
                 float coordinateScale = max(max(max(abs(shadowOrigin.x), abs(shadowOrigin.y)), abs(shadowOrigin.z)),
                     max(max(abs(target.x), abs(target.y)), abs(target.z)));
                 float endpointMargin = max(0.0001, 4.0 * 1.1920929e-7 * max(coordinateScale, distance));
                 float tMax = distance - endpointMargin;
-                if (!(tMax > 0.001)) return;
+                return EmitterVisibilityRay(delta / max(distance, 1.0e-8), tMax);
+            }
+            void traceEmitterVisibility(vec3 shadowOrigin, EmitterVisibilityRay ray) {
+                shadowTransmittance = vec3(1.0);
+                shadowDynamicOccluder = 0u;
+                if (!(ray.tMax > 0.001) || camera.settings.y == 0.0) return;
                 traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, SECONDARY_RAY_MASK,
-                    1, 1, 1, shadowOrigin, 0.001, delta / distance, tMax, 1);
+                    1, 1, 1, shadowOrigin, 0.001, ray.direction, ray.tMax, 1);
+            }
+            void traceEmitterVisibility(vec3 shadowOrigin, vec3 target) {
+                traceEmitterVisibility(shadowOrigin, prepareEmitterVisibilityRay(shadowOrigin, target));
             }
             vec3 staticShadowVisibility(vec3 origin, vec3 direction, float tMax, bool dynamicHit, vec3 actual) {
-                if (!dynamicHit || camera.dynamicParameters.w < 0.0) return actual;
+                if (!dynamicHit || camera.dynamicParameters.w < 0.0 || camera.settings.y == 0.0) return actual;
                 shadowExcludeDynamic = 1u;
                 shadowTransmittance = vec3(1.0);
                 shadowDynamicOccluder = 0u;
@@ -1212,17 +1251,19 @@ final class RayTracingShaderRaygen {
                 shadowExcludeDynamic = 0u;
                 return mix(vec3(1.0), shadowTransmittance, camera.settings.y);
             }
+            vec3 staticEmitterVisibility(vec3 origin, EmitterVisibilityRay ray, bool dynamicHit, vec3 actual) {
+                return staticShadowVisibility(origin, ray.direction, ray.tMax, dynamicHit, actual);
+            }
             vec3 staticEmitterVisibility(vec3 origin, vec3 target, bool dynamicHit, vec3 actual) {
                 if (!dynamicHit) return actual;
-                vec3 delta = target - origin;
-                float distance = length(delta);
-                float scale = max(max(max(abs(origin.x), abs(origin.y)), abs(origin.z)),
-                    max(max(abs(target.x), abs(target.y)), abs(target.z)));
-                float margin = max(0.0001, 4.0 * 1.1920929e-7 * max(scale, distance));
-                return staticShadowVisibility(origin, delta / max(distance, 1.0e-8), distance - margin, true, actual);
+                return staticEmitterVisibility(origin, prepareEmitterVisibilityRay(origin, target), dynamicHit, actual);
+            }
+            bool emitterTransportRequired(vec3 actual, vec3 staticVisibility) {
+                // Keep colored transmission and the unoccluded dynamic-shadow baseline.
+                return any(notEqual(actual, vec3(0.0))) || any(notEqual(staticVisibility, vec3(0.0)));
             }
             vec3 sampleLegacyVolumeEmitter(vec3 volumePosition, vec3 viewRay,
-                    AreaLightSample light, vec3 visibility) {
+                    AreaLightSample light) {
                 if (!(light.pdf > 0.0)) return vec3(0.0);
                 vec3 volumeDelta = light.position - volumePosition;
                 float volumeDistanceSquared = dot(volumeDelta, volumeDelta);
@@ -1239,8 +1280,7 @@ final class RayTracingShaderRaygen {
                 float volumePdf = light.selectionPdf
                     * volumeDistanceSquared / max(emitterArea * emitterCosine, 1.0e-6);
                 if (!(volumePdf > 0.0)) return vec3(0.0);
-                vec3 sourceRadiance = evaluateEmitter(light.emitterIndex, light.barycentric)
-                    * visibility;
+                vec3 sourceRadiance = evaluateEmitter(light.emitterIndex, light.barycentric);
                 float phase = atmosphereAerosolPhase(dot(viewRay, volumeDirection));
                 return sourceRadiance * phase / volumePdf;
             }
@@ -1288,18 +1328,24 @@ final class RayTracingShaderRaygen {
                         PRIME_SAMPLE_EFFECT_VOLUME_DISTANCE, uint(i));
                     float distanceKm = segmentKm * (float(i) + sampleU) / float(count);
                     vec3 volumePosition = origin + viewRay * (distanceKm / 0.001);
-                    float volumeHeightKm = physicalAtmHeightAt(eyeHeightKm, viewRay.y, distanceKm);
-                    PhysicalAtmMedium medium = physicalAtmMedium(volumeHeightKm);
-                    vec4 viewT = physicalAtmLocalSpectralTransmittance(eyeHeightKm, viewRay, distanceKm);
                     AreaLightSample light = sampleVolumeAreaLight(volumePosition,
                         primeSobolSample3D(sampleBase, PRIME_SAMPLE_EFFECT_VOLUME_EMITTER, uint(i)));
                     if (light.pdf > 0.0) {
                         vec3 sourceRadiance = evaluateEmitter(light.emitterIndex, light.barycentric);
                         if (any(greaterThan(sourceRadiance, vec3(0.0)))) {
-                            traceEmitterVisibility(volumePosition + light.direction * 0.002, light.position);
+                            vec3 emitterShadowOrigin = volumePosition + light.direction * 0.002;
+                            EmitterVisibilityRay emitterRay = prepareEmitterVisibilityRay(emitterShadowOrigin, light.position);
+                            traceEmitterVisibility(emitterShadowOrigin, emitterRay);
                             bool sampleDynamic = shadowDynamicOccluder != 0u;
                             dynamicOccluder = dynamicOccluder || sampleDynamic;
                             vec3 visibility = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
+                            vec3 staticVisibility = staticEmitterVisibility(emitterShadowOrigin,
+                                emitterRay, sampleDynamic, visibility);
+                            if (!emitterTransportRequired(visibility, staticVisibility)) continue;
+                            // Neither rejected proposals nor doubly occluded samples need medium tables.
+                            float volumeHeightKm = physicalAtmHeightAt(eyeHeightKm, viewRay.y, distanceKm);
+                            PhysicalAtmMedium medium = physicalAtmMedium(volumeHeightKm);
+                            vec4 viewT = physicalAtmLocalSpectralTransmittance(eyeHeightKm, viewRay, distanceKm);
                             vec4 phaseScattering = physicalAtmLocalSpectralPhaseScattering(
                                 medium, dot(viewRay, light.direction));
                             float sourceKm = length(light.position - volumePosition) * 0.001;
@@ -1311,8 +1357,6 @@ final class RayTracingShaderRaygen {
                                 viewT * phaseScattering * sourceT * PATM_SOLAR)
                                 / physicalAtmLinearRec2020FromSpectral(PATM_SOLAR), vec3(0.0));
                             sum += transport * sourceRadiance * visibility / light.pdf;
-                            vec3 staticVisibility = staticEmitterVisibility(volumePosition + light.direction * 0.002,
-                                light.position, sampleDynamic, visibility);
                             dynamicDelta += transport * sourceRadiance * (visibility - staticVisibility) / light.pdf;
                         }
                     }
@@ -1341,6 +1385,7 @@ final class RayTracingShaderRaygen {
                 bool dynamicOccluder;
                 bool valid;
             };
+            // RESTIR_FUNCTIONS
             AreaDirectSplit estimateAreaDirect(vec3 surfacePosition, vec3 normal, vec3 viewDirection,
                     vec3 baseColor, float roughness, float metallic, float reflectivity,
                     vec3 sampleValue, vec2 receiverEnergy, bool separateDynamic) {
@@ -1360,17 +1405,30 @@ final class RayTracingShaderRaygen {
                 result.staticVisibility = vec3(1.0);
                 result.dynamicOccluder = false;
                 result.valid = false;
-                AreaLightSample light = sampleAreaLight(surfacePosition, sampleValue);
+                AreaLightSample light;
+                if ((restir.controls.x & 1u) != 0u && restirDirectEligible) {
+                    vec4 selected = restirDirectSample(surfacePosition, normal, viewDirection, baseColor,
+                        roughness, metallic, reflectivity, receiverEnergy, restirDirectBase);
+                    light = restirLight(surfacePosition, selected);
+                } else {
+                    light = sampleAreaLight(surfacePosition, sampleValue);
+                }
                 if (!(light.pdf > 0.0)) return result;
                 result.light = light;
                 float cosine = max(dot(normal, light.direction), 0.0);
                 if (!(cosine > 0.0)) return result;
                 vec3 sourceRadiance = evaluateEmitter(light.emitterIndex, light.barycentric);
                 if (all(equal(sourceRadiance, vec3(0.0)))) return result;
-                traceEmitterVisibility(surfacePosition + normal * 0.002, light.position);
+                vec3 emitterShadowOrigin = surfacePosition + normal * 0.002;
+                EmitterVisibilityRay emitterRay = prepareEmitterVisibilityRay(emitterShadowOrigin, light.position);
+                traceEmitterVisibility(emitterShadowOrigin, emitterRay);
                 result.visibility = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
                 result.dynamicOccluder = shadowDynamicOccluder != 0u;
                 result.valid = true;
+                vec3 staticVisibility = staticEmitterVisibility(emitterShadowOrigin,
+                    emitterRay, result.dynamicOccluder && separateDynamic, result.visibility);
+                result.staticVisibility = staticVisibility;
+                if (!emitterTransportRequired(result.visibility, staticVisibility)) return result;
                 vec3 radiance = sourceRadiance * result.visibility;
                 float specularProbability = preparedSpecularSampleProbability(receiverEnergy, roughness, metallic);
                 float diffuseProbability = 1.0 - specularProbability;
@@ -1383,15 +1441,13 @@ final class RayTracingShaderRaygen {
                 // often enough to earn its share of the power-heuristic weight, so applying that
                 // weight here drained most of the direct emitter energy (measured misWeight ~0.26).
                 float misWeight = 1.0;
-                vec3 scale = radiance * cosine * misWeight / max(light.pdf, 1.0e-6);
+                float neePdfFloor = (restir.controls.x & 1u) != 0u && restirDirectEligible ? 1e-20 : 1e-6;
+                vec3 scale = radiance * cosine * misWeight / max(light.pdf, neePdfFloor);
                 // evaluateBsdf already resolved both material lobes with the same energy curve.
                 result.diffuse = scale * bsdf.diffuse;
                 result.specular = max(scale * (bsdf.f - bsdf.diffuse), vec3(0.0));
-                vec3 staticVisibility = staticEmitterVisibility(surfacePosition + normal * 0.002,
-                    light.position, result.dynamicOccluder && separateDynamic, result.visibility);
-                result.staticVisibility = staticVisibility;
                 vec3 deltaScale = sourceRadiance * (result.visibility - staticVisibility)
-                    * cosine * misWeight / max(light.pdf, 1.0e-6);
+                    * cosine * misWeight / max(light.pdf, neePdfFloor);
                 result.dynamicDiffuseDelta = deltaScale * bsdf.diffuse;
                 result.dynamicSpecularDelta = deltaScale * max(bsdf.f - bsdf.diffuse, vec3(0.0));
                 return result;
@@ -1405,7 +1461,7 @@ final class RayTracingShaderRaygen {
                 float maxCoord = max(max(abs(point.x), abs(point.y)), abs(point.z));
                 return max(DIELECTRIC_RAY_MIN_OFFSET, maxCoord * DIELECTRIC_RAY_ERROR_SCALE);
             }
-            void main() {
+            void runRestirPath() {
                 uint pixelIndex = gl_LaunchIDEXT.x + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y;
                 vec2 jitteredPixel = vec2(gl_LaunchIDEXT.xy) + vec2(0.5) + camera.jitter.xy;
                 vec2 pixel = jitteredPixel / vec2(gl_LaunchSizeEXT.xy);
@@ -1418,6 +1474,10 @@ final class RayTracingShaderRaygen {
                 vec3 rayOrigin = camera.origin.xyz;
                 float rayTMin = 0.001;
                 vec3 throughput = vec3(1.0);
+                bool restirPrimaryPrefixValid = false;
+                vec3 prefixRadiance = vec3(0.0);
+                vec3 prefixDynamicDiffuse = vec3(0.0);
+                vec3 prefixDynamicSpecular = vec3(0.0);
                 // A single active medium covers the closed vanilla glass/water surfaces. Nested
                 // media remain a bounded approximation, but each segment gets physical attenuation.
                 bool cameraInWater = (uint(camera.pbrParallaxSettings.w + 0.5) & 4u) != 0u;
@@ -1454,8 +1514,10 @@ final class RayTracingShaderRaygen {
                 vec3 primaryBaseColor = vec3(0.0);
                 vec4 primaryLocalPosition = vec4(0.0);
                 uint primaryDynamicSlot = 0xffffffffu;
+                bool pathContainsDynamicModel = false;
                 vec3 primaryNormal = vec3(0.0, 0.0, 1.0);
-                AreaLightSample primaryAreaLight;
+                AreaLightSample primaryAreaLight = AreaLightSample(
+                    vec3(0.0), vec3(0.0, 1.0, 0.0), 0.0, 0.0, 0.0, LIGHT_NO_EMITTER, vec2(0.0));
                 vec3 primaryAreaVisibility = vec3(1.0);
                 vec3 primaryAreaStaticVisibility = vec3(1.0);
                 bool primaryAreaLightValid = false;
@@ -1494,11 +1556,131 @@ final class RayTracingShaderRaygen {
                     gl_LaunchIDEXT.xy, floatBitsToUint(camera.random.x),
                     floatBitsToUint(camera.random.y), 0u, 0u);
             """, """
-                for (int bounce = 0; bounce < 5; bounce++) {
+                int firstBounce = 0;
+                if (restirSuffixActive && restirProposalIndex > 0u && restirPrefixStateReady) {
+                    rayOrigin = restirPrefixState.rayOrigin;
+                    rayTMin = restirPrefixState.rayTMin;
+                    throughput = restirPrefixState.throughput;
+                    restirPrimaryPrefixValid = restirPrefixState.restirPrimaryPrefixValid;
+                    prefixRadiance = restirPrefixState.prefixRadiance;
+                    prefixDynamicDiffuse = restirPrefixState.prefixDynamicDiffuse;
+                    prefixDynamicSpecular = restirPrefixState.prefixDynamicSpecular;
+                    mediumAbsorption = restirPrefixState.mediumAbsorption;
+                    insideMedium = restirPrefixState.insideMedium;
+                    radiance = restirPrefixState.radiance;
+                    diffuseRadiance = restirPrefixState.diffuseRadiance;
+                    specularRadiance = restirPrefixState.specularRadiance;
+                    directDiffuseRadiance = restirPrefixState.directDiffuseRadiance;
+                    directSpecularRadiance = restirPrefixState.directSpecularRadiance;
+                    dynamicDiffuseDelta = restirPrefixState.dynamicDiffuseDelta;
+                    dynamicSpecularDelta = restirPrefixState.dynamicSpecularDelta;
+                    primaryDirectDistance = restirPrefixState.primaryDirectDistance;
+                    areaDirectDiffuseRadiance = restirPrefixState.areaDirectDiffuseRadiance;
+                    areaDirectSpecularRadiance = restirPrefixState.areaDirectSpecularRadiance;
+                    indirectDiffuseRadiance = restirPrefixState.indirectDiffuseRadiance;
+                    emissionRadiance = restirPrefixState.emissionRadiance;
+                    areaLightRadiance = restirPrefixState.areaLightRadiance;
+                    transmissionRadiance = restirPrefixState.transmissionRadiance;
+                    spectralChannel = restirPrefixState.spectralChannel;
+                    spectralMasked = restirPrefixState.spectralMasked;
+                    mediumIor = restirPrefixState.mediumIor;
+                    primaryPosition = restirPrefixState.primaryPosition;
+                    primaryBaseColor = restirPrefixState.primaryBaseColor;
+                    primaryLocalPosition = restirPrefixState.primaryLocalPosition;
+                    primaryDynamicSlot = restirPrefixState.primaryDynamicSlot;
+                    pathContainsDynamicModel = restirPrefixState.pathContainsDynamicModel;
+                    primaryNormal = restirPrefixState.primaryNormal;
+                    primaryAreaLight = restirPrefixState.primaryAreaLight;
+                    primaryAreaVisibility = restirPrefixState.primaryAreaVisibility;
+                    primaryAreaStaticVisibility = restirPrefixState.primaryAreaStaticVisibility;
+                    primaryAreaLightValid = restirPrefixState.primaryAreaLightValid;
+                    primaryDynamicShadow = restirPrefixState.primaryDynamicShadow;
+                    primaryRoughness = restirPrefixState.primaryRoughness;
+                    primaryRayDirection = restirPrefixState.primaryRayDirection;
+                    primaryMaterial = restirPrefixState.primaryMaterial;
+                    primaryHit = restirPrefixState.primaryHit;
+                    primaryTransmissionPath = restirPrefixState.primaryTransmissionPath;
+                    primaryDiffuseShare = restirPrefixState.primaryDiffuseShare;
+                    skySunDiskHit = restirPrefixState.skySunDiskHit;
+                    diffuseHitDistance = restirPrefixState.diffuseHitDistance;
+                    specularHitDistance = restirPrefixState.specularHitDistance;
+                    previousBsdfPdf = restirPrefixState.previousBsdfPdf;
+                    previousSunNeeSamples = restirPrefixState.previousSunNeeSamples;
+                    previousSurfaceNormal = restirPrefixState.previousSurfaceNormal;
+                    previousWasDelta = restirPrefixState.previousWasDelta;
+                    previousAreaNeeEnabled = restirPrefixState.previousAreaNeeEnabled;
+                    previousSkyNeeEnabled = restirPrefixState.previousSkyNeeEnabled;
+                    rayDirection = restirPrefixState.rayDirection;
+                    firstBounce = 1;
+                }
+                for (int bounce = firstBounce; bounce < 5; bounce++) {
+                    // Save after the first scatter; borrowed tapes resume this exact prefix.
+                    if (restirSuffixActive && restirProposalIndex == 0u && bounce == 1) {
+                        restirPrefixState.rayOrigin = rayOrigin;
+                        restirPrefixState.rayTMin = rayTMin;
+                        restirPrefixState.throughput = throughput;
+                        restirPrefixState.restirPrimaryPrefixValid = restirPrimaryPrefixValid;
+                        restirPrefixState.prefixRadiance = prefixRadiance;
+                        restirPrefixState.prefixDynamicDiffuse = prefixDynamicDiffuse;
+                        restirPrefixState.prefixDynamicSpecular = prefixDynamicSpecular;
+                        restirPrefixState.mediumAbsorption = mediumAbsorption;
+                        restirPrefixState.insideMedium = insideMedium;
+                        restirPrefixState.radiance = radiance;
+                        restirPrefixState.diffuseRadiance = diffuseRadiance;
+                        restirPrefixState.specularRadiance = specularRadiance;
+                        restirPrefixState.directDiffuseRadiance = directDiffuseRadiance;
+                        restirPrefixState.directSpecularRadiance = directSpecularRadiance;
+                        restirPrefixState.dynamicDiffuseDelta = dynamicDiffuseDelta;
+                        restirPrefixState.dynamicSpecularDelta = dynamicSpecularDelta;
+                        restirPrefixState.primaryDirectDistance = primaryDirectDistance;
+                        restirPrefixState.areaDirectDiffuseRadiance = areaDirectDiffuseRadiance;
+                        restirPrefixState.areaDirectSpecularRadiance = areaDirectSpecularRadiance;
+                        restirPrefixState.indirectDiffuseRadiance = indirectDiffuseRadiance;
+                        restirPrefixState.emissionRadiance = emissionRadiance;
+                        restirPrefixState.areaLightRadiance = areaLightRadiance;
+                        restirPrefixState.transmissionRadiance = transmissionRadiance;
+                        restirPrefixState.spectralChannel = spectralChannel;
+                        restirPrefixState.spectralMasked = spectralMasked;
+                        restirPrefixState.mediumIor = mediumIor;
+                        restirPrefixState.primaryPosition = primaryPosition;
+                        restirPrefixState.primaryBaseColor = primaryBaseColor;
+                        restirPrefixState.primaryLocalPosition = primaryLocalPosition;
+                        restirPrefixState.primaryDynamicSlot = primaryDynamicSlot;
+                        restirPrefixState.pathContainsDynamicModel = pathContainsDynamicModel;
+                        restirPrefixState.primaryNormal = primaryNormal;
+                        restirPrefixState.primaryAreaLight = primaryAreaLight;
+                        restirPrefixState.primaryAreaVisibility = primaryAreaVisibility;
+                        restirPrefixState.primaryAreaStaticVisibility = primaryAreaStaticVisibility;
+                        restirPrefixState.primaryAreaLightValid = primaryAreaLightValid;
+                        restirPrefixState.primaryDynamicShadow = primaryDynamicShadow;
+                        restirPrefixState.primaryRoughness = primaryRoughness;
+                        restirPrefixState.primaryRayDirection = primaryRayDirection;
+                        restirPrefixState.primaryMaterial = primaryMaterial;
+                        restirPrefixState.primaryHit = primaryHit;
+                        restirPrefixState.primaryTransmissionPath = primaryTransmissionPath;
+                        restirPrefixState.primaryDiffuseShare = primaryDiffuseShare;
+                        restirPrefixState.skySunDiskHit = skySunDiskHit;
+                        restirPrefixState.diffuseHitDistance = diffuseHitDistance;
+                        restirPrefixState.specularHitDistance = specularHitDistance;
+                        restirPrefixState.previousBsdfPdf = previousBsdfPdf;
+                        restirPrefixState.previousSunNeeSamples = previousSunNeeSamples;
+                        restirPrefixState.previousSurfaceNormal = previousSurfaceNormal;
+                        restirPrefixState.previousWasDelta = previousWasDelta;
+                        restirPrefixState.previousAreaNeeEnabled = previousAreaNeeEnabled;
+                        restirPrefixState.previousSkyNeeEnabled = previousSkyNeeEnabled;
+                        restirPrefixState.rayDirection = rayDirection;
+                        restirPrefixStateReady = true;
+                    }
                     sampleBase.vertexIndex = uint(bounce);
                     // Consecutive temporal indices preserve Sobol coverage. Vertex/effect/dimension
                     // seeds already isolate each bounce and sampling domain.
                     sampleBase.sampleIndex = floatBitsToUint(camera.random.x);
+                    if (restirSuffixActive && bounce >= 1) {
+                        sampleBase.pixel = uvec2(0u);
+                        sampleBase.sampleEpoch = restirSuffixSeed;
+                        sampleBase.sampleIndex = 0u;
+                        sampleBase.pathIndex = 0u;
+                    }
                     pathPosition = vec4(0.0);
                     pathLocalPosition = vec4(0.0);
                     pathDynamicSlot = 0xffffffffu;
@@ -1507,6 +1689,15 @@ final class RayTracingShaderRaygen {
                     pathBaseColorRoughness = vec4(0.0);
                     pathMaterial = vec4(0.0);
                     pathOpticalLighting = vec4(0.0);
+                    // Camera ray is identical across gather prefixes. The secondary ray is
+                    // identical across suffix proposals at the same prefix. Cache their hits
+                    // within this invocation; all subsequent suffix/visibility rays stay fresh.
+                    if (restirSuffixActive && bounce == 0 && restirCameraHitReady) {
+                        pathPayload = restirCameraHit;
+                    } else if (restirSuffixActive && bounce == 1 && restirProposalIndex > 0u
+                            && restirPrefixStateReady) {
+                        pathPayload = restirPrefixHit;
+                    } else {
                     traceRayEXT(
                         topLevelAS,
                         0,
@@ -1520,6 +1711,15 @@ final class RayTracingShaderRaygen {
                         camera.sun.w,
                         0
                     );
+                        if (restirSuffixActive && bounce == 0) {
+                            restirCameraHit = pathPayload;
+                            restirCameraHitReady = true;
+                        }
+                        if (restirSuffixActive && bounce == 1 && restirProposalIndex == 0u) {
+                            restirPrefixHit = pathPayload;
+                        }
+                    }
+                    pathContainsDynamicModel = pathContainsDynamicModel || pathDynamicSlot != 0xffffffffu;
                     if (bounce == 0 && pathPosition.w >= 0.5) {
                         primaryPosition = pathPosition.xyz;
                         primaryLocalPosition = pathLocalPosition;
@@ -1653,13 +1853,9 @@ final class RayTracingShaderRaygen {
                         }
                     }
 
-                    // Baked quads are two-sided in the BLAS. Orient the hit normal toward
-                    // the ray origin so direct-light cosine tests and ray offsets use the
-                    // visible side instead of occasionally starting inside the surface.
-                    vec3 geometricNormal = normalize(pathNormal.xyz);
-                    vec3 normal = dot(rayDirection, geometricNormal) < 0.0
-                        ? geometricNormal
-                        : -geometricNormal;
+                    // Closest-hit orients the mapped normal using the geometric face.
+                    // Do not flip it again by its view-dependent mapped-normal dot product.
+                    vec3 normal = normalize(pathNormal.xyz);
                     // The ray state, not quad winding, determines whether this is an entry. This
                     // also makes a double-sided glass pane tint correctly from either face.
                     bool enteringMedium = !insideMedium;
@@ -1677,6 +1873,17 @@ final class RayTracingShaderRaygen {
                     // captured from a resource-pack layer that was misclassified as opaque.
                     bool transmission = pathMaterial.w > 0.5 || pathOpticalLighting.x > 1.001;
                     float transmissionOpacity = clamp(pathLocalPosition.w, 0.0, 1.0);
+                    if (bounce == 0) restirPrimaryPrefixValid = !cameraInWater && !transmission
+                        && roughness >= 0.2 && pathDynamicSlot == 0xffffffffu;
+                    if (restirSuffixActive && bounce == 1 && restirProposalIndex == 0u) {
+                        // Geometry of the integration prefix is established before any suffix draws.
+                        restirSupportPosition = pathPosition.xyz;
+                        restirSupportNormal = normal;
+                        restirPrimaryPosition = primaryPosition;
+                        restirPrefixValid = restirPrimaryPrefixValid && !insideMedium && !transmission
+                            && primaryMaterial.w < 0.5 && primaryRoughness >= 0.2 && roughness >= 0.2
+                            && primaryDynamicSlot == 0xffffffffu && pathDynamicSlot == 0xffffffffu;
+                    }
                     // Apply the albedo tint when entering the medium; Beer-Lambert handles the
                     // color carried through the interior and the exit interface stays untinted.
                     vec3 transmissionColor = enteringMedium
@@ -1704,8 +1911,9 @@ final class RayTracingShaderRaygen {
                             materialIor, SPECTRAL_ABBE_NUMBER, dispersionScale,
                             SPECTRAL_WAVELENGTHS_NM[spectralChannel]);
                     }
-                    float dielectricF0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
-                    float fresnel = dielectricF0 + (1.0 - dielectricF0) * pow(1.0 - cosTheta, 5.0);
+                    float iorRatio = (ior - 1.0) / (ior + 1.0);
+                    float dielectricF0 = iorRatio * iorRatio;
+                    float fresnel = dielectricF0 + (1.0 - dielectricF0) * power5(1.0 - cosTheta);
                     float eta = interfaceEntering ? 1.0 / ior : ior;
                     vec3 refractedDirection = refract(rayDirection, interfaceNormal, eta);
                     bool canTransmit = transmission && dot(refractedDirection, refractedDirection) > 1.0e-6;
@@ -1765,13 +1973,16 @@ final class RayTracingShaderRaygen {
                         float foliageResponse = vegetationKind > 0.0
                             ? vegetationSunResponse(normal, viewDirection, sampledSunDirection,
                                 roughness, vegetationKind) : 0.0;
+                        // Both ordinary and foliage transported responses vanish here.
+                        if (directCosine == 0.0 && foliageResponse == 0.0) continue;
                         vec3 sunResponse = physicalAtmosphereEnabled()
                             ? physicalAtmosphereSunTransmittance(sampledSunDirection)
                             : sunTemperatureColor * daylight;
                         if (all(equal(sunResponse, vec3(0.0)))) continue;
                         shadowTransmittance = vec3(1.0);
                         shadowDynamicOccluder = 0u;
-                        bool needsSunShadow = (physicalAtmosphereEnabled() || daylight > 0.001)
+                        bool needsSunShadow = camera.settings.y != 0.0
+                            && (physicalAtmosphereEnabled() || daylight > 0.001)
                             && (directCosine > 0.0 || foliageResponse > 0.0)
                             && dot(sampledSunDirection, sampledSunDirection) > 0.5;
                         if (needsSunShadow) {
@@ -1783,7 +1994,13 @@ final class RayTracingShaderRaygen {
                         }
                         // Average transported RGB radiance, not a scalar or a blurred shadow mask.
                         vec3 shadowFactor = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
-                        sunDynamicOccluder = sunDynamicOccluder || shadowDynamicOccluder != 0u;
+                        bool sampleSunDynamic = shadowDynamicOccluder != 0u;
+                        sunDynamicOccluder = sunDynamicOccluder || sampleSunDynamic;
+                        vec3 sunStaticVisibility = staticShadowVisibility(pathPosition.xyz + normal *
+                            (vegetationKind > 0.0 && dot(normal, sampledSunDirection) < 0.0 ? -0.002 : 0.002),
+                            sampledSunDirection, camera.sun.w, sampleSunDynamic, shadowFactor);
+                        // Preserve the signed static baseline, including colored transmission.
+                        if (!emitterTransportRequired(shadowFactor, sunStaticVisibility)) continue;
                         BsdfValue sunBsdf = evaluateBsdf(normal, viewDirection, sampledSunDirection, baseColor,
                             roughness, metallic, reflectivity, diffuseMaterialWeight,
                             sunDiffuseProbability, sunSpecularProbability, receiverEnergy);
@@ -1806,12 +2023,9 @@ final class RayTracingShaderRaygen {
                                 - sunBsdf.diffuse * directCosine) * foliageLight;
                         }
                         sunSpecularContribution += max(sunBsdf.f - sunBsdf.diffuse, vec3(0.0)) * directLight;
-                        if (shadowDynamicOccluder != 0u) {
-                            vec3 staticVisibility = staticShadowVisibility(pathPosition.xyz + normal *
-                                (vegetationKind > 0.0 && dot(normal, sampledSunDirection) < 0.0 ? -0.002 : 0.002),
-                                sampledSunDirection, camera.sun.w, true, shadowFactor);
+                        if (sampleSunDynamic) {
                             vec3 deltaLight = throughput * sunResponse * camera.settings.x * weatherVisibility
-                                * (shadowFactor - staticVisibility) / float(sunSampleCount);
+                                * (shadowFactor - sunStaticVisibility) / float(sunSampleCount);
                             vec3 diffuseResponse = sunBsdf.diffuse * directCosine * sunMisWeight;
                             if (vegetationKind > 0.0) diffuseResponse += diffuseMaterialWeight * baseColor
                                 * (1.0 - reflectivity) * foliageResponse - sunBsdf.diffuse * directCosine;
@@ -1846,36 +2060,38 @@ final class RayTracingShaderRaygen {
                         if (moonCosine > 0.0 && dot(lunarLi, vec3(1.0)) > 0.0) {
                             shadowTransmittance = vec3(1.0);
                             shadowDynamicOccluder = 0u;
-                            traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, SECONDARY_RAY_MASK,
+                            if (camera.settings.y != 0.0) traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, SECONDARY_RAY_MASK,
                                 1, 1, 1, pathPosition.xyz + normal * 0.002, 0.001,
                                 sampledMoonDirection, camera.sun.w, 1);
                             vec3 lunarVisibility = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
                             moonDynamicOccluder = shadowDynamicOccluder != 0u;
-                            BsdfValue moonBsdf = evaluateBsdf(normal, viewDirection, sampledMoonDirection, baseColor,
-                                roughness, metallic, reflectivity, diffuseMaterialWeight,
-                                diffuseProbability, specularProbability, receiverEnergy);
-                            float moonPdf = 1.0 / max(moonSolidAngle(), 1e-8);
-                            float moonNeeMisWeight = bounce + 1 >= maxPathSegments ? 1.0
-                                : powerHeuristic(moonPdf, moonBsdf.pdf);
-                            vec3 moonLight = lunarLi * moonCosine * lunarVisibility * weatherVisibility
-                                * moonNeeMisWeight / moonPdf;
-                            moonDiffuseContribution = moonBsdf.diffuse * moonLight;
-                            moonSpecularContribution = max(moonBsdf.f - moonBsdf.diffuse, vec3(0.0)) * moonLight;
-                            if (moonDynamicOccluder) {
-                                vec3 staticVisibility = staticShadowVisibility(pathPosition.xyz + normal * 0.002,
-                                    sampledMoonDirection, camera.sun.w, true, lunarVisibility);
-                                vec3 deltaLight = throughput * lunarLi * moonCosine * weatherVisibility
-                                    * moonNeeMisWeight / moonPdf * (lunarVisibility - staticVisibility);
-                                vec3 diffuseDelta = moonBsdf.diffuse * deltaLight;
-                                vec3 specularDelta = max(moonBsdf.f - moonBsdf.diffuse, vec3(0.0)) * deltaLight;
-                                if (bounce == 0) {
-                                    dynamicDiffuseDelta += diffuseDelta;
-                                    dynamicSpecularDelta += specularDelta;
-                                } else if (primaryTransmissionPath) {
-                                    dynamicSpecularDelta += diffuseDelta + specularDelta;
-                                } else {
-                                    dynamicDiffuseDelta += (diffuseDelta + specularDelta) * primaryDiffuseShare;
-                                    dynamicSpecularDelta += (diffuseDelta + specularDelta) * (vec3(1.0) - primaryDiffuseShare);
+                            vec3 moonStaticVisibility = staticShadowVisibility(pathPosition.xyz + normal * 0.002,
+                                sampledMoonDirection, camera.sun.w, moonDynamicOccluder, lunarVisibility);
+                            if (emitterTransportRequired(lunarVisibility, moonStaticVisibility)) {
+                                BsdfValue moonBsdf = evaluateBsdf(normal, viewDirection, sampledMoonDirection, baseColor,
+                                    roughness, metallic, reflectivity, diffuseMaterialWeight,
+                                    diffuseProbability, specularProbability, receiverEnergy);
+                                float moonPdf = 1.0 / max(moonSolidAngle(), 1e-8);
+                                float moonNeeMisWeight = bounce + 1 >= maxPathSegments ? 1.0
+                                    : powerHeuristic(moonPdf, moonBsdf.pdf);
+                                vec3 moonLight = lunarLi * moonCosine * lunarVisibility * weatherVisibility
+                                    * moonNeeMisWeight / moonPdf;
+                                moonDiffuseContribution = moonBsdf.diffuse * moonLight;
+                                moonSpecularContribution = max(moonBsdf.f - moonBsdf.diffuse, vec3(0.0)) * moonLight;
+                                if (moonDynamicOccluder) {
+                                    vec3 deltaLight = throughput * lunarLi * moonCosine * weatherVisibility
+                                        * moonNeeMisWeight / moonPdf * (lunarVisibility - moonStaticVisibility);
+                                    vec3 diffuseDelta = moonBsdf.diffuse * deltaLight;
+                                    vec3 specularDelta = max(moonBsdf.f - moonBsdf.diffuse, vec3(0.0)) * deltaLight;
+                                    if (bounce == 0) {
+                                        dynamicDiffuseDelta += diffuseDelta;
+                                        dynamicSpecularDelta += specularDelta;
+                                    } else if (primaryTransmissionPath) {
+                                        dynamicSpecularDelta += diffuseDelta + specularDelta;
+                                    } else {
+                                        dynamicDiffuseDelta += (diffuseDelta + specularDelta) * primaryDiffuseShare;
+                                        dynamicSpecularDelta += (diffuseDelta + specularDelta) * (vec3(1.0) - primaryDiffuseShare);
+                                    }
                                 }
                             }
                         }
@@ -1884,6 +2100,9 @@ final class RayTracingShaderRaygen {
                     vec3 areaDirectSpecularContribution = vec3(0.0);
                     vec3 areaSample = primeSobolSample3D(
                         sampleBase, PRIME_SAMPLE_EFFECT_DIRECT_AREA_LIGHT, uint(bounce));
+                    restirDirectBase = sampleBase;
+                    restirDirectEligible = bounce == 0 && !transmission
+                        && pathDynamicSlot == 0xffffffffu && roughness > 0.0;
                     bool areaNeeEnabled = !transmission;
                     bool skyNeeEnabled = bounce == 0 && !transmission;
                     if (areaNeeEnabled) {
@@ -1929,66 +2148,68 @@ final class RayTracingShaderRaygen {
                         if (skyCosine > 0.0 && skyPdf > 0.0) {
                             shadowTransmittance = vec3(1.0);
                             shadowDynamicOccluder = 0u;
-                            traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                            if (camera.settings.y != 0.0) traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
                                 SECONDARY_RAY_MASK, 1, 1, 1,
                                 pathPosition.xyz + normal * 0.002, 0.001,
                                 sampledSkyDirection, camera.sun.w, 1);
                             vec3 skyVisibility = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
                             bool skyDynamicOccluder = shadowDynamicOccluder != 0u;
-                            vec3 incidentSky = vec3(0.0);
-                            float skyDaylight = clamp(1.0 - camera.environmentState.w, 0.0, 1.0);
-                            float skyWeather = clamp(1.0 - clamp(camera.environmentState.y, 0.0, 1.0) * 0.55
-                                - clamp(camera.environmentState.z, 0.0, 1.0) * 0.25, 0.25, 1.0);
+                            primaryDynamicShadow = primaryDynamicShadow || skyDynamicOccluder;
+                            vec3 skyStaticVisibility = staticShadowVisibility(pathPosition.xyz + normal * 0.002,
+                                sampledSkyDirection, camera.sun.w, skyDynamicOccluder, skyVisibility);
+                            if (emitterTransportRequired(skyVisibility, skyStaticVisibility)) {
+                                vec3 incidentSky = vec3(0.0);
+                                float skyDaylight = clamp(1.0 - camera.environmentState.w, 0.0, 1.0);
+                                float skyWeather = clamp(1.0 - clamp(camera.environmentState.y, 0.0, 1.0) * 0.55
+                                    - clamp(camera.environmentState.z, 0.0, 1.0) * 0.25, 0.25, 1.0);
 #ifdef RTEST_ATMOSPHERE_LUT
-                            if (physicalAtmosphereEnabled()) {
-                                incidentSky = physicalAtmosphereSky(sampledSkyDirection, camera.sun.xyz)
-                                    * (max(camera.settings.x, 0.0) / 12.5) * skyWeather;
-                                vec3 skyMoonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
-                                float skyMoonIrradiance = moonIrradiance(camera.jitter.w);
-                                if (skyMoonIrradiance > 0.0 && moonDirectionValid(skyMoonDirection)) {
-                                    incidentSky += physicalAtmosphereMoonSky(sampledSkyDirection, skyMoonDirection)
-                                        * (skyMoonIrradiance / 12.5) * skyWeather;
-                                }
-                                if (camera.pbrParallaxSettings.z > 0.5 && atmosphereCamera.parameters.y > 0.0) {
-                                    vec3 textureSky = skySrgbToWorking(skyDecodeSrgb(
+                                if (physicalAtmosphereEnabled()) {
+                                    incidentSky = physicalAtmosphereSky(sampledSkyDirection, camera.sun.xyz)
+                                        * (max(camera.settings.x, 0.0) / 12.5) * skyWeather;
+                                    vec3 skyMoonDirection = vec3(camera.origin.w, camera.environment.w, camera.jitter.z);
+                                    float skyMoonIrradiance = moonIrradiance(camera.jitter.w);
+                                    if (skyMoonIrradiance > 0.0 && moonDirectionValid(skyMoonDirection)) {
+                                        incidentSky += physicalAtmosphereMoonSky(sampledSkyDirection, skyMoonDirection)
+                                            * (skyMoonIrradiance / 12.5) * skyWeather;
+                                    }
+                                    if (camera.pbrParallaxSettings.z > 0.5 && atmosphereCamera.parameters.y > 0.0) {
+                                        vec3 textureSky = skySrgbToWorking(skyDecodeSrgb(
+                                            textureLod(skybox, sampledSkyDirection, 0.0).rgb))
+                                            * colorTemperature(camera.environment.z)
+                                            * (0.08 + 0.92 * clamp(0.25 + 0.75 * skyDaylight, 0.0, 1.0))
+                                            * skyWeather;
+                                        incidentSky = mix(incidentSky, textureSky,
+                                            clamp(atmosphereCamera.parameters.y, 0.0, 1.0));
+                                    }
+                                } else if (camera.pbrParallaxSettings.z > 0.5) {
+                                    incidentSky = skySrgbToWorking(skyDecodeSrgb(
                                         textureLod(skybox, sampledSkyDirection, 0.0).rgb))
                                         * colorTemperature(camera.environment.z)
                                         * (0.08 + 0.92 * clamp(0.25 + 0.75 * skyDaylight, 0.0, 1.0))
                                         * skyWeather;
-                                    incidentSky = mix(incidentSky, textureSky,
-                                        clamp(atmosphereCamera.parameters.y, 0.0, 1.0));
                                 }
-                            } else if (camera.pbrParallaxSettings.z > 0.5) {
-                                incidentSky = skySrgbToWorking(skyDecodeSrgb(
-                                    textureLod(skybox, sampledSkyDirection, 0.0).rgb))
-                                    * colorTemperature(camera.environment.z)
-                                    * (0.08 + 0.92 * clamp(0.25 + 0.75 * skyDaylight, 0.0, 1.0))
-                                    * skyWeather;
-                            }
 #else
-                            if (camera.pbrParallaxSettings.z > 0.5) {
-                                incidentSky = skySrgbToWorking(skyDecodeSrgb(
-                                    textureLod(skybox, sampledSkyDirection, 0.0).rgb))
-                                    * colorTemperature(camera.environment.z)
-                                    * (0.08 + 0.92 * clamp(0.25 + 0.75 * skyDaylight, 0.0, 1.0))
-                                    * skyWeather;
-                            }
+                                if (camera.pbrParallaxSettings.z > 0.5) {
+                                    incidentSky = skySrgbToWorking(skyDecodeSrgb(
+                                        textureLod(skybox, sampledSkyDirection, 0.0).rgb))
+                                        * colorTemperature(camera.environment.z)
+                                        * (0.08 + 0.92 * clamp(0.25 + 0.75 * skyDaylight, 0.0, 1.0))
+                                        * skyWeather;
+                                }
 #endif
-                            BsdfValue skyBsdf = evaluateBsdf(normal, viewDirection, sampledSkyDirection,
-                                baseColor, roughness, metallic, reflectivity, diffuseMaterialWeight,
-                                diffuseProbability, specularProbability, receiverEnergy);
-                            float skyNeeMisWeight = powerHeuristic(skyPdf, skyBsdf.pdf);
-                            vec3 sampledSkyIrradiance = incidentSky * (skyCosine / skyPdf) * skyVisibility * skyNeeMisWeight;
-                            skyDirectDiffuseContribution = skyBsdf.diffuse * sampledSkyIrradiance;
-                            skyDirectSpecularContribution = max(skyBsdf.f - skyBsdf.diffuse, vec3(0.0)) * sampledSkyIrradiance;
-                            primaryDynamicShadow = primaryDynamicShadow || skyDynamicOccluder;
-                            if (skyDynamicOccluder) {
-                                vec3 staticVisibility = staticShadowVisibility(pathPosition.xyz + normal * 0.002,
-                                    sampledSkyDirection, camera.sun.w, true, skyVisibility);
-                                vec3 deltaLight = throughput * incidentSky * (skyCosine / skyPdf)
-                                    * skyNeeMisWeight * (skyVisibility - staticVisibility);
-                                dynamicDiffuseDelta += skyBsdf.diffuse * deltaLight;
-                                dynamicSpecularDelta += max(skyBsdf.f - skyBsdf.diffuse, vec3(0.0)) * deltaLight;
+                                BsdfValue skyBsdf = evaluateBsdf(normal, viewDirection, sampledSkyDirection,
+                                    baseColor, roughness, metallic, reflectivity, diffuseMaterialWeight,
+                                    diffuseProbability, specularProbability, receiverEnergy);
+                                float skyNeeMisWeight = powerHeuristic(skyPdf, skyBsdf.pdf);
+                                vec3 sampledSkyIrradiance = incidentSky * (skyCosine / skyPdf) * skyVisibility * skyNeeMisWeight;
+                                skyDirectDiffuseContribution = skyBsdf.diffuse * sampledSkyIrradiance;
+                                skyDirectSpecularContribution = max(skyBsdf.f - skyBsdf.diffuse, vec3(0.0)) * sampledSkyIrradiance;
+                                if (skyDynamicOccluder) {
+                                    vec3 deltaLight = throughput * incidentSky * (skyCosine / skyPdf)
+                                        * skyNeeMisWeight * (skyVisibility - skyStaticVisibility);
+                                    dynamicDiffuseDelta += skyBsdf.diffuse * deltaLight;
+                                    dynamicSpecularDelta += max(skyBsdf.f - skyBsdf.diffuse, vec3(0.0)) * deltaLight;
+                                }
                             }
                         }
                     }
@@ -2029,11 +2250,18 @@ final class RayTracingShaderRaygen {
                         indirectDiffuseRadiance += localRadiance * primaryDiffuseShare;
                         specularRadiance += localRadiance * (vec3(1.0) - primaryDiffuseShare);
                     }
+                    if (bounce == 0) {
+                        prefixRadiance = radiance;
+                        prefixDynamicDiffuse = dynamicDiffuseDelta;
+                        prefixDynamicSpecular = dynamicSpecularDelta;
+                    }
                     if (bounce + 1 >= maxPathSegments) {
                         break;
                     }
+                    PrimeSampleBase scatterBase = sampleBase;
+                    if (restirSuffixActive && bounce == 0) scatterBase.pathIndex = restirPrefixIndex;
                     vec3 scatterSample = primeSobolSample3D(
-                        sampleBase, PRIME_SAMPLE_EFFECT_SCATTER_BSDF, uint(bounce));
+                        scatterBase, PRIME_SAMPLE_EFFECT_SCATTER_BSDF, uint(bounce));
                     float choice = scatterSample.z;
                     bool selectedTransmissionPath = false;
                     if (canTransmit && choice < transmissionProbability) {
@@ -2120,6 +2348,61 @@ final class RayTracingShaderRaygen {
                     rayOrigin = pathPosition.xyz + offsetNormal * rayOffset;
                 }
             """, """
+                if (restirSuffixActive) {
+                    if (restirProposalIndex == 0u) restirFindSuffixes();
+                    float misWeight = 1.0 / float(1u + restirSuffixCount);
+                    float gatherWeight = misWeight * restirSourceWeight / float(restirPrefixCount);
+                    vec3 suffixRadiance = radiance - prefixRadiance;
+                    // Exclude primary direct-light UCWs from the suffix target entirely.
+                    vec3 suffixTargetRadiance = indirectDiffuseRadiance + specularRadiance + transmissionRadiance;
+                    float target = max(dot(max(suffixTargetRadiance, vec3(0.0)),
+                        vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+                    float reservoirWeight = target * restirSourceWeight * misWeight;
+                    restirReservoirSum += reservoirWeight;
+                    if (restirRandom(400u + restirProposalIndex) * restirReservoirSum < reservoirWeight) {
+                        restirSelectedSeed = restirSuffixSeed;
+                        restirSelectedTarget = target;
+                    }
+                    // Equation 14: evaluate every MIS term; averaging independent prefixes is
+                    // the full-canonical version of final gather, without Equation 23 roulette.
+                    restirSumRadiance += suffixRadiance * gatherWeight;
+                    restirSumIndirect += indirectDiffuseRadiance * gatherWeight;
+                    restirSumSpecular += specularRadiance * gatherWeight;
+                    restirSumTransmission += transmissionRadiance * gatherWeight;
+                    restirSumDynamicDiffuse += (dynamicDiffuseDelta - prefixDynamicDiffuse) * gatherWeight;
+                    restirSumDynamicSpecular += (dynamicSpecularDelta - prefixDynamicSpecular) * gatherWeight;
+                    restirSumDiffuseDistance += diffuseHitDistance * gatherWeight;
+                    restirSumSpecularDistance += specularHitDistance * gatherWeight;
+                    restirAnyDynamic = restirAnyDynamic || pathContainsDynamicModel;
+                    restirAnySkyDisk = restirAnySkyDisk || skySunDiskHit;
+                    if (restirProposalIndex == 0u) {
+                        restirSumRadiance += prefixRadiance / float(restirPrefixCount);
+                        restirSumDynamicDiffuse += prefixDynamicDiffuse / float(restirPrefixCount);
+                        restirSumDynamicSpecular += prefixDynamicSpecular / float(restirPrefixCount);
+                    }
+                    bool lastProposal = restirProposalIndex == restirSuffixCount;
+                    if (lastProposal && restirPrefixIndex == 0u && restirPrefixValid) {
+                        uint offset = restirSuffixOffset(pixelIndex);
+                        restirCurrent.data[offset] = vec4(uintBitsToFloat(restirSelectedSeed),
+                            restirReservoirSum / restirSelectedTarget, 0.0, 0.0);
+                        restirCurrent.data[offset + 1u] = vec4(restirSupportPosition,
+                            uintBitsToFloat(restirNormal(restirSupportNormal)));
+                    }
+                    if (!lastProposal || restirPrefixIndex + 1u < restirPrefixCount) return;
+                    radiance = restirSumRadiance;
+                    indirectDiffuseRadiance = restirSumIndirect;
+                    specularRadiance = restirSumSpecular;
+                    transmissionRadiance = restirSumTransmission;
+                    dynamicDiffuseDelta = restirSumDynamicDiffuse;
+                    dynamicSpecularDelta = restirSumDynamicSpecular;
+                    diffuseHitDistance = restirSumDiffuseDistance;
+                    specularHitDistance = restirSumSpecularDistance;
+                    pathContainsDynamicModel = restirAnyDynamic;
+                    skySunDiskHit = restirAnySkyDisk;
+                    // Camera-segment volume is outside suffix space and uses independent draws.
+                    sampleBase = primeMakeSampleBase(gl_LaunchIDEXT.xy,
+                        floatBitsToUint(camera.random.x), floatBitsToUint(camera.random.y), 0u, 0u);
+                }
                 // Diagnostic views bypass the denoiser by writing into the unfiltered direct/emission
                 // composition terms and zeroing the filtered indirect/specular payload.
                 uint debugView = uint(max(camera.parameters.z, 0.0) + 0.5);
@@ -2372,19 +2655,40 @@ final class RayTracingShaderRaygen {
                             primaryDynamicShadow = primaryDynamicShadow || volumeDynamicOccluder;
                         } else
 #endif
-                        if (primaryAreaLightValid) {
+                        if (primaryAreaLightValid || (restir.controls.x & 1u) != 0u) {
                             // Retain the legacy RGB-fog signal until the legacy atmosphere path
                             // is retired in stage 4. The physical path uses its own volume point.
                             vec3 volumePosition = camera.origin.xyz
                                 + primaryRayDirection * (atmosphereDistance * 0.5);
-                            vec3 volumeEmitter = sampleLegacyVolumeEmitter(
-                                volumePosition, primaryRayDirection,
-                                primaryAreaLight, primaryAreaVisibility);
+                            AreaLightSample volumeLight = primaryAreaLight;
+                            vec3 volumeVisibility = primaryAreaVisibility;
+                            vec3 volumeStaticVisibility = primaryAreaStaticVisibility;
+                            if ((restir.controls.x & 1u) != 0u) {
+                                // A reservoir UCW is not the original light-selection PDF.
+                                // Use an independent full-support volume proposal instead.
+                                sampleBase.vertexIndex = 0u;
+                                volumeLight = sampleVolumeAreaLight(volumePosition,
+                                    primeSobolSample3D(sampleBase, PRIME_SAMPLE_EFFECT_VOLUME_EMITTER, 0u));
+                                volumeVisibility = vec3(0.0);
+                                volumeStaticVisibility = vec3(0.0);
+                                if (volumeLight.pdf > 0.0) {
+                                    vec3 emitterShadowOrigin = volumePosition + volumeLight.direction * 0.002;
+                                    EmitterVisibilityRay emitterRay = prepareEmitterVisibilityRay(emitterShadowOrigin, volumeLight.position);
+                                    traceEmitterVisibility(emitterShadowOrigin, emitterRay);
+                                    bool volumeDynamic = shadowDynamicOccluder != 0u;
+                                    volumeVisibility = mix(vec3(1.0), shadowTransmittance, camera.settings.y);
+                                    volumeStaticVisibility = staticEmitterVisibility(emitterShadowOrigin,
+                                        emitterRay, volumeDynamic, volumeVisibility);
+                                    primaryDynamicShadow = primaryDynamicShadow || volumeDynamic;
+                                }
+                            }
+                            vec3 unoccludedVolumeEmitter = sampleLegacyVolumeEmitter(
+                                volumePosition, primaryRayDirection, volumeLight);
+                            vec3 volumeEmitter = unoccludedVolumeEmitter * volumeVisibility;
                             float fogWeight = clamp(
                                 1.0 - dot(atmosphereTransmittance, vec3(0.3333333)), 0.0, 1.0);
                             volumeEmitterInscatter = volumeEmitter * fogWeight * 0.25;
-                            vec3 staticVolumeEmitter = sampleLegacyVolumeEmitter(volumePosition, primaryRayDirection,
-                                primaryAreaLight, primaryAreaStaticVisibility);
+                            vec3 staticVolumeEmitter = unoccludedVolumeEmitter * volumeStaticVisibility;
                             volumeDynamicDelta = (volumeEmitter - staticVolumeEmitter) * fogWeight * 0.25;
                         }
                     }
@@ -2493,7 +2797,7 @@ final class RayTracingShaderRaygen {
                     }
                 }
                 float reactive = (skySunDiskHit || atmosphereApplied
-                        || primaryMaterial.w > 0.5 || (primaryDynamicFlags & 16u) != 0u)
+                        || pathContainsDynamicModel || primaryMaterial.w > 0.5 || (primaryDynamicFlags & 16u) != 0u)
                     ? 1.0 : 0.0;
                 float transparency = (primaryMaterial.w > 0.5 || (primaryDynamicFlags & 4u) != 0u)
                     ? 1.0 : 0.0;
@@ -2573,7 +2877,8 @@ final class RayTracingShaderRaygen {
                     primaryHit ? primaryRayDirection * primaryHitDistance : vec3(0.0),
                     uintBitsToFloat(packHalf2x16(vec2(primaryMaterial.x, primaryMaterial.z)))));
                 uint nrdMaterialFlags = (primaryMaterial.w > 0.5 ? 4u : 0u)
-                    | (primaryDynamicSlot != 0xffffffffu ? 256u : 0u);
+                    | (primaryDynamicSlot != 0xffffffffu ? 256u : 0u)
+                    | (pathContainsDynamicModel && (uint(camera.pbrParallaxSettings.w + 0.5) & 32u) == 0u ? 512u : 0u);
                 // Transparent continuation is classified as NRD specular by the preparation pass;
                 // keep the primary material valid so its color-filtered path can accumulate in the
                 // same temporal history instead of falling back to the noisy raw image.
@@ -2594,7 +2899,11 @@ final class RayTracingShaderRaygen {
                 }
                 imageStore(fsrReactive, outputPixel, vec4(reactive));
                 imageStore(fsrTransparency, outputPixel, vec4(transparency));
-                result.pixels[pixelIndex] = packUnorm4x8(vec4(clamp(outputRadiance, vec3(0.0), vec3(1.0)), 1.0));
+                // Dedicated diagnostic uint; every display pixel already went to fsrSceneColor.
+                if (all(equal(gl_LaunchIDEXT.xy, gl_LaunchSizeEXT.xy / 2u))) {
+                    result.pixels[pixelIndex] = packUnorm4x8(vec4(clamp(outputRadiance, vec3(0.0), vec3(1.0)), 1.0));
+                }
             }
+            // RESTIR_MAIN
             """);
 }

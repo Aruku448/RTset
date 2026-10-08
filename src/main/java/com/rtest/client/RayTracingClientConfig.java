@@ -5,8 +5,14 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 
 public final class RayTracingClientConfig {
     public static final ModConfigSpec SPEC;
+    public static final ModConfigSpec RESTIR_SPEC;
+    public static final ModConfigSpec AUDIT_SPEC;
+    private final ModConfigSpec restirSpec;
+    private final ModConfigSpec auditSpec;
+    public final ModConfigSpec.ConfigValue<String> rayCostAuditProfile;
     public static final RayTracingClientConfig INSTANCE;
 
+    public final PostProcessingSettings post;
     public final ModConfigSpec.BooleanValue gpuLightTreeEnabled;
     public final ModConfigSpec.DoubleValue sunIntensity;
     public final ModConfigSpec.BooleanValue sunDaylightIntensityEnabled;
@@ -33,6 +39,11 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue sunAngleOffset;
     public final ModConfigSpec.DoubleValue sunAzimuthOffset;
     public final ModConfigSpec.IntValue giBounces;
+    public final ModConfigSpec.BooleanValue restirDirectEnabled;
+    public final ModConfigSpec.BooleanValue restirSuffixEnabled;
+    public final ModConfigSpec.IntValue restirCandidates;
+    public final ModConfigSpec.IntValue restirSpatialNeighbors;
+    public final ModConfigSpec.IntValue restirGatherPrefixes;
     public final ModConfigSpec.ConfigValue<String> pbrFormat;
     public final ModConfigSpec.DoubleValue pbrNormalStrength;
     public final ModConfigSpec.BooleanValue pbrTextureAoEnabled;
@@ -60,6 +71,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.BooleanValue fluidRtEnabled;
     public final ModConfigSpec.BooleanValue dynamicEntityMvpEnabled;
     public final ModConfigSpec.BooleanValue nrdEnabled;
+    public final ModConfigSpec.BooleanValue nrdEntityEnabled;
     public final ModConfigSpec.DoubleValue nrdStrength;
     public final ModConfigSpec.ConfigValue<String> nrdHitDistanceReconstruction;
     public final ModConfigSpec.DoubleValue nrdDiffusePrepassBlurRadius;
@@ -87,10 +99,30 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.DoubleValue emissionScale;
 
     private RayTracingClientConfig(ModConfigSpec.Builder builder) {
+        post = new PostProcessingSettings(builder);
+        // Older running builds correct away unknown fields in rtest-client.toml.
+        // Keep optional ReSTIR settings in a separately registered config.
+        ModConfigSpec.Builder restirBuilder = new ModConfigSpec.Builder();
+        restirDirectEnabled = restirBuilder.comment("Optional primary-surface emissive ReSTIR; fresh canonical samples retain full light-area support.")
+            .define("restirDirectEnabled", false);
+        restirSuffixEnabled = restirBuilder.comment("Experimental conditional suffix ReSTIR with random replay and final gather. Re-traces suffixes; may cost more than normal PT.")
+            .define("restirSuffixEnabled", false);
+        restirCandidates = restirBuilder.comment("Fresh primary emissive candidates; only the selected candidate casts a visibility ray.")
+            .defineInRange("restirCandidates", 11, 1, 16);
+        restirSpatialNeighbors = restirBuilder.comment("Previous-frame spatial reservoir proposals in addition to the temporal proposal.")
+            .defineInRange("restirSpatialNeighbors", 2, 0, 4);
+        restirGatherPrefixes = restirBuilder.comment("Independent first-scatter prefixes for conditional suffix final gather. Each includes a fresh canonical suffix.")
+            .defineInRange("restirGatherPrefixes", 2, 1, 4);
+        restirSpec = restirBuilder.build();
+        ModConfigSpec.Builder auditBuilder = new ModConfigSpec.Builder();
+        rayCostAuditProfile = auditBuilder
+            .comment("Diagnostic shader ablation. baseline preserves rendering. Other profiles change the image and rebuild the RT pipeline: no_gi, no_sun, no_moon, no_area, no_sky_nee, no_volume, no_restir, no_pom, no_pbr, no_shadow_rays, no_dynamic_delta, primary_material, traversal_only.")
+            .define("rayCostAuditProfile", "baseline", value -> value instanceof String name && RayTracingCostAudit.valid(name));
+        auditSpec = auditBuilder.build();
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder
             .comment("Solar source intensity used consistently by direct sunlight, the physical sky and solar atmospheric scattering. Values above 2 allow bright daylight under fixed display exposure.")
-            .defineInRange("sunIntensity", 1.0D, 0.0D, 16.0D);
+            .defineInRange("sunIntensity", 12.07D, 0.0D, 16.0D);
         sunDaylightIntensityEnabled = builder
             .comment("Override manual solar intensity using dimension sky light level: night baseline 4 (normalized level 0) gives intensity 3, level 15 gives the configured peak. Applies to direct light, sky and atmosphere together.")
             .define("sunDaylightIntensityEnabled", true);
@@ -135,7 +167,7 @@ public final class RayTracingClientConfig {
             .defineInRange("moonIntensity", 0.06D, 0.0D, 1.0D);
         primeAtmosphereEnabled = builder
             .comment("Experimental Prime 26.3 physical sky and four-wave finite-segment aerial. Local-emitter volume uses the same medium and remains a separate NRD diffuse signal; GPU image validation is pending.")
-            .define("primeAtmosphereEnabled", false);
+            .define("primeAtmosphereEnabled", true);
         volumetricLightingEnabled = builder
             .comment("Enable finite-segment aerial perspective and sun shafts. With Prime atmosphere enabled, uses the pinned four-wave medium and multiple-scattering LUT.")
             .define("volumetricLightingEnabled", true);
@@ -144,7 +176,7 @@ public final class RayTracingClientConfig {
             .defineInRange("volumetricLightingStrength", 1.0D, 0.0D, 2.0D);
         volumetricFogDensity = builder
             .comment("Legacy RGB fog density. With Prime atmosphere enabled, this sets physical aerosol density from 0 to 16 times the pinned baseline and rebuilds the medium and complete static LUT; zero retains gas and Rayleigh scattering. Dense settings also attenuate direct light strongly.")
-            .defineInRange("volumetricFogDensity", 1.0D, 0.0D, 16.0D);
+            .defineInRange("volumetricFogDensity", 0.5523242882562278D, 0.0D, 16.0D);
         atmosphereAltitudeOffsetMeters = builder
             .comment("Physical atmosphere altitude offset in metres. Changes the eye-radius and dynamic sky LUT without rebuilding the static medium.")
             .defineInRange("atmosphereAltitudeOffsetMeters", 300, 0, 10_000);
@@ -161,18 +193,18 @@ public final class RayTracingClientConfig {
             .comment("Horizontal rotation of the sun path: 0 degrees is east-to-west, 90 degrees is north-to-south.")
             .defineInRange("sunAzimuthOffset", 0.0D, -180.0D, 180.0D);
         giBounces = builder
-            .comment("Number of GI continuation rays per path; the Primary ray is not counted. 1=Debug, 2=Performance, 3=Balanced/Default, 4=Quality.")
-            .defineInRange("giBounces", 1, 1, 4);
+            .comment("Number of GI continuation rays per path; the Primary ray is not counted. 1=Debug, 2=Performance, 3=Balanced, 4=Quality/Default.")
+            .defineInRange("giBounces", 4, 1, 4);
         pbrFormat = builder
             .comment("PBR companion texture format: labpbr, classic, or bedrock.")
             .define("pbrFormat", "labpbr",
                 value -> value instanceof String && pbrFormatCode((String)value) >= 0);
         pbrNormalStrength = builder
             .comment("Tangent-space normal map strength for PBR companion textures.")
-            .defineInRange("pbrNormalStrength", 1.0D, 0.0D, 3.0D);
+            .defineInRange("pbrNormalStrength", 0.996460958787466D, 0.0D, 3.0D);
         pbrTextureAoEnabled = builder
             .comment("Use the LabPBR normal-map blue channel as texture AO, matching Sundial.")
-            .define("pbrTextureAoEnabled", false);
+            .define("pbrTextureAoEnabled", true);
         pbrPorosityEnabled = builder
             .comment("Enable LabPBR porosity decoding and rain-driven wet-surface response.")
             .define("pbrPorosityEnabled", true);
@@ -190,7 +222,7 @@ public final class RayTracingClientConfig {
             .define("pbrTerrainCpuCaptureEnabled", true);
         terrainLodEnabled = builder
             .comment("Enable MVP terrain LOD; only opaque static terrain is supported. Transparent, fluid, emissive, and dynamic entity geometry is never degraded.")
-            .define("terrainLodEnabled", true);
+            .define("terrainLodEnabled", false);
         terrainLodNativeRadiusChunks = builder
             .comment("Native-detail radius around the camera for terrain LOD, in chunks.")
             .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
@@ -205,13 +237,13 @@ public final class RayTracingClientConfig {
             .defineInRange("terrainLodQueueLimit", 32, 4, 256);
         terrainLodFarCacheEnabled = builder
             .comment("Retain immutable opaque terrain proxies after chunks leave the loaded client window. Unknown chunks are never fabricated.")
-            .define("terrainLodFarCacheEnabled", true);
+            .define("terrainLodFarCacheEnabled", false);
         terrainLodFarRadiusChunks = builder
             .comment("Maximum camera distance for cached far-terrain proxies, in chunks.")
             .defineInRange("terrainLodFarRadiusChunks", 64, 8, 256);
         terrainLodGpuTraversalEnabled = builder
             .comment("Use the experimental GPU terrain node/Hi-Z traversal to rewrite static TLAS instance masks before tracing.")
-            .define("terrainLodGpuTraversalEnabled", false);
+            .define("terrainLodGpuTraversalEnabled", true);
         pbrParallaxEnabled = builder
             .comment("Enable RT parallax occlusion mapping from the normal companion alpha channel.")
             .define("pbrParallaxEnabled", true);
@@ -223,7 +255,7 @@ public final class RayTracingClientConfig {
             .defineInRange("pbrParallaxDepth", 1.0D, 0.0D, 4.0D);
         fsrQuality = builder
             .comment("FSR quality preset: native_aa, quality_75, quality, balanced, performance, ultra_performance.")
-            .define("fsrQuality", "balanced");
+            .define("fsrQuality", "native_aa");
         hdrEnabled = builder
             .comment("Use an HDR float swapchain when supported. Disabled by default for a standard sRGB/SDR output.")
             .define("hdrEnabled", false);
@@ -240,7 +272,7 @@ public final class RayTracingClientConfig {
             .define("nativeColorDecodeEnabled", false);
         primeColorManagementEnabled = builder
             .comment("Apply Prime 26.3 RGB Reinhard gamut compression, highlight rolloff, and hue repair to SDR output.")
-            .define("primeColorManagementEnabled", true);
+            .define("primeColorManagementEnabled", false);
         fluidRtEnabled = builder
             .comment("Capture vanilla fluid surfaces in the RT scene. Disable to use the compiled terrain fallback.")
             .define("fluidRtEnabled", true);
@@ -250,6 +282,9 @@ public final class RayTracingClientConfig {
         nrdEnabled = builder
             .comment("Enable the NRD 4.17.3 ReBLUR diffuse/specular denoiser for opaque primary surfaces.")
             .define("nrdEnabled", true);
+        nrdEntityEnabled = builder
+            .comment("Denoise dynamic models and their reflections with NRD; disable to avoid entity history trails.")
+            .define("nrdEntityEnabled", true);
         nrdStrength = builder
             .comment("Blend stochastic indirect and reflected lighting toward NRD output; direct light and visible emission stay unfiltered.")
             .defineInRange("nrdStrength", 1.0D, 0.0D, 1.0D);
@@ -264,7 +299,7 @@ public final class RayTracingClientConfig {
             .defineInRange("nrdSpecularPrepassBlurRadius", 0.0D, 0.0D, 96.0D);
         nrdMinHitDistanceWeight = builder
             .comment("REBLUR minimum hit-distance weight; larger values suppress shadow sensitivity.")
-            .defineInRange("nrdMinHitDistanceWeight", 0.10D, 0.0001D, 0.2D);
+            .defineInRange("nrdMinHitDistanceWeight", 0.1D, 0.0001D, 0.2D);
         nrdMinBlurRadius = builder
             .comment("REBLUR minimum spatial blur radius after convergence; small by default to retain contact detail.")
             .defineInRange("nrdMinBlurRadius", 0.5D, 0.0D, 16.0D);
@@ -332,11 +367,13 @@ public final class RayTracingClientConfig {
                 + " scale 1.0, which is far below the sun's effective irradiance scale, so an indoor"
                 + " scene renders nearly black next to clipped lamps. Raise this until lantern-lit"
                 + " rooms read correctly.")
-            .defineInRange("emissionScale", 25.0D, 0.0D, 256.0D);
+            .defineInRange("emissionScale", 148.62D, 0.0D, 256.0D);
     }
 
     public void save() {
         SPEC.save();
+        RESTIR_SPEC.save();
+        AUDIT_SPEC.save();
     }
 
     int pbrFormatCode() {
@@ -373,5 +410,7 @@ public final class RayTracingClientConfig {
         Pair<RayTracingClientConfig, ModConfigSpec> pair = new ModConfigSpec.Builder().configure(RayTracingClientConfig::new);
         INSTANCE = pair.getLeft();
         SPEC = pair.getRight();
+        RESTIR_SPEC = INSTANCE.restirSpec;
+        AUDIT_SPEC = INSTANCE.auditSpec;
     }
 }

@@ -12,6 +12,7 @@ public final class RayTracingShaderContractTest {
         long options = Shaderc.shaderc_compile_options_initialize();
         try {
             Shaderc.shaderc_compile_options_set_source_language(options, Shaderc.shaderc_source_language_glsl);
+                Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
             Shaderc.shaderc_compile_options_set_target_env(
                 options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
             compile(compiler, options, "raygen", RayTracingShaders.RAYGEN_SHADER, Shaderc.shaderc_glsl_raygen_shader);
@@ -85,7 +86,7 @@ public final class RayTracingShaderContractTest {
 
     private static void assertOpaqueHitFastPaths() {
         String primary = RayTracingShaders.ANY_HIT_SHADER;
-        int primaryReturn = primary.indexOf("if (uv2.z <= 0.5) return;");
+        int primaryReturn = primary.indexOf("if (uv2.z <= 0.5) {");
         int primaryUv = primary.indexOf("vec2 uv =");
         if (!(primaryReturn >= 0 && primaryUv > primaryReturn)) {
             throw new AssertionError("Non-cutout primary hits must bypass texture coverage work");
@@ -123,7 +124,10 @@ public final class RayTracingShaderContractTest {
         require(shader, "SECONDARY_RAY_MASK,\n");
         require(shader, "int giBounces = clamp(int(camera.parameters.w + 0.5), 1, 4);");
         require(shader, "int maxPathSegments = 1 + giBounces;");
-        require(shader, "for (int bounce = 0; bounce < 5; bounce++) {");
+        require(shader, "int firstBounce = 0;");
+        require(shader, "if (restirSuffixActive && restirProposalIndex > 0u && restirPrefixStateReady)");
+        require(shader, "firstBounce = 1;");
+        require(shader, "for (int bounce = firstBounce; bounce < 5; bounce++) {");
         require(shader, "floatBitsToUint(camera.random.x)");
         require(shader, "floatBitsToUint(camera.random.y)");
         reject(shader, "gl_LaunchIDEXT.xy, 0u, 0u, 0u, 0u");
@@ -258,9 +262,10 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER, "float eta = interfaceEntering ? 1.0 / ior : ior;");
         require(RayTracingShaders.RAYGEN_SHADER, "float transmissionOpacity = clamp(pathLocalPosition.w, 0.0, 1.0);");
         require(RayTracingShaders.RAYGEN_SHADER, "vec3 shadowFactor = mix(vec3(1.0), shadowTransmittance, camera.settings.y);");
-        require(RayTracingShaders.CLOSEST_HIT_SHADER, "pathOpticalLighting = vec4(optical.w, optical.xyz);");
+        require(RayTracingShaders.CLOSEST_HIT_SHADER, "pathOpticalLighting = vec4(optical.w, uv2.w > 1.5 ? vec3(0.0) : optical.xyz);");
         require(RayTracingShaders.CLOSEST_HIT_SHADER,
-            "pathNormal = vec4(normal, clamp(lighting.y, 0.0, 1.0));");
+            "pathNormal = vec4(pbrOrientSurfaceNormal(geometricNormal, normal, gl_WorldRayDirectionEXT),");
+        require(RayTracingShaders.CLOSEST_HIT_SHADER, "clamp(lighting.y, 0.0, 1.0));");
         require(RayTracingShaders.RAYGEN_SHADER, "float primeRcDispersionIor(float nd, float vd, float scale, float lambda)");
         require(RayTracingShaders.RAYGEN_SHADER, "const vec3 SPECTRAL_WAVELENGTHS_NM = vec3(610.0, 550.0, 450.0);");
         require(RayTracingShaders.RAYGEN_SHADER, "throughput *= spectralHeroWeight(spectralChannel);");
@@ -349,7 +354,9 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER, "result.visibility = mix(");
         require(RayTracingShaders.RAYGEN_SHADER, "primaryAreaLight = areaDirect.light;");
         require(RayTracingShaders.RAYGEN_SHADER, "primaryAreaVisibility = areaDirect.visibility;");
-        require(RayTracingShaders.RAYGEN_SHADER, "AreaLightSample light, vec3 visibility");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 unoccludedVolumeEmitter = sampleLegacyVolumeEmitter(");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 volumeEmitter = unoccludedVolumeEmitter * volumeVisibility;");
+        require(RayTracingShaders.RAYGEN_SHADER, "vec3 staticVolumeEmitter = unoccludedVolumeEmitter * volumeStaticVisibility;");
         require(RayTracingShaders.RAYGEN_SHADER, "volumeEmitterInscatter = samplePhysicalVolumeEmitter(");
         require(RayTracingShaders.RAYGEN_SHADER, "primaryDynamicShadow = primaryDynamicShadow || volumeDynamicOccluder;");
         require(RayTracingShaders.RAYGEN_SHADER, "volumeEmitterInscatter = volumeEmitter * fogWeight * 0.25;");

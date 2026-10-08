@@ -108,4 +108,5 @@ public final class PlayerModelCaptureMixin {
             model.renderToBuffer(pose, buffer, light, overlay, color);
         }
     }
+
 }

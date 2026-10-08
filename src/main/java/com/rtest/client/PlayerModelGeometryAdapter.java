@@ -14,10 +14,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PlayerModelGeometryAdapter {
     private static final int MATERIAL_FLOATS_PER_TRIANGLE = 28;
     private static final Map<Integer, Snapshot> pending = new ConcurrentHashMap<>();
+    private static final Map<Integer, Snapshot> firstPersonViews = new ConcurrentHashMap<>();
     private static Vec3 worldCamera;
 
     public static void beginWorldDraw(Vec3 camera) {
         pending.clear();
+        firstPersonViews.clear();
         worldCamera = camera;
     }
 
@@ -25,6 +27,7 @@ public final class PlayerModelGeometryAdapter {
 
     static void clear() {
         pending.clear();
+        firstPersonViews.clear();
         worldCamera = null;
     }
 
@@ -101,6 +104,34 @@ public final class PlayerModelGeometryAdapter {
         return result;
     }
 
+    static Map<Integer, Snapshot> drainFirstPersonViews() {
+        Map<Integer, Snapshot> result = Map.copyOf(firstPersonViews);
+        firstPersonViews.clear();
+        return result;
+    }
+
+    public static void publishFirstPersonView(int id, double x, double y, double z,
+                                               Identifier texture, Mesh mesh) {
+        firstPersonViews.compute(id, (key, previous) -> new Snapshot(x, y, z, texture,
+            previous == null ? mesh : append(previous.mesh(), mesh)));
+    }
+
+    /** Capture torso/legs without changing the complete reflection/shadow mesh or raster draw. */
+    public static Mesh captureBodyView(Model<?> model, PoseStack pose, int light, int overlay, int color,
+        float x, float y, float z, TextureAtlasSprite sprite, Identifier texture,
+        RayTracingPbrSampler pbr, float emission, Mesh complete) {
+        if (!(model instanceof net.minecraft.client.model.HumanoidModel<?> humanoid)) return complete;
+        boolean head = humanoid.head.visible, left = humanoid.leftArm.visible, right = humanoid.rightArm.visible;
+        try {
+            humanoid.head.visible = humanoid.leftArm.visible = humanoid.rightArm.visible = false;
+            return captureDraw(model, pose, null, light, overlay, color, x, y, z, sprite, texture, pbr, emission);
+        } finally {
+            humanoid.head.visible = head;
+            humanoid.leftArm.visible = left;
+            humanoid.rightArm.visible = right;
+        }
+    }
+
     public static Mesh captureDraw(Model<?> model, PoseStack pose, VertexConsumer buffer,
                                    int light, int overlay, int color, float offsetX, float offsetY, float offsetZ) {
         return captureDraw(model, pose, buffer, light, overlay, color,
@@ -153,8 +184,10 @@ public final class PlayerModelGeometryAdapter {
         private final Identifier texture;
         private final RayTracingPbrSampler pbrSampler;
         private final float pipelineEmission;
-        private final FloatArrayBuilder vertices = new FloatArrayBuilder();
-        private final FloatArrayBuilder materials = new FloatArrayBuilder();
+        private float emissiveOffset = 0.001F;
+        private final com.mojang.blaze3d.PrimitiveTopology topology;
+        private final FloatArrayBuilder vertices;
+        private final FloatArrayBuilder materials;
         // position, uv, normal and rgba for each original vertex. Vanilla lightmap values
         // are forwarded to the raster delegate but never copied into RT material data.
         private final float[][] quad = new float[4][12];
@@ -183,6 +216,17 @@ public final class PlayerModelGeometryAdapter {
         public Capture(VertexConsumer delegate, float offsetX, float offsetY, float offsetZ,
                        TextureAtlasSprite sprite, Identifier texture, RayTracingPbrSampler pbrSampler,
                        float pipelineEmission) {
+            this(delegate, offsetX, offsetY, offsetZ, sprite, texture, pbrSampler,
+                pipelineEmission, com.mojang.blaze3d.PrimitiveTopology.QUADS);
+        }
+
+        public Capture(VertexConsumer delegate, float offsetX, float offsetY, float offsetZ,
+                       TextureAtlasSprite sprite, Identifier texture, RayTracingPbrSampler pbrSampler,
+                       float pipelineEmission, com.mojang.blaze3d.PrimitiveTopology topology) {
+            this.topology = topology;
+            int initialTriangles = topology == com.mojang.blaze3d.PrimitiveTopology.TRIANGLES ? 1 : 2;
+            this.vertices = new FloatArrayBuilder(initialTriangles * 9);
+            this.materials = new FloatArrayBuilder(initialTriangles * MATERIAL_FLOATS_PER_TRIANGLE);
             this.delegate = delegate;
             this.offsetX = offsetX;
             this.offsetY = offsetY;
@@ -193,20 +237,26 @@ public final class PlayerModelGeometryAdapter {
             this.pipelineEmission = Math.max(pipelineEmission, 0.0F);
         }
 
+        public Capture emissiveOffset(float distance) {
+            if (!Float.isFinite(distance) || distance < 0) throw new IllegalArgumentException("Emissive offset");
+            this.emissiveOffset = distance;
+            return this;
+        }
+
         @Override public VertexConsumer addVertex(float x, float y, float z) {
-            if (count == 4) flushQuad();
+            if (count == (topology == com.mojang.blaze3d.PrimitiveTopology.TRIANGLES ? 3 : 4)) flushQuad();
             float[] vertex = quad[count++];
             java.util.Arrays.fill(vertex, 0.0F);
             vertex[0] = x + offsetX; vertex[1] = y + offsetY; vertex[2] = z + offsetZ;
             vertex[8] = vertex[9] = vertex[10] = vertex[11] = 1.0F;
-            delegate.addVertex(x, y, z);
+            if (delegate != null) delegate.addVertex(x, y, z);
             return this;
         }
         @Override public VertexConsumer setColor(int r, int g, int b, int a) {
             float[] vertex = quad[count - 1];
             vertex[8] = r / 255.0F; vertex[9] = g / 255.0F;
             vertex[10] = b / 255.0F; vertex[11] = a / 255.0F;
-            delegate.setColor(r, g, b, a);
+            if (delegate != null) delegate.setColor(r, g, b, a);
             return this;
         }
         @Override public VertexConsumer setColor(int color) {
@@ -218,17 +268,17 @@ public final class PlayerModelGeometryAdapter {
             // performs exactly one sprite remap for raster rendering.
             quad[count - 1][3] = sprite == null ? u : sprite.getU(u);
             quad[count - 1][4] = sprite == null ? v : sprite.getV(v);
-            delegate.setUv(u, v); return this;
+            if (delegate != null) delegate.setUv(u, v); return this;
         }
-        @Override public VertexConsumer setUv1(int u, int v) { delegate.setUv1(u, v); return this; }
+        @Override public VertexConsumer setUv1(int u, int v) { if (delegate != null) delegate.setUv1(u, v); return this; }
         @Override public VertexConsumer setUv2(int u, int v) {
-            delegate.setUv2(u, v); return this;
+            if (delegate != null) delegate.setUv2(u, v); return this;
         }
         @Override public VertexConsumer setNormal(float x, float y, float z) {
             quad[count - 1][5] = x; quad[count - 1][6] = y; quad[count - 1][7] = z;
-            delegate.setNormal(x, y, z); return this;
+            if (delegate != null) delegate.setNormal(x, y, z); return this;
         }
-        @Override public VertexConsumer setLineWidth(float width) { delegate.setLineWidth(width); return this; }
+        @Override public VertexConsumer setLineWidth(float width) { if (delegate != null) delegate.setLineWidth(width); return this; }
 
         public Mesh finish() {
             if (count != 0) flushQuad();
@@ -236,11 +286,24 @@ public final class PlayerModelGeometryAdapter {
         }
 
         private void flushQuad() {
-            // Custom entity renderers are allowed to emit lines or triangles. Forwarded vanilla
-            // rendering already received those vertices; only complete quads are RT-compatible.
-            if (count == 4) {
+            boolean triangles = topology == com.mojang.blaze3d.PrimitiveTopology.TRIANGLES;
+            if ((triangles && count == 3)
+                || (topology == com.mojang.blaze3d.PrimitiveTopology.QUADS && count == 4)) {
+                // Font and map quads omit normals; derive the posed geometric normal rather
+                // than passing zero into RT shading and NRD normalization.
+                float ax = quad[1][0]-quad[0][0], ay = quad[1][1]-quad[0][1], az = quad[1][2]-quad[0][2];
+                float bx = quad[2][0]-quad[0][0], by = quad[2][1]-quad[0][1], bz = quad[2][2]-quad[0][2];
+                float nx = ay*bz-az*by, ny = az*bx-ax*bz, nz = ax*by-ay*bx;
+                float length = (float)Math.sqrt(nx*nx+ny*ny+nz*nz);
+                if (length > 1.0e-12F) {
+                    for (float[] vertex : quad) {
+                        if (vertex[5]*vertex[5]+vertex[6]*vertex[6]+vertex[7]*vertex[7] < 1.0e-12F) {
+                            vertex[5]=nx/length; vertex[6]=ny/length; vertex[7]=nz/length;
+                        }
+                    }
+                }
                 triangle(0, 1, 2);
-                triangle(0, 2, 3);
+                if (!triangles) triangle(0, 2, 3);
             }
             count = 0;
         }
@@ -287,7 +350,7 @@ public final class PlayerModelGeometryAdapter {
             // uv2.z marks the vanilla entity alpha test and uv2.w selects the dynamic texture
             // descriptor array instead of the block atlas. optical.x is retagged with the
             // texture slot when the model layer is captured.
-            materials.add(vertex[8]); materials.add(vertex[9]); materials.add(vertex[10]); materials.add(1.0F);
+            materials.add(vertex[8]); materials.add(vertex[9]); materials.add(vertex[10]); materials.add(vertex[11]);
             materials.add(vertex[5]); materials.add(vertex[6]); materials.add(vertex[7]); materials.add(0.0F);
             materials.add(quad[a][3]); materials.add(quad[a][4]);
             materials.add(quad[b][3]); materials.add(quad[b][4]);
@@ -311,7 +374,7 @@ public final class PlayerModelGeometryAdapter {
             float normalLength = (float)Math.sqrt(vertex[5] * vertex[5]
                 + vertex[6] * vertex[6] + vertex[7] * vertex[7]);
             float offset = this.pipelineEmission > 0.0F && normalLength > 1.0e-8F
-                ? 0.001F / normalLength : 0.0F;
+                ? this.emissiveOffset / normalLength : 0.0F;
             vertices.add(vertex[0] + vertex[5] * offset);
             vertices.add(vertex[1] + vertex[6] * offset);
             vertices.add(vertex[2] + vertex[7] * offset);

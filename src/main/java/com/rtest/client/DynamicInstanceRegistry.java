@@ -18,6 +18,8 @@ public final class DynamicInstanceRegistry {
     public static final int FLAG_HISTORY_RESET = 1 << 4;
     public static final int FLAG_FIRST_PERSON_BODY = 1 << 5;
 
+    public static final int FLAG_PRIMARY_BODY_VIEW = 1 << 6;
+
     public enum Family { BLOCK_ENTITY, ENTITY, FIRST_PERSON_ITEM, FIRST_PERSON_BODY }
 
     /** Renderer-independent affine 3x4 transform in row-major order. */
@@ -116,6 +118,12 @@ public final class DynamicInstanceRegistry {
         entry.seen = true;
         entry.lastSeenFrame = frame;
         return true;
+    }
+
+    /** Reserve enough slots for a whole model before publishing any of its chunks. */
+    public boolean canUpsert(java.util.Collection<Long> identities) {
+        long needed = identities.stream().distinct().filter(id -> !entries.containsKey(id)).count();
+        return needed <= (long)maxSlots - nextSlot + freeSlots.size();
     }
 
     public void remove(long identity) {

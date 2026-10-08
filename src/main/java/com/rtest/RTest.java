@@ -35,6 +35,8 @@ public final class RTest {
 
     public RTest(IEventBus modEventBus, ModContainer container) {
         container.registerConfig(ModConfig.Type.CLIENT, RayTracingClientConfig.SPEC);
+        container.registerConfig(ModConfig.Type.CLIENT, RayTracingClientConfig.RESTIR_SPEC, "rtest-restir-client.toml");
+        container.registerConfig(ModConfig.Type.CLIENT, RayTracingClientConfig.AUDIT_SPEC, "rtest-audit-client.toml");
         modEventBus.addListener(AddClientReloadListenersEvent.class, RTest::addReloadListener);
     }
 

@@ -45,7 +45,7 @@ public final class RayTracingProbe {
     private static final long TERRAIN_DIRTY_IDLE_FLUSH_NANOS = 250_000_000L;
     private static final long TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS = 2_000_000_000L;
     private static final long RT_RETRY_BASE_DELAY_NANOS = 1_000_000_000L;
-    private static final int MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 10_000_000;
+    private static final int MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 50_000_000;
     private static final int MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL =
         MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY;
     private static final DynamicSnapshotLogThrottle DYNAMIC_SNAPSHOT_LOG_THROTTLE =
@@ -162,6 +162,7 @@ public final class RayTracingProbe {
     private static boolean capturedWindowValid;
     private static boolean renderFramePrepared;
     private static boolean dynamicFramePrepared;
+    private static long dynamicCollectionFrames;
     // Latched before deferred model preparation. Capture may run while vanilla still owns the
     // current frame, so model redirects must know whether this exact world pass will be cancelled.
     private static boolean vanillaWorldReplacementRequested;
@@ -792,9 +793,14 @@ public final class RayTracingProbe {
         dynamicFramePrepared = true;
         if (RayTracingClientConfig.INSTANCE.dynamicEntityMvpEnabled.get()) {
             float partialTick = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+            long collectionStart = System.nanoTime();
             DynamicEntityGeometry.Frame captured =
                 dynamicEntities.collect(minecraft.level, camera, renderDistanceChunks, partialTick,
                     frameCullFrustum);
+            if (++dynamicCollectionFrames % 120 == 0) {
+                LOGGER.info("RTest dynamic_collection frame={} collect_us={}", dynamicCollectionFrames,
+                    (System.nanoTime() - collectionStart) / 1000);
+            }
             // A visible entity with no captured geometry means the deferred capture missed this
             // frame. Do not turn that transient miss into a frame that masks every dynamic TLAS
             // slot; a genuinely empty world frame has no admission failures and is still published.

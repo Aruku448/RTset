@@ -49,15 +49,16 @@ public abstract class LevelRendererMixin {
             RayTracingProbe.captureParticles(this.levelRenderState.particlesRenderState);
             RayTracingProbe.prepareLevelRender();
             cancelVanilla = RayTracingProbe.shouldCancelVanillaLevelRenderer();
-            if (cancelVanilla && RayTracingProbe.shouldPrepareDeferredEntityCapture()) {
-                // Prepare the forced local-player body from its isolated queue first. This emits
-                // capture callbacks for the reflection-only TLAS instance without ever exposing
-                // the node to vanilla's raster playback.
+            if (RayTracingProbe.shouldPrepareDeferredEntityCapture()) {
+                // Prepare the installed local-player renderer's complete queue after submission
+                // and visibility hooks have finished, including during RT bootstrap.
                 var firstPersonStorage = ((FirstPersonCaptureStorage)(Object)this)
                     .rtest$firstPersonCaptureStorage();
                 var firstPersonFrame = this.featureRenderDispatcher.prepareFrame(firstPersonStorage);
                 firstPersonFrame.close();
                 firstPersonStorage.getSubmitsPerOrder().clear();
+            }
+            if (cancelVanilla && RayTracingProbe.shouldPrepareDeferredEntityCapture()) {
                 // Entity model nodes are deferred until prepareFrame. Prepare them once so the
                 // capture redirect can copy the final setupAnim/pose output into RT geometry.
                 // The prepared frame is immediately closed and never executes a native draw.

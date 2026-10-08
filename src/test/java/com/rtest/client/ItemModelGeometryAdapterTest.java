@@ -17,7 +17,13 @@ import org.joml.Vector3f;
 
 /** Verifies the RT item material snapshot and its separation from vanilla lighting inputs. */
 public final class ItemModelGeometryAdapterTest {
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
+        var config = com.electronwill.nightconfig.core.CommentedConfig.inMemory();
+        RayTracingClientConfig.SPEC.correct(config);
+        var loaded = Class.forName("net.neoforged.fml.config.LoadedConfig").getDeclaredConstructors()[0];
+        loaded.setAccessible(true);
+        RayTracingClientConfig.SPEC.acceptConfig((net.neoforged.fml.config.IConfigSpec.ILoadedConfig)
+            loaded.newInstance(config, null, null));
         assertDynamicMaterialSourcesDoNotReadVanillaLight();
         ItemModelGeometryAdapter.setPbrSampler(null);
         ItemModelGeometryAdapter.beginWorldDraw(new net.minecraft.world.phys.Vec3(10.0, 20.0, 30.0));

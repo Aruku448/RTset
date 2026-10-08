@@ -239,9 +239,18 @@ final class RayTracingShaderCommon {
                     } else {
                         normalZ = float(pixel & 0xffu) / 127.5 - 1.0;
                     }
-                    tangentNormal = vec3(normalXY, normalZ);
-                    tangentNormal.xy *= clamp(camera.pbrSettings.y, 0.0, 3.0);
-                    tangentNormal = normalize(tangentNormal);
+                    float normalStrength = clamp(camera.pbrSettings.y, 0.0, 3.0);
+                    normalXY *= normalStrength;
+                    // Match CPU decoding: LabPBR reconstructs Z from the scaled XY.
+                    // Strength zero must disable the map even at authored grazing normals.
+                    if (format == PBR_FORMAT_LAB)
+                        normalZ = sqrt(max(1.0 - dot(normalXY, normalXY), 0.0));
+                    tangentNormal = normalStrength == 0.0 ? vec3(0.0, 0.0, 1.0)
+                        : vec3(normalXY, normalZ);
+                    float normalLength2 = dot(tangentNormal, tangentNormal);
+                    tangentNormal = normalLength2 > 1.0e-12
+                        && !any(isnan(tangentNormal)) && !any(isinf(tangentNormal))
+                        ? tangentNormal * inversesqrt(normalLength2) : vec3(0.0, 0.0, 1.0);
                     hasNormal = true;
                 }
                 if (specularOffset != 0xffffffffu) {
@@ -292,6 +301,12 @@ final class RayTracingShaderCommon {
                 vec3 tangent = pbrTangent(faceNormal, tangentAngle, tangentHandedness);
                 vec3 bitangent = pbrBitangent(faceNormal, tangent, tangentHandedness);
                 return normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y + faceNormal * tangentNormal.z);
+            }
+            vec3 pbrOrientSurfaceNormal(vec3 faceNormal, vec3 shadingNormal, vec3 rayDirection) {
+                // A normal map may lean away from the observer while the geometric face
+                // remains front-facing. Flipping by the mapped normal reverses its entire
+                // light hemisphere between direct views and mirror views of that same face.
+                return dot(rayDirection, faceNormal) < 0.0 ? shadingNormal : -shadingNormal;
             }
             """;
 

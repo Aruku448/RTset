@@ -6,6 +6,7 @@ Minecraft 26.2 / NeoForge 26.2 的 Vulkan 光追实验 Mod。它是原型，不�
 
 - F8 切换 RT，F9 打开设置；运行链为场景捕获 → Vulkan RT → 可选 NRD 降噪（或原始 RT） → FSR 3.1.5 → 原生手部/UI。
 - 静态地形支持增量 Section 捕获与 terrain LOD；动态实体、方块实体及部分粒子走动态实例路径。未捕获或超容量对象由原生栅格路径回退。
+- 可选 ReSTIR 直接光照和条件后缀重放/final gather，默认关闭，F9 路径追踪分类中切换；算法范围、显存与验证边界见 [`docs/restir-implementation.md`](docs/restir-implementation.md)。
 - 材质支持 PBR companion map、流体捕获、太阳/天空和体积光等实验功能。各功能的开关及默认值见 `RayTracingClientConfig`。
 - Prime 26.3 物理天空、方向太阳透射和四波长有限段空气透视已接入实验路径，F9 开关默认关闭；仍待实机验证，非完整 epipolar 移植，月亮已添加（八阶段月相、反射/折射、月光直射与有限段散射），完整天气和月光天空 LUT 尚未移植，见 [`docs/prime-atmosphere-integration.md`](docs/prime-atmosphere-integration.md)。
 - FSR4 不属于当前 Vulkan 实现。保留的 FSR/NRD/Voxy 文档是有日期的研究资料，不是当前实现规范或任务清单。

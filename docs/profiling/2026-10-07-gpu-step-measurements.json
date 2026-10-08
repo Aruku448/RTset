@@ -1,0 +1,204 @@
+{
+  "groups": [
+    {
+      "extent": "854x480",
+      "mode": 1,
+      "start": "2026-10-07T21:03:01",
+      "end": "2026-10-07T21:03:31",
+      "steps_ms": {
+        "atmosphere_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "terrain_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "rt_inputs_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "dynamic_blas_ms": {
+          "n": 10,
+          "median": 1.763,
+          "p95": 1.85725,
+          "max": 1.864
+        },
+        "tlas_sync_ms": {
+          "n": 10,
+          "median": 0.486,
+          "p95": 0.51165,
+          "max": 0.513
+        },
+        "rt_bind_sync_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "trace_ms": {
+          "n": 10,
+          "median": 16.837,
+          "p95": 17.3023,
+          "max": 17.332
+        },
+        "rt_compute_sync_ms": {
+          "n": 10,
+          "median": 0.014,
+          "p95": 0.014,
+          "max": 0.014
+        },
+        "denoise_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "aerial_composite_ms": {
+          "n": 10,
+          "median": 0.016,
+          "p95": 0.01655,
+          "max": 0.017
+        },
+        "fsr_prepare_ms": {
+          "n": 10,
+          "median": 0.007,
+          "p95": 0.008,
+          "max": 0.008
+        },
+        "fsr_inputs_ms": {
+          "n": 10,
+          "median": 0.019,
+          "p95": 0.019,
+          "max": 0.019
+        },
+        "fsr_luma_pyramid_ms": {
+          "n": 10,
+          "median": 0.006,
+          "p95": 0.006,
+          "max": 0.006
+        },
+        "fsr_shading_pyramid_ms": {
+          "n": 10,
+          "median": 0.023,
+          "p95": 0.024,
+          "max": 0.024
+        },
+        "fsr_shading_change_ms": {
+          "n": 10,
+          "median": 0.003,
+          "p95": 0.003,
+          "max": 0.003
+        },
+        "fsr_prepare_reactivity_ms": {
+          "n": 10,
+          "median": 0.0195,
+          "p95": 0.02,
+          "max": 0.02
+        },
+        "fsr_luma_instability_ms": {
+          "n": 10,
+          "median": 0.0085,
+          "p95": 0.009,
+          "max": 0.009
+        },
+        "fsr_accumulate_ms": {
+          "n": 10,
+          "median": 0.051,
+          "p95": 0.053,
+          "max": 0.053
+        },
+        "fsr_rcas_ms": {
+          "n": 10,
+          "median": 0.0135,
+          "p95": 0.014,
+          "max": 0.014
+        },
+        "debug_offline_ms": {
+          "n": 10,
+          "median": 0.0,
+          "p95": 0.0,
+          "max": 0.0
+        },
+        "post_display_ms": {
+          "n": 10,
+          "median": 0.265,
+          "p95": 0.27155,
+          "max": 0.272
+        },
+        "output_copy_ms": {
+          "n": 10,
+          "median": 0.005,
+          "p95": 0.006,
+          "max": 0.006
+        },
+        "command_total_ms": {
+          "n": 10,
+          "median": 19.477,
+          "p95": 20.13005,
+          "max": 20.162
+        }
+      },
+      "nested_post_ms": {
+        "setup_ms": {
+          "n": 10,
+          "median": 0.001,
+          "p95": 0.001,
+          "max": 0.001
+        },
+        "exposure_focus_ms": {
+          "n": 10,
+          "median": 0.0195,
+          "p95": 0.02,
+          "max": 0.02
+        },
+        "dof_coc_ms": {
+          "n": 10,
+          "median": 0.049,
+          "p95": 0.05055,
+          "max": 0.051
+        },
+        "dof_ms": {
+          "n": 10,
+          "median": 0.096,
+          "p95": 0.099,
+          "max": 0.099
+        },
+        "motion_ms": {
+          "n": 10,
+          "median": 0.009,
+          "p95": 0.020549999999999978,
+          "max": 0.03
+        },
+        "bloom_pyramid_blur_ms": {
+          "n": 10,
+          "median": 0.058499999999999996,
+          "p95": 0.06,
+          "max": 0.06
+        },
+        "grade_tonemap_ms": {
+          "n": 10,
+          "median": 0.023,
+          "p95": 0.024,
+          "max": 0.024
+        },
+        "sharpen_dither_ms": {
+          "n": 10,
+          "median": 0.009,
+          "p95": 0.00955,
+          "max": 0.01
+        }
+      },
+      "hardware": {},
+      "sum_rounding_error_max_ms": 0.0030000000000001137,
+      "negative_intervals": 0
+    }
+  ],
+  "note": "Sampled every 120 frames. Scene/settings changes within a group are not controlled comparisons. Hardware is device-wide. Nested post intervals must not be added to parent."
+}

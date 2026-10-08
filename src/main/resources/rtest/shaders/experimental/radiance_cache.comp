@@ -1,0 +1,89 @@
+#version 460
+// Independent experiment, NOT bound by the production raygen. Vulkan 1.2, uint atomics only.
+// Header: magic, slots, trainCount, queryCount, trainOffset, queryOffset, cacheOffset,
+// outputOffset, generation, minimumSamples, maximumRelativeVariance(float bits), reserved[5].
+// Input stride 16 words: exact key[5], generation, eligibility flags, irradiance RGB;
+// query uses RGB diffuse albedo at 7..9, transported beta at 10..12 instead of target.
+// Cache stride 8: elected input index, count, sum RGB (Q1024), second moment RGB (Q16).
+layout(local_size_x = 128) in;
+layout(set = 0, binding = 0, std430) buffer Experiment { uint words[]; } data;
+layout(push_constant) uniform Dispatch { uint phase; uint count; uint reserved; } dispatch;
+
+uint slot(uint inputOffset) {
+    uint h = 2166136261u;
+    for (uint j = 0u; j < 5u; j++) h = (h ^ data.words[inputOffset + j]) * 16777619u;
+    h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u; h *= 0x846ca68bu; h ^= h >> 16u;
+    return h & (data.words[1] - 1u);
+}
+bool eligible(uint p) {
+    // Exactly pure diffuse + static + opaque. Dynamic, specular and medium targets fall back.
+    return data.words[p + 5u] == data.words[8] && data.words[p + 6u] == 7u;
+}
+bool validTarget(uint p) {
+    if (!eligible(p)) return false;
+    for (uint j = 0u; j < 3u; j++) {
+        float x = uintBitsToFloat(data.words[p + 7u + j]);
+        // Reject, never clamp a firefly into a biased training value.
+        if (isnan(x) || isinf(x) || x < 0.0 || x > 64.0) return false;
+    }
+    return true;
+}
+bool sameKey(uint a, uint b) {
+    for (uint j = 0u; j < 5u; j++) if (data.words[a + j] != data.words[b + j]) return false;
+    return true;
+}
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= dispatch.count) return;
+    if (dispatch.phase == 0u) {
+        uint c = data.words[6] + i * 8u;
+        data.words[c] = 0xffffffffu;
+        for (uint j = 1u; j < 8u; j++) data.words[c + j] = 0u;
+        return;
+    }
+    if (dispatch.phase <= 2u) {
+        uint p = data.words[4] + i * 16u;
+        if (!validTarget(p)) return;
+        uint c = data.words[6] + slot(p) * 8u;
+        if (dispatch.phase == 1u) {
+            // Separate election and accumulation dispatches avoid publishing a partially written key.
+            atomicMin(data.words[c], i);
+            return;
+        }
+        uint owner = data.words[c];
+        if (owner == 0xffffffffu || !sameKey(p, data.words[4] + owner * 16u)) return;
+        atomicAdd(data.words[c + 1u], 1u);
+        for (uint j = 0u; j < 3u; j++) {
+            float x = uintBitsToFloat(data.words[p + 7u + j]);
+            atomicAdd(data.words[c + 2u + j], uint(floor(x * 1024.0 + 0.5)));
+            atomicAdd(data.words[c + 5u + j], uint(floor(x * x * 16.0 + 0.5)));
+        }
+        return;
+    }
+    uint p = data.words[5] + i * 16u;
+    uint outOffset = data.words[7] + i * 4u;
+    for (uint j = 0u; j < 4u; j++) data.words[outOffset + j] = 0u;
+    if (!eligible(p)) return;
+    uint c = data.words[6] + slot(p) * 8u;
+    uint owner = data.words[c], n = data.words[c + 1u];
+    if (owner == 0xffffffffu || n < data.words[9]
+        || !sameKey(p, data.words[4] + owner * 16u)) return;
+    vec3 mean, albedo, beta;
+    float varianceLimit = uintBitsToFloat(data.words[10]);
+    for (uint j = 0u; j < 3u; j++) {
+        mean[j] = float(data.words[c + 2u + j]) / (1024.0 * float(n));
+        float moment = float(data.words[c + 5u + j]) / (16.0 * float(n));
+        // Upper bound includes both fixed-point quantization errors.
+        float uncertainty = 0.03125 + (2.0 * mean[j] + 0.00048828125) * 0.00048828125;
+        float variance = max(moment - mean[j] * mean[j], 0.0) + uncertainty;
+        if (variance > varianceLimit * (mean[j] * mean[j] + 1.0)) return;
+        albedo[j] = uintBitsToFloat(data.words[p + 7u + j]);
+        beta[j] = uintBitsToFloat(data.words[p + 10u + j]);
+        if (isnan(albedo[j]) || isinf(albedo[j]) || albedo[j] < 0.0 || albedo[j] > 1.0
+            || isnan(beta[j]) || isinf(beta[j]) || beta[j] < 0.0 || beta[j] > 65504.0) return;
+    }
+    vec3 contribution = beta * albedo * mean * (1.0 / 3.141592653589793);
+    for (uint j = 0u; j < 3u; j++) data.words[outOffset + j] = floatBitsToUint(contribution[j]);
+    // Black is a valid estimate; validity must not be inferred from radiance > 0.
+    data.words[outOffset + 3u] = floatBitsToUint(1.0);
+}

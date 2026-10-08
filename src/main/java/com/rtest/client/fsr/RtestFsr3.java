@@ -313,6 +313,12 @@ public final class RtestFsr3 implements AutoCloseable {
 
     public void recordAfterRayTracing(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token,
                                       boolean aerialPerspectiveEnabled) {
+        recordAfterRayTracing(commandBuffer, token, aerialPerspectiveEnabled, ignored -> {});
+    }
+
+    /** Marks completed GPU stages without introducing extra synchronization. */
+    public void recordAfterRayTracing(VkCommandBuffer commandBuffer, RtestFsr3Upscaler.FrameToken token,
+                                      boolean aerialPerspectiveEnabled, java.util.function.IntConsumer milestone) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                     .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)
@@ -322,6 +328,7 @@ public final class RtestFsr3 implements AutoCloseable {
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
                     VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
         }
+        milestone.accept(16);
         float nrdStrength = this.frameNrdStrength;
         boolean nrdEnabled = this.frameDenoiserMode == RtestDenoiserMode.NRD;
         if (!this.denoiserModeLogged || nrdEnabled != this.nrdWasEnabled) {
@@ -346,6 +353,7 @@ public final class RtestFsr3 implements AutoCloseable {
                         token.jitter().x(), token.jitter().y(),
                         forceRestart || !this.nrdWasEnabled, nrdStrength);
             }
+            milestone.accept(17);
             this.nrdWasEnabled = nrdEnabled;
             // Both NRD and raw RT share this path. Preserve compute RAW/WAR/WAW edges
             // from NRD's composite to aerial and from aerial to FSR; binding is not a barrier.
@@ -354,7 +362,8 @@ public final class RtestFsr3 implements AutoCloseable {
                 this.aerialComposite.record(commandBuffer, this.renderWidth(), this.renderHeight(), true);
                 computeReadWriteBarrier(commandBuffer);
             }
-            this.upscaler.record(commandBuffer, token);
+            milestone.accept(18);
+            this.upscaler.record(commandBuffer, token, milestone);
         } catch (Throwable failure) {
             if (this.nrdToken != null) {
                 try {

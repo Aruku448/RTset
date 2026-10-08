@@ -217,6 +217,18 @@ def itemModelGeometryAdapterTest = tasks.register('itemModelGeometryAdapterTest'
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.ItemModelGeometryAdapterTest'
 }
+def restirConditionalMathTest = tasks.register('restirConditionalMathTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RestirConditionalMathTest'
+    if (project.hasProperty('restir_shader_dump')) {
+        args project.property('restir_shader_dump').toString()
+    }
+}
+def restirActivationTest = tasks.register('restirActivationTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RestirActivationTest'
+}
+tasks.named('test') { dependsOn restirActivationTest }
 def rayTracingShaderContractTest = tasks.register('rayTracingShaderContractTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.RayTracingShaderContractTest'
@@ -374,6 +386,11 @@ def dynamicSnapshotLogThrottleTest = tasks.register('dynamicSnapshotLogThrottleT
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.rtest.client.DynamicSnapshotLogThrottleTest'
 }
+def rayTracingCostAuditTest = tasks.register('rayTracingCostAuditTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingCostAuditTest'
+}
+tasks.named('test') { dependsOn rayTracingCostAuditTest }
 tasks.named('test') {
     dependsOn atmosphereCoordinatesTest, atmosphereAssetsTest, skyLutHistoryTest, rayTracingAtmosphereShaderTest,
         compiledSectionMeshCacheTest, rayTracingLightTreeTest, terrainBuildMathTest, lightTreeReuseMathTest, materialLifetimeMathTest, mappedUploadMathTest, resourceLifetimeMathTest, rayTracingMaterialBufferTest, primeOfflineColorContractTest,
@@ -381,7 +398,7 @@ tasks.named('test') {
         dynamicSnapshotLogThrottleTest
     dependsOn playerAnimationContractTest, playerBlasCommandTest, blockEntityModelContractTest,
         blockEntityRasterFallbackContractTest, entityRasterFallbackContractTest,
-        itemModelGeometryAdapterTest, rayTracingShaderContractTest,
+        itemModelGeometryAdapterTest, rayTracingShaderContractTest, restirConditionalMathTest,
         nativeColorManagementTest, rayTracingPbrMaterialsTest, nrdNativeContractTest, nrdNativePlatformTest, nrdCompositeContractTest, nrdMotionContractTest, denoiserHistoryQualityTest, rayTracingRuntimeCleanupTest, sceneWindowDeltaTest,
         sceneGeometryMergeContractTest, terrainLodTest, terrainProxyStoreTest,
         terrainTraversalAbiTest, terrainTraversalShaderContractTest,
@@ -440,3 +457,114 @@ def gpuLightTreeMathTest = tasks.register('gpuLightTreeMathTest', JavaExec) {
     if (project.hasProperty('gpu_tree_dump')) args 'dump', project.property('gpu_tree_dump'), (project.findProperty('gpu_tree_dump_count') ?: '5003')
 }
 tasks.named('test') { dependsOn gpuLightTreeMathTest }
+
+def radianceCacheExperimentTest = tasks.register('radianceCacheExperimentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RadianceCacheExperimentTest'
+    maxHeapSize = '1g'
+    if (project.hasProperty('radiance_cache_dump')) {
+        args project.property('radiance_cache_dump'), (project.findProperty('radiance_cache_queries') ?: '0')
+    }
+}
+tasks.named('test') { dependsOn radianceCacheExperimentTest }
+
+def fluidFlowContinuityTest = tasks.register('fluidFlowContinuityTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.FluidFlowContinuityTest'
+}
+tasks.named('test') { dependsOn fluidFlowContinuityTest }
+
+def settingsLayoutTest = tasks.register('settingsLayoutTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.SettingsLayoutTest'
+}
+tasks.named('test') { dependsOn settingsLayoutTest }
+
+sourceSets {
+    armourersPort {
+        java.srcDir 'tools/armourers_workshop_port/src/main/java'
+        compileClasspath += sourceSets.main.compileClasspath + files(new File(defaultGameDirectory, 'mods/armourersworkshop-neoforge-26.2-2.0.0-homebaked.jar'))
+        runtimeClasspath += compileClasspath
+    }
+    armourersPortTest {
+        java.srcDir 'tools/armourers_workshop_port/src/test/java'
+        compileClasspath += sourceSets.armourersPort.output + sourceSets.armourersPort.compileClasspath
+        runtimeClasspath += compileClasspath
+    }
+}
+tasks.register('armourersGuiClipTest', JavaExec) {
+    dependsOn tasks.named('armourersPortTestClasses')
+    classpath = sourceSets.armourersPortTest.runtimeClasspath
+    mainClass = 'moe.plushie.armourers_workshop.compat.client.gui.renderer.NativeGuiClipTest'
+}
+tasks.register('armourersGuiSubmissionTest', JavaExec) {
+    dependsOn tasks.named('armourersPortTestClasses')
+    classpath = sourceSets.armourersPortTest.runtimeClasspath
+    mainClass = 'moe.plushie.armourers_workshop.compat.client.gui.renderer.NativeGuiSubmissionTest'
+}
+tasks.named('armourersGuiSubmissionTest', JavaExec) {
+    classpath += files('/home/aruku/.minecraft/libraries/org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-linux.jar', '/home/aruku/.minecraft/libraries/org/lwjgl/lwjgl-jemalloc/3.4.1/lwjgl-jemalloc-3.4.1-natives-linux.jar')
+    jvmArgs '--enable-native-access=ALL-UNNAMED', '--sun-misc-unsafe-memory-access=allow'
+}
+tasks.register('armourersGuiDepthTest', JavaExec) {
+    dependsOn tasks.named('armourersPortTestClasses')
+    classpath = sourceSets.armourersPortTest.runtimeClasspath
+    mainClass = 'moe.plushie.armourers_workshop.compat.client.gui.renderer.NativeGuiDepthTest'
+}
+tasks.register('armourersDynamicTextureTest', JavaExec) {
+    dependsOn tasks.named('armourersPortTestClasses')
+    classpath = sourceSets.armourersPortTest.runtimeClasspath + files('/home/aruku/.minecraft/libraries/org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-linux.jar', '/home/aruku/.minecraft/libraries/org/lwjgl/lwjgl-stb/3.4.1/lwjgl-stb-3.4.1-natives-linux.jar')
+    jvmArgs '--enable-native-access=ALL-UNNAMED', '--sun-misc-unsafe-memory-access=allow'
+    mainClass = 'moe.plushie.armourers_workshop.compat.client.gui.renderer.NativeDynamicTextureTest'
+}
+tasks.register('armourersGuiLayerTest', JavaExec) {
+    dependsOn tasks.named('armourersPortTestClasses')
+    classpath = sourceSets.armourersPortTest.runtimeClasspath
+    mainClass = 'moe.plushie.armourers_workshop.compat.client.gui.renderer.NativeGuiLayerTest'
+}
+
+tasks.register('customEntityGeometryTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.CustomEntityGeometryTest'
+}
+
+tasks.register('dynamicModelChunksTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicModelChunksTest'
+}
+
+tasks.register('dynamicUploadBatchTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.DynamicUploadBatchTest'
+}
+tasks.named('test') { dependsOn 'dynamicUploadBatchTest' }
+
+tasks.register('atmosphereHeightCoherenceTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.AtmosphereHeightCoherenceTest'
+}
+tasks.named('test') { dependsOn 'atmosphereHeightCoherenceTest' }
+
+tasks.register('accelerationStructureSynchronizationTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.AccelerationStructureSynchronizationTest'
+}
+tasks.named('test') { dependsOn 'accelerationStructureSynchronizationTest' }
+
+tasks.register('emitterDataflowTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.EmitterDataflowTest'
+}
+tasks.named('test') { dependsOn 'emitterDataflowTest' }
+
+tasks.register('lightingLogicRepairTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.LightingLogicRepairTest'
+}
+tasks.named('test') { dependsOn 'lightingLogicRepairTest' }
+
+tasks.register('modelCaptureBatchTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.ModelCaptureBatchTest'
+}
+tasks.named('test') { dependsOn 'modelCaptureBatchTest' }

@@ -1,0 +1,6 @@
+{
+  "samples": 100001,
+  "reference_fit_max_absolute_float_error": 2.9802322387695312e-08,
+  "power5_max_absolute_error_vs_double": 1.058047495172687e-07,
+  "note": "Float simulation, not GPU execution; hardware FMA/pow lowering can differ. Algebra preserves the estimator, not bitwise identity."
+}

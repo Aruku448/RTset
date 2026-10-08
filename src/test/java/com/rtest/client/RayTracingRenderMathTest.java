@@ -130,7 +130,9 @@ public final class RayTracingRenderMathTest {
     private static void checkShaderWiring() {
         String shader = RayTracingShaderRaygen.RAYGEN_SHADER;
         require(shader, "sampleGgx(normal, viewDirection, roughness, scatterSample.xy)");
-        require(shader, "ggxG1(nDotI, alpha) / (4.0 * nDotI)");
+        require(shader, "float distribution = ggxD(nDotH, alpha);");
+        require(shader, "float incidentMasking = ggxG1(nDotI, alpha);");
+        require(shader, "float specPdf = distribution * incidentMasking / (4.0 * nDotI);");
         require(shader, "float sunSpecularProbability = specularProbability;");
         require(shader, "float sunDiffuseProbability = diffuseProbability;");
         require(shader, "transmission ? vec3(canTransmit ? fresnel : 1.0)");
@@ -150,8 +152,10 @@ public final class RayTracingRenderMathTest {
 
     private static void checkTransportFixes() {
         String shader = RayTracingShaderRaygen.RAYGEN_SHADER;
-        require(shader, "traceEmitterVisibility(surfacePosition + normal * 0.002, light.position)");
-        require(shader, "traceEmitterVisibility(volumePosition + light.direction * 0.002, light.position)");
+        require(shader, "vec3 emitterShadowOrigin = surfacePosition + normal * 0.002;");
+        require(shader, "prepareEmitterVisibilityRay(emitterShadowOrigin, light.position)");
+        require(shader, "vec3 emitterShadowOrigin = volumePosition + light.direction * 0.002;");
+        require(shader, "traceEmitterVisibility(emitterShadowOrigin, emitterRay)");
         require(shader, "vec3 delta = target - shadowOrigin;");
         require(shader, "float tMax = distance - endpointMargin;");
         require(shader, "previousWasDelta && previousAreaNeeEnabled");

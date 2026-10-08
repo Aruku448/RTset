@@ -74,7 +74,7 @@ public final class EntityRasterFallbackContractTest {
             "surface.z = max(surface.z, max(camera.pbrSettings.z, camera.pbrParallaxSettings.y));");
         reject(levelCapture, "LivingEntityGeometryAdapter.endWorldDraw();");
         reject(levelCapture, "BlockEntityModelGeometryAdapter.endWorldDraw();");
-        require(levelCapture, "new SubmitNodeStorage()");
+        require(levelCapture, "new FirstPersonPlayerCaptureStorage()");
         require(levelCapture, "poseStack, this.rtest$isolatedFirstPersonBody");
         reject(levelCapture, "poseStack, output);");
         require(levelRenderer, "RayTracingProbe.endDeferredEntityCapture();");

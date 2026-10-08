@@ -38,6 +38,19 @@ public final class SubmitModelOwnerMixin {
         }
     }
 
+    @Inject(method = "submitText", at = @At("HEAD"))
+    private void rtest$captureWorldText(PoseStack pose, float x, float y,
+        net.minecraft.util.FormattedCharSequence text, boolean shadow, net.minecraft.client.gui.Font.DisplayMode mode,
+        int light, int color, int background, int outline, CallbackInfo callback) {
+        if (com.rtest.client.ItemModelGeometryAdapter.isFirstPersonCaptureActive()) {
+            com.rtest.client.ItemModelGeometryAdapter.captureTextSubmit(pose, x, y, text, shadow, mode, light, color, background, outline);
+        } else if (BlockEntityModelGeometryAdapter.hasBlockEntityOwner()) {
+            BlockEntityModelGeometryAdapter.captureText(pose, x, y, text, shadow, mode, light, color, background, outline);
+        } else {
+            com.rtest.client.LivingEntityGeometryAdapter.captureText(pose, x, y, text, shadow, mode, light, color, background, outline);
+        }
+    }
+
     /** NeoForge's animated block models use this independent path; it does not call submitBlockModel. */
     @Inject(method = "submitMultiLayerBlockModel", at = @At("HEAD"))
     private void rtest$captureBlockEntityMultiLayerModel(PoseStack pose,

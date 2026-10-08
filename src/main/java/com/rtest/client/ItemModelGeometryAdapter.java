@@ -195,6 +195,12 @@ public final class ItemModelGeometryAdapter {
         return firstPersonCapture.get();
     }
 
+    /** World item special renderers submit deferred custom geometry instead of baked item quads. */
+    public static boolean isWorldItemCaptureActive() {
+        Capture capture = current.get();
+        return capture != null && !capture.player && !capture.firstPerson;
+    }
+
     public static void endFirstPerson() {
         Capture capture = current.get();
         current.remove();
@@ -270,6 +276,38 @@ public final class ItemModelGeometryAdapter {
             quadInstance.setColor(color);
             capture.quad(pose.last(), quad, quadInstance);
         }
+    }
+
+    /** Captures special item geometry and custom text while the owning camera transform is scoped,
+     * before vanilla defers the custom renderer callback. */
+    public static void captureCustomSubmit(PoseStack.Pose pose, net.minecraft.client.renderer.rendertype.RenderType type,
+        net.minecraft.client.renderer.SubmitNodeCollector.CustomGeometryRenderer renderer) {
+        Capture owner = current.get();
+        if (owner == null) return;
+        if (owner.firstPerson && !WorldTextGeometry.isText(type)) return;
+        var texture = LivingEntityGeometryAdapter.atlasForRenderType(type);
+        if (texture == null) return;
+        var consumer = new PlayerModelGeometryAdapter.Capture(null, owner.offsetX, owner.offsetY,
+            owner.offsetZ, null, texture, RayTracingProbe.pbrSampler(),
+            LivingEntityGeometryAdapter.emissionFor(type), type.primitiveTopology())
+                .emissiveOffset(LivingEntityGeometryAdapter.emissiveOffsetFor(type));
+        renderer.render(pose, consumer);
+        var mesh = LivingEntityGeometryAdapter.retag(LivingEntityGeometryAdapter.customMaterial(consumer.finish(), type), texture);
+        for (float value : mesh.vertices()) owner.vertices.add(value);
+        for (float value : mesh.materialData()) owner.materials.add(value);
+    }
+
+    public static void captureTextSubmit(PoseStack pose, float x, float y,
+        net.minecraft.util.FormattedCharSequence text, boolean shadow, net.minecraft.client.gui.Font.DisplayMode mode,
+        int light, int color, int background, int outline) {
+        Capture owner = current.get();
+        if (owner == null) return;
+        WorldTextGeometry.capture(net.minecraft.client.Minecraft.getInstance().font, pose, x, y, text,
+            shadow, mode, light, color, background, outline, owner.offsetX, owner.offsetY, owner.offsetZ,
+            (mesh, texture) -> {
+                for (float value : mesh.vertices()) owner.vertices.add(value);
+                for (float value : mesh.materialData()) owner.materials.add(value);
+            });
     }
 
     /** Captures the final posed baked quads used by BlockEntityRenderer.submitBlockModel. */
@@ -380,7 +418,9 @@ public final class ItemModelGeometryAdapter {
                 UVPair.unpackU(quad.packedUV(1)), UVPair.unpackV(quad.packedUV(1)),
                 UVPair.unpackU(quad.packedUV(2)), UVPair.unpackV(quad.packedUV(2)),
                 UVPair.unpackU(quad.packedUV(3)), UVPair.unpackV(quad.packedUV(3)));
-            float emission = RayTracingEmission.fromMinecraftLevel(info.lightEmission());
+            float emission = RayTracingEmission.fromMinecraftLevel(info.lightEmission())
+                * (RayTracingClientConfig.INSTANCE.emissionScale.get().floatValue()
+                    / RayTracingEmission.LEGACY_REFERENCE_SCALE);
             for (int triangle = 0; triangle < 2; triangle++) {
                 int a = 0;
                 int b = triangle == 0 ? 1 : 2;

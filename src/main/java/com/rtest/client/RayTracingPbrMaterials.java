@@ -551,6 +551,7 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
                 float normalStrength = RayTracingClientConfig.INSTANCE.pbrNormalStrength.get().floatValue();
                 normalX *= normalStrength;
                 normalY *= normalStrength;
+                if (normalStrength == 0.0F) normalZ = 1.0F;
                 if (isLabPbr()) {
                     normalZ = (float)Math.sqrt(Math.max(1.0F - normalX * normalX - normalY * normalY, 0.0F));
                 }
@@ -559,6 +560,10 @@ final class RayTracingPbrMaterials implements RayTracingPbrSampler, AutoCloseabl
                     normalX /= length;
                     normalY /= length;
                     normalZ /= length;
+                } else {
+                    normalX = 0.0F;
+                    normalY = 0.0F;
+                    normalZ = 1.0F;
                 }
             }
             return new Sample(reflectivity, metallic, roughness, normalX, normalY, normalZ,

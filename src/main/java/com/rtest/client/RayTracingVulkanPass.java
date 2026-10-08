@@ -149,6 +149,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private NativeBuffer scratchBuffer;
         private final NativeBuffer outputBuffer;
         private final NativeBuffer cameraBuffer;
+        private NativeBuffer restirPreviousBuffer;
+        private NativeBuffer restirCurrentBuffer;
+        private NativeBuffer restirParamsBuffer;
+        private final long restirStorageLimit;
+        private final int restirPipelineMode;
+        private final RayTracingCostAudit.Profile auditProfile;
+        private int restirMode;
+        private int restirSettingsToken = -1;
+        private int restirFrame;
+        private long restirRevision = Long.MIN_VALUE;
+        private boolean restirHistoryReady;
         private NativeBuffer materialBuffer;
         private NativeBuffer lightDataBuffer;
         private NativeBuffer pbrBuffer;
@@ -295,7 +306,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private int pendingFrameGpuIndex;
         private boolean closed;
         // 0..3 retain RT/post/total; 4..5 bracket traversal/AS; 6..7 isolate dynamic sky LUT work.
-        private static final int GPU_TIMESTAMP_COUNT = 8;
+        private static final int GPU_TIMESTAMP_COUNT = 39;
         private final long gpuTimestampQueryPool;
         private final double gpuTimestampPeriodNs;
         private final boolean gpuTimestampsAvailable;
@@ -358,6 +369,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer atmosphereCameraBuffer,
             boolean atmosphereRequested
         ) {
+            this.restirPipelineMode = RayTracingRestirShader.requestedMode();
+            this.auditProfile = RayTracingCostAudit.requested();
             this.atmosphere = atmosphere;
             this.atmosphereDensitySteps = atmosphereDensitySteps();
             this.requestedAtmosphereDensitySteps = this.atmosphereDensitySteps;
@@ -373,6 +386,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             try (MemoryStack timestampStack = MemoryStack.stackPush()) {
                 VkPhysicalDeviceProperties timestampProperties = VkPhysicalDeviceProperties.calloc(timestampStack);
                 VK12.vkGetPhysicalDeviceProperties(this.vkDevice.getPhysicalDevice(), timestampProperties);
+                this.restirStorageLimit = Integer.toUnsignedLong(timestampProperties.limits().maxStorageBufferRange());
                 timestampPeriod = timestampProperties.limits().timestampPeriod();
                 boolean timestampSupported = timestampProperties.limits().timestampComputeAndGraphics();
                 if (timestampPeriod > 0.0 && timestampSupported) {
@@ -664,6 +678,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             NativeBuffer scratchBuffer = null;
             NativeBuffer outputBuffer = null;
             NativeBuffer cameraBuffer = null;
+            NativeBuffer restirPreviousBuffer = null;
+            NativeBuffer restirCurrentBuffer = null;
+            NativeBuffer restirParamsBuffer = null;
             NativeBuffer materialBuffer = null;
             NativeBuffer lightDataBuffer = null;
             GpuLightTreeBuilder lightTreeBuilder = null;
@@ -760,6 +777,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     true
                 );
                 cameraBuffer = NativeBuffer.create(device, 304, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+                restirPreviousBuffer = NativeBuffer.create(device, 16, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+                restirCurrentBuffer = NativeBuffer.create(device, 16, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+                restirParamsBuffer = NativeBuffer.create(device, RestirLayout.PARAMETER_BYTES,
+                    VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
                 long materialFloatCount = materialFloatCount(geometry, dynamicSlotCapacity);
                 materialBuffer = NativeBuffer.create(
                     device,
@@ -963,13 +984,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     ? RayTracingShaders.RAYGEN_SHADER.replace("#version 460",
                         "#version 460\n#define RTEST_ATMOSPHERE_LUT 1")
                     : RayTracingShaders.RAYGEN_SHADER;
+                raygenSource = RayTracingRestirShader.variant(raygenSource, RayTracingRestirShader.requestedMode());
+                RayTracingCostAudit.Profile audit = RayTracingCostAudit.requested();
+                raygenSource = RayTracingCostAudit.raygen(raygenSource, audit);
+                LOGGER.info("RTest ray cost audit: profile={}", audit.key());
                 ShaderModule raygen = ShaderModule.create(device, raygenSource, Shaderc.shaderc_glsl_raygen_shader);
                 shaderModules[0] = raygen.handle;
                 ShaderModule miss = ShaderModule.create(device, RayTracingShaders.MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
                 shaderModules[1] = miss.handle;
                 ShaderModule shadowMiss = ShaderModule.create(device, RayTracingShaders.SHADOW_MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
                 shaderModules[2] = shadowMiss.handle;
-                ShaderModule closestHit = ShaderModule.create(device, RayTracingShaders.CLOSEST_HIT_SHADER, Shaderc.shaderc_glsl_closesthit_shader);
+                ShaderModule closestHit = ShaderModule.create(device, RayTracingCostAudit.closestHit(
+                    RayTracingShaders.CLOSEST_HIT_SHADER, audit), Shaderc.shaderc_glsl_closesthit_shader);
                 shaderModules[3] = closestHit.handle;
                 ShaderModule anyHit = ShaderModule.create(device, RayTracingShaders.ANY_HIT_SHADER, Shaderc.shaderc_glsl_anyhit_shader);
                 shaderModules[4] = anyHit.handle;
@@ -983,7 +1009,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 shaderModules[8] = skyCdfHit.handle;
 
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 44 : 33, stack);
+                    int restirBindingStart = physicalAtmosphere ? 41 : 30;
+                    for (int index = 0; index < 3; index++) {
+                        bindings.get(restirBindingStart + index).binding(41 + index)
+                            .descriptorType(index == 2 ? VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                    }
                     bindings.get(physicalAtmosphere ? 39 : 28).binding(39)
                         .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
@@ -1086,8 +1118,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(5, stack);
                     poolSizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                         .descriptorCount(2);
-                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(8);
-                    poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(physicalAtmosphere ? 2 : 1);
+                    poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(10);
+                    poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(physicalAtmosphere ? 3 : 2);
                     poolSizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                         .descriptorCount(5 + PLAYER_SKIN_DESCRIPTOR_COUNT);
                     poolSizes.get(4).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(physicalAtmosphere ? 23 : 16);
@@ -1167,7 +1199,17 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         .sType$Default().pAccelerationStructures(stack.longs(skybox.cdfHandle()));
                     var skyCdfMetadataInfo = VkDescriptorBufferInfo.calloc(1, stack)
                         .buffer(skybox.cdfMetadataBuffer()).offset(0).range(SkyCdfGeometry.METADATA_BYTES);
-                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 41 : 30, stack);
+                    VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(physicalAtmosphere ? 44 : 33, stack);
+                    VkDescriptorBufferInfo.Buffer restirInfos = VkDescriptorBufferInfo.calloc(3, stack);
+                    restirInfos.get(0).buffer(restirPreviousBuffer.buffer).offset(0).range(restirPreviousBuffer.size);
+                    restirInfos.get(1).buffer(restirCurrentBuffer.buffer).offset(0).range(restirCurrentBuffer.size);
+                    restirInfos.get(2).buffer(restirParamsBuffer.buffer).offset(0).range(RestirLayout.PARAMETER_BYTES);
+                    for (int index = 0; index < 3; index++) {
+                        writes.get((physicalAtmosphere ? 41 : 30) + index).sType$Default()
+                            .dstSet(descriptorSet).dstBinding(41 + index).descriptorCount(1)
+                            .descriptorType(index == 2 ? VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                            .pBufferInfo(VkDescriptorBufferInfo.create(restirInfos.get(index).address(), 1));
+                    }
                     writes.get(physicalAtmosphere ? 39 : 28).sType$Default().pNext(skyCdfAccelerationInfo)
                         .dstSet(descriptorSet).dstBinding(39).descriptorCount(1)
                         .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
@@ -1420,6 +1462,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         atmosphereCameraBuffer,
                         atmosphereRequested
                     );
+                    resources.restirPreviousBuffer = restirPreviousBuffer;
+                    resources.restirCurrentBuffer = restirCurrentBuffer;
+                    resources.restirParamsBuffer = restirParamsBuffer;
                     resources.gpuLightTreeBuilder = lightTreeBuilder;
                     blasCache.commit(sectionBlas);
                     blasCache.trim(activeKeys);
@@ -1465,6 +1510,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 closeDuringFailure(materialBuffer, throwable);
                 closeDuringFailure(atmosphereCameraBuffer, throwable);
                 closeDuringFailure(atmosphere, throwable);
+                closeDuringFailure(restirPreviousBuffer, throwable);
+                closeDuringFailure(restirCurrentBuffer, throwable);
+                closeDuringFailure(restirParamsBuffer, throwable);
                 closeDuringFailure(cameraBuffer, throwable);
                 closeDuringFailure(outputBuffer, throwable);
                 closeDuringFailure(scratchBuffer, throwable);
@@ -1488,14 +1536,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 if (limits.maxImageDimension2D() < 8193
                     || limits.maxPerStageDescriptorStorageImages() < 27
                     || limits.maxDescriptorSetStorageImages() < 27
-                    // RayGen's physical variant adds the pinned-medium SSBO to its existing five
-                    // read buffers (result/materials/pbr/dynamic-motion/light-tree).
-                    || limits.maxPerStageDescriptorStorageBuffers() < 6
-                    || limits.maxDescriptorSetStorageBuffers() < 6
+                    // Includes the pinned medium, sky-CDF metadata and two optional reservoir banks.
+                    || limits.maxPerStageDescriptorStorageBuffers() < 10
+                    || limits.maxDescriptorSetStorageBuffers() < 10
                     || limits.maxDescriptorSetSamplers() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
                     || limits.maxDescriptorSetSampledImages() < 5 + PLAYER_SKIN_DESCRIPTOR_COUNT
-                    || limits.maxPerStageDescriptorUniformBuffers() < 2
-                    || limits.maxDescriptorSetUniformBuffers() < 2
+                    || limits.maxPerStageDescriptorUniformBuffers() < 3
+                    || limits.maxDescriptorSetUniformBuffers() < 3
                     || limits.maxPushConstantsSize() < 128) {
                     throw new IllegalStateException("Prime atmosphere descriptor/push-constant limits unavailable");
                 }
@@ -1597,6 +1644,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 && this.atlasImageView == atlasImageView
                 && this.atlasSampler == atlasSampler
                 && this.fsr == fsr
+                && this.restirPipelineMode == RayTracingRestirShader.requestedMode()
+                && this.auditProfile == RayTracingCostAudit.requested()
                 && this.atmosphereRequested == RayTracingClientConfig.INSTANCE.primeAtmosphereEnabled.get()
                 && this.skyboxTextureEnabled == RayTracingClientConfig.INSTANCE.skyboxTextureEnabled.get()
                 // Geometry-owned BLAS/TLAS and GPU traversal metadata are replaced together by
@@ -2036,6 +2085,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.topLevelUpdatePending = false;
             }
             this.geometry = nextGeometry;
+            // Incremental publications can preserve resetRevision while changing emitter indices.
+            // Invalidate by publication, not only by revision equality.
+            this.restirHistoryReady = false;
             this.topLevelBuilt = false;
             // Only a new allocation or a shifted base initialized/cleared the dynamic ranges.
             // Both incremental writes and full static fallbacks with a stable base preserve
@@ -2389,7 +2441,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             float pbrWetnessStrength = config.pbrWetnessStrength.get().floatValue();
             float pbrParallaxDepth = config.pbrParallaxDepth.get().floatValue();
             int pbrParallaxFlags = config.pbrParallaxFlags() | (config.skyImportanceSamplingEnabled.get() ? 8 : 0)
-                | (config.skyCdfHardwareEnabled.get() ? 16 : 0);
+                | (config.skyCdfHardwareEnabled.get() ? 16 : 0)
+                | (config.nrdEntityEnabled.get() ? 32 : 0);
             boolean volumetricLightingEnabled = config.volumetricLightingEnabled.get();
             float volumetricLightingStrength = config.volumetricLightingStrength.get().floatValue();
             float volumetricFogDensity = config.volumetricFogDensity.get().floatValue();
@@ -2607,6 +2660,75 @@ import com.rtest.client.fsr.RtestFsrSettings;
             previousFsrCamera = currentCamera;
         }
 
+        private void prepareRestir() {
+            var config = RayTracingClientConfig.INSTANCE;
+            int requested = RayTracingRestirShader.requestedMode();
+            int settingsToken = requested | (config.restirCandidates.get() << 2)
+                | (config.restirSpatialNeighbors.get() << 7) | (config.restirGatherPrefixes.get() << 10);
+            long requiredBytes = RestirLayout.bytes(this.outputWidth, this.outputHeight, requested);
+            if (requiredBytes > this.restirStorageLimit) {
+                if (settingsToken != this.restirSettingsToken) {
+                    LOGGER.warn("ReSTIR disabled at {}x{}: per-bank storage {} exceeds device limit {}",
+                        this.outputWidth, this.outputHeight, requiredBytes, this.restirStorageLimit);
+                }
+                requested = 0;
+                requiredBytes = 16;
+            }
+            if (this.restirCurrentBuffer.size != requiredBytes) {
+                NativeBuffer previous = NativeBuffer.create(this.device, requiredBytes,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+                NativeBuffer current;
+                try {
+                    current = NativeBuffer.create(this.device, requiredBytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+                } catch (Throwable failure) {
+                    previous.close();
+                    throw failure;
+                }
+                NativeBuffer oldPrevious = this.restirPreviousBuffer;
+                NativeBuffer oldCurrent = this.restirCurrentBuffer;
+                this.restirPreviousBuffer = previous;
+                this.restirCurrentBuffer = current;
+                this.restirHistoryReady = false;
+                oldPrevious.close();
+                oldCurrent.close();
+            }
+            if (settingsToken != this.restirSettingsToken) {
+                this.restirHistoryReady = false;
+                this.fsr.requestReset();
+                this.restirSettingsToken = settingsToken;
+                LOGGER.info("ReSTIR mode={}, candidates={}, neighbors={}, gather_prefixes={}, bank_bytes={}",
+                    requested, config.restirCandidates.get(), config.restirSpatialNeighbors.get(),
+                    config.restirGatherPrefixes.get(), requiredBytes);
+            }
+            this.restirMode = requested;
+            if (this.restirPipelineMode == 0) return;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(2, stack);
+                infos.get(0).buffer(this.restirPreviousBuffer.buffer).offset(0).range(requiredBytes);
+                infos.get(1).buffer(this.restirCurrentBuffer.buffer).offset(0).range(requiredBytes);
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+                for (int index = 0; index < 2; index++) {
+                    writes.get(index).sType$Default().dstSet(this.descriptorSet).dstBinding(41 + index)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                        .pBufferInfo(VkDescriptorBufferInfo.create(infos.get(index).address(), 1));
+                }
+                VK10.vkUpdateDescriptorSets(this.vkDevice, writes, null);
+            }
+        }
+
+        private void uploadRestirParameters(RtestFsr3Upscaler.FrameToken token) {
+            if (this.restirPipelineMode == 0) return;
+            var config = RayTracingClientConfig.INSTANCE;
+            boolean valid = RestirLayout.historyUsable(this.restirHistoryReady, token.reset(),
+                this.restirRevision, this.geometry.revision(), this.restirFrame);
+            try (NativeBuffer.Mapped mapped = this.restirParamsBuffer.map()) {
+                mapped.buffer().putInt(0, this.restirMode).putInt(4, config.restirCandidates.get())
+                    .putInt(8, config.restirSpatialNeighbors.get()).putInt(12, config.restirGatherPrefixes.get())
+                    .putInt(16, valid ? 1 : 0).putInt(20, RestirLayout.stride(this.restirMode))
+                    .putInt(24, this.restirFrame).putInt(28, 0);
+            }
+        }
+
         private void updateTerrainTraversalCamera(RtestFsrCamera currentCamera) {
             if (!this.terrainTraversalEnabled || this.terrainTraversalParamsBuffer == null) {
                 return;
@@ -2792,6 +2914,32 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         formatGpuMs(gpuMilliseconds[3]),
                         gpuTimestampPeriodNs,
                         formatGpuMs(gpuMilliseconds[4]));
+                    String[] names = {"atmosphere", "terrain", "rt_inputs", "dynamic_blas", "tlas_sync",
+                        "rt_bind_sync", "trace", "rt_compute_sync", "denoise", "aerial_composite",
+                        "fsr_prepare", "fsr_inputs", "fsr_luma_pyramid", "fsr_shading_pyramid", "fsr_shading_change",
+                        "fsr_prepare_reactivity", "fsr_luma_instability", "fsr_accumulate", "fsr_rcas",
+                        "debug_offline", "post_display", "output_copy"};
+                    StringBuilder detail = new StringBuilder("RTest gpu_steps frame=")
+                        .append(this.pendingFrameGpuIndex).append(" extent=").append(outputWidth).append('x').append(outputHeight)
+                        .append(" mode=").append(restirMode);
+                    detail.append(" audit_profile=").append(this.auditProfile.key());
+                    double detailedTotal = 0.0;
+                    for (int i = 0; i < names.length; i++) {
+                        detailedTotal += gpuMilliseconds[5 + i];
+                        detail.append(' ').append(names[i]).append("_ms=").append(formatGpuMs(gpuMilliseconds[5 + i]));
+                    }
+                    detail.append(" command_total_ms=").append(formatGpuMs(detailedTotal));
+                    LOGGER.info("{}", detail);
+                    String[] postNames = {"setup", "exposure_focus", "dof_coc", "dof", "motion",
+                        "bloom_pyramid_blur", "grade_tonemap", "sharpen_dither"};
+                    StringBuilder postDetail = new StringBuilder("RTest gpu_post_steps frame=")
+                        .append(this.pendingFrameGpuIndex);
+                    for (int i = 0; i < postNames.length; i++) {
+                        postDetail.append(' ').append(postNames[i]).append("_ms=")
+                            .append(formatGpuMs(gpuMilliseconds[27 + i]));
+                    }
+                    LOGGER.info("{}", postDetail);
+
                 }
                 if (this.terrainTraversalEnabled && this.pendingFrameGpuIndex % 120 == 0) {
                     logTerrainTraversalStats(this.pendingFrameGpuIndex);
@@ -2891,9 +3039,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.lastMoonPhaseToken = nextMoonPhaseToken;
                 this.lastMoonIntensity = nextMoonIntensity;
             }
+            prepareRestir();
             RtestFsr3Upscaler.FrameToken fsrToken = this.fsr.beginFrame(
                 currentCamera, this.geometry.revision(), this.atlasImageView, this.atlasSampler);
             updateCamera(level, camera, fsrToken, currentCamera);
+            uploadRestirParameters(fsrToken);
             this.fsr.setSunDirection(
                 this.currentSunDirectionX, this.currentSunDirectionY, this.currentSunDirectionZ);
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -2924,6 +3074,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.pendingFrameGpuIndex = frameIndex;
                 int rebuiltDynamics = 0;
                 this.dynamicInstances.recordBlasBuildCommands(holder.dynamicBuilds.size());
+                this.dynamicInstances.recordBlasBuildBatches(holder.dynamicBuildBatches);
                 for (DynamicCachedBlas cached : holder.dynamicBuilds) {
                     if (cached.built) rebuiltDynamics++;
                     cached.built = true;
@@ -2937,13 +3088,19 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.topLevelUpdatePending = false;
                 this.dynamicInstances.historyResetSubmitted();
                 this.fsr.submitted(fsrToken);
+                NativeBuffer previousRestir = this.restirPreviousBuffer;
+                this.restirPreviousBuffer = this.restirCurrentBuffer;
+                this.restirCurrentBuffer = previousRestir;
+                this.restirHistoryReady = this.restirMode != 0;
+                this.restirRevision = this.geometry.revision();
+                this.restirFrame++;
                 if (frameIndex % 120 == 0) {
                     RayTracingDynamicInstances.Stats dynamicStats = this.dynamicInstances.stats();
                     LOGGER.info(
-                        "RTest dynamic RT scheduling: frame={}, TLAS updates={}, BLAS build commands={}, deferred BLAS updates={}, material uploads={}, metadata uploads={}",
+                        "RTest dynamic RT scheduling: frame={}, TLAS updates={}, BLAS build commands={}, deferred BLAS updates={}, material uploads={}, metadata uploads={}, BLAS build batches={}, material bytes={}",
                         frameIndex, dynamicStats.tlasUpdates(), dynamicStats.blasBuildCommands(),
                         dynamicStats.deferredBlasUpdates(), dynamicStats.materialUploads(),
-                        dynamicStats.metadataUploads());
+                        dynamicStats.metadataUploads(), dynamicStats.blasBuildBatches(), dynamicStats.materialBytes());
                 }
                 rendered = true;
                 return this.lastCenterPixel;
@@ -3111,6 +3268,48 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
         }
 
+        /** Independent BLAS builds share a command, but never a scratch interval. */
+        private int recordDynamicBlasBatches(VkCommandBuffer commandBuffer,
+                                             List<DynamicCachedBlas> builds) {
+            long alignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
+            long[] sizes = builds.stream().mapToLong(cached -> cached.bottomLevel.scratchSize).toArray();
+            BlasBuildBatch.Plan plan = BlasBuildBatch.plan(sizes, alignment);
+            long base = this.scratchBuffer.deviceAddress();
+            long alignedBase = VulkanAccelerationResources.alignDeviceAddress(base, alignment);
+            for (BlasBuildBatch.Batch batch : plan.batches()) {
+                // Keep native geometry/range pointers alive through the single batched call.
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    var infos = VkAccelerationStructureBuildGeometryInfoKHR.calloc(batch.count(), stack);
+                    PointerBuffer ranges = stack.mallocPointer(batch.count());
+                    for (int i = 0; i < batch.count(); i++) {
+                        AccelerationStructure blas = builds.get(batch.first() + i).bottomLevel;
+                        if (blas.closed || blas.storage.closed || blas.inputBuffer == null || blas.inputBuffer.closed)
+                            throw new IllegalStateException("Attempted to batch a closed BLAS");
+                        long scratchAddress = Math.addExact(alignedBase, batch.offsets()[i]);
+                        long inputAddress = blas.inputBuffer.deviceAddress();
+                        VulkanAccelerationResources.validateBuildArguments(false, inputAddress,
+                            blas.inputBuffer.size, blas.primitiveCount, base, scratchAddress,
+                            this.scratchBuffer.size, blas.scratchSize, alignment,
+                            blas.storage.size, blas.handle, false);
+                        infos.get(i).set(blas.buildInfo(stack, inputAddress, scratchAddress, false).get(0));
+                        var range = VkAccelerationStructureBuildRangeInfoKHR.calloc(stack)
+                            .primitiveCount(blas.primitiveCount);
+                        ranges.put(i, range.address());
+                    }
+                    KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(commandBuffer, infos, ranges);
+                    // Next batch/TLAS may reuse this arena; both reads and writes must retire.
+                    barrier(commandBuffer, stack,
+                        KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                        KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                            | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                        KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                        KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                            | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+                }
+            }
+            return plan.batches().size();
+        }
+
         /** Vulkan's AS scratch alignment applies to the device address, not just buffer size. */
         private long scratchDeviceAddress() {
             long alignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
@@ -3199,7 +3398,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     barrier(commandBuffer, stack,
                         VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_ACCESS_HOST_WRITE_BIT,
                         KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                        KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                        VK10.VK_ACCESS_SHADER_READ_BIT);
                     try (MemoryStack tlasStack = MemoryStack.stackPush()) {
                         VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevelBuildInfo(
                         tlasStack, topLevelUpdatePending);
@@ -3213,7 +3412,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                         KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                         KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                        VK12.VK_ACCESS_SHADER_READ_BIT);
+                        KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                        | VK12.VK_ACCESS_SHADER_READ_BIT);
                 }
                 int endResult = VK10.vkEndCommandBuffer(commandBuffer);
                 commandBufferEnded = true;
@@ -3297,7 +3497,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK10.VK_ACCESS_SHADER_WRITE_BIT,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                VK10.VK_ACCESS_SHADER_READ_BIT);
         }
 
         private void recordTerrainHiZ(VkCommandBuffer commandBuffer, MemoryStack stack) {
@@ -3391,6 +3591,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (gpuTimestampsAvailable) {
                 VK10.vkCmdResetQueryPool(commandBuffer, gpuTimestampQueryPool, 0, GPU_TIMESTAMP_COUNT);
             }
+            writeGpuTimestamp(commandBuffer, 8, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             writeGpuTimestamp(commandBuffer, 6, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             if (this.atmosphere != null) {
                 this.pendingAtmosphereToken = this.atmosphere.recordSky(commandBuffer,
@@ -3401,6 +3602,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 }
             }
             writeGpuTimestamp(commandBuffer, 7, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            writeGpuTimestamp(commandBuffer, 9, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             boolean terrainHistoryUsable = this.terrainTraversalEnabled && this.terrainTraversalPrimed
                 && !fsrToken.reset() && !fsrToken.cameraCut();
             boolean terrainTraversalMaskReset = this.terrainTraversalEnabled
@@ -3417,20 +3619,20 @@ import com.rtest.client.fsr.RtestFsrSettings;
             if (terrainHistoryUsable) {
                 recordTerrainTraversal(commandBuffer, stack);
             }
+            writeGpuTimestamp(commandBuffer, 10, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             this.fsr.prepareForRayTracing(commandBuffer);
+            writeGpuTimestamp(commandBuffer, 11, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             List<DynamicCachedBlas> dynamicBuilds = new ArrayList<>();
             barrier(commandBuffer, stack, VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_ACCESS_HOST_WRITE_BIT,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                     | KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                 KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK10.VK_ACCESS_SHADER_READ_BIT);
-            // No outer '!built' gate: an already-built BLAS with new animation vertices also runs.
             for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
-                if (cached.built && !cached.pendingUpdate) continue;
-                // BUILD into the existing, correctly-sized AS storage. This avoids UPDATE's
-                // strict source-geometry identity contract while retaining stable AS addresses.
-                recordBlas(commandBuffer, stack, cached.bottomLevel, false);
-                dynamicBuilds.add(cached);
+                if (!cached.built || cached.pendingUpdate) dynamicBuilds.add(cached);
             }
+            int dynamicBuildBatches = recordDynamicBlasBatches(commandBuffer, dynamicBuilds);
+
+            writeGpuTimestamp(commandBuffer, 12, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             boolean tlasBuildRecorded = this.topLevelBuilt && (this.topLevelUpdatePending
                 || terrainHistoryUsable || terrainTraversalMaskReset);
             if (tlasBuildRecorded) {
@@ -3438,7 +3640,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VK10.VK_PIPELINE_STAGE_HOST_BIT,
                     VK10.VK_ACCESS_HOST_WRITE_BIT,
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                    VK10.VK_ACCESS_SHADER_READ_BIT);
                 try (MemoryStack tlasStack = MemoryStack.stackPush()) {
                     VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasInfo = topLevelBuildInfo(
                         tlasStack, true);
@@ -3452,7 +3654,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                     KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                     KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                    VK12.VK_ACCESS_SHADER_READ_BIT);
+                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                        | VK12.VK_ACCESS_SHADER_READ_BIT);
             } else if (!dynamicBuilds.isEmpty()) {
                 // An in-place BLAS rebuild can happen without a TLAS UPDATE when only animated
                 // vertices changed. It still needs an explicit build-write -> trace-read dependency.
@@ -3460,11 +3663,22 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                     KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                     KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                    VK12.VK_ACCESS_SHADER_READ_BIT);
+                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                        | VK12.VK_ACCESS_SHADER_READ_BIT);
             }
             writeGpuTimestamp(commandBuffer, 5,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
 
+            writeGpuTimestamp(commandBuffer, 13, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+            // Previous-frame reservoirs were written by a prior RT dispatch on this queue.
+            // Distinct read/write buffers also prohibit invocation races during spatial reuse.
+            if (this.restirMode != 0) {
+                barrier(commandBuffer, stack,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK10.VK_ACCESS_SHADER_WRITE_BIT,
+                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT);
+            }
             VK10.vkCmdBindPipeline(commandBuffer, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VK10.vkCmdBindDescriptorSets(
                 commandBuffer,
@@ -3482,10 +3696,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
             VkStridedDeviceAddressRegionKHR hit = VkStridedDeviceAddressRegionKHR.calloc(stack)
                 .deviceAddress(sbtAddress + 4L * sbtStride).stride(sbtStride).size(3L * sbtStride);
             VkStridedDeviceAddressRegionKHR callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
+            writeGpuTimestamp(commandBuffer, 14, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             writeGpuTimestamp(commandBuffer, 0, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, outputWidth, outputHeight, 1);
             writeGpuTimestamp(commandBuffer, 1, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-            this.fsr.recordAfterRayTracing(commandBuffer, fsrToken, this.aerialPerspectiveEnabled);
+            writeGpuTimestamp(commandBuffer, 15, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            this.fsr.recordAfterRayTracing(commandBuffer, fsrToken, this.aerialPerspectiveEnabled,
+                query -> writeGpuTimestamp(commandBuffer, query, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT));
             this.terrainTraversalPrimed = this.terrainTraversalEnabled;
             writeGpuTimestamp(commandBuffer, 2, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             imageBarrier(commandBuffer, stack,
@@ -3520,6 +3737,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             VK10.vkCmdCopyImage(commandBuffer, this.fsr.displayImage(), VK10.VK_IMAGE_LAYOUT_GENERAL,
                     targetImage, VK10.VK_IMAGE_LAYOUT_GENERAL, imageCopy);
             writeGpuTimestamp(commandBuffer, 3, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT);
+            writeGpuTimestamp(commandBuffer, 30, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             imageBarrier(commandBuffer, stack,
                 KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
                 KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
@@ -3532,7 +3750,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             int endResult = VK10.vkEndCommandBuffer(commandBuffer);
             commandBufferEnded = true;
             VulkanUtils.crashIfFailure(device, endResult, "Failed to end ray-tracing command buffer");
-            return new VkCommandBufferHolder(commandBuffer, dynamicBuilds, tlasBuildRecorded);
+            return new VkCommandBufferHolder(commandBuffer, dynamicBuilds, tlasBuildRecorded, dynamicBuildBatches);
             } catch (Throwable throwable) {
                 if (!commandBufferEnded) {
                     // The pass owns this direct command buffer, not VulkanCommandEncoder's
@@ -3609,13 +3827,23 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 LOGGER.debug("RTest GPU timestamp query unavailable: result={}", result);
                 return null;
             }
-            double[] milliseconds = new double[5];
+            double[] milliseconds = new double[35];
             milliseconds[0] = (values.get(1) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[1] = (values.get(2) - values.get(1)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[2] = (values.get(3) - values.get(0)) * gpuTimestampPeriodNs / 1_000_000.0;
             milliseconds[3] = this.terrainTraversalEnabled
                 ? (values.get(5) - values.get(4)) * gpuTimestampPeriodNs / 1_000_000.0 : 0.0;
             milliseconds[4] = (values.get(7) - values.get(6)) * gpuTimestampPeriodNs / 1_000_000.0;
+            for (int i = 0; i < 22; i++) {
+                milliseconds[5 + i] = (values.get(9 + i) - values.get(8 + i))
+                    * gpuTimestampPeriodNs / 1_000_000.0;
+            }
+            // Post milestones are nested inside the post/display interval, not additive to it.
+            milliseconds[27] = (values.get(31) - values.get(28)) * gpuTimestampPeriodNs / 1_000_000.0;
+            for (int i = 0; i < 7; i++) {
+                milliseconds[28 + i] = (values.get(32 + i) - values.get(31 + i))
+                    * gpuTimestampPeriodNs / 1_000_000.0;
+            }
             return milliseconds;
         }
 
@@ -3741,6 +3969,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             failure = closeAndCapture(outputBuffer, failure);
             failure = closeAndCapture(atmosphereCameraBuffer, failure);
             failure = closeAndCapture(atmosphere, failure);
+            failure = closeAndCapture(restirPreviousBuffer, failure);
+            failure = closeAndCapture(restirCurrentBuffer, failure);
+            failure = closeAndCapture(restirParamsBuffer, failure);
             failure = closeAndCapture(cameraBuffer, failure);
             failure = closeAndCapture(materialBuffer, failure);
             failure = closeAndCapture(gpuLightTreeBuilder, failure);
@@ -3757,7 +3988,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         }
 
     private record VkCommandBufferHolder(org.lwjgl.vulkan.VkCommandBuffer commandBuffer,
-                                         List<DynamicCachedBlas> dynamicBuilds, boolean tlasBuildRecorded) {
+                                         List<DynamicCachedBlas> dynamicBuilds, boolean tlasBuildRecorded, int dynamicBuildBatches) {
     }
 
     private static String loadShaderResource(String path) {
@@ -3914,6 +4145,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             ByteBuffer entryPoint = MemoryUtil.memASCII("main", true);
             try {
                 Shaderc.shaderc_compile_options_set_source_language(options, Shaderc.shaderc_source_language_glsl);
+                Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
                 Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
                 result = Shaderc.shaderc_compile_into_spv(compiler, sourceBytes, kind, sourceName, entryPoint, options);
                 int status = Shaderc.shaderc_result_get_compilation_status(result);

@@ -1,0 +1,162 @@
+/* Standalone Vulkan compute/readback regression, no Minecraft or RT extension required.
+ * Usage: gpu_light_tree_smoke shader.spv tree.seed tree.expected
+ * Generate data: ./gradlew gpuLightTreeMathTest -Pgpu_tree_dump=/tmp/light-tree
+ */
+#include <vulkan/vulkan.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+#include <stdatomic.h>
+#define CHECK(call) do { VkResult result=(call); if(result!=VK_SUCCESS) { fprintf(stderr,"%s: %d\n",#call,result); exit(1); } } while(0)
+static void *read_file(const char *path,size_t *size) {
+    FILE *f=fopen(path,"rb"); if(!f){perror(path);exit(1);}
+    if(fseek(f,0,SEEK_END))exit(1);
+    long length=ftell(f); if(length<=0 || length%4)exit(1);
+    *size=(size_t)length; rewind(f); void *data=malloc(*size); if(!data)exit(1);
+    if(fread(data,1,*size,f)!=*size)exit(1);
+    fclose(f); return data;
+}
+static void dispatch(VkCommandBuffer cmd,VkPipelineLayout layout,uint32_t first,uint32_t count,uint32_t fused) {
+    uint32_t push[]={first,count,fused};vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,12,push);
+    vkCmdDispatch(cmd,(count+127)/128,1,1);
+}
+static int compare_double(const void *a,const void *b) { double x=*(const double*)a,y=*(const double*)b; return (x>y)-(x<y); }
+static double now_ms(void) { struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1000.0+t.tv_nsec/1e6; }
+static void write_probe(void *mapped,size_t bytes,uint32_t flags) {
+    size_t n=4096;if(bytes<n*64)return;
+    uint32_t *packed=calloc(n*16,4);volatile uint32_t *words=mapped;
+    for(size_t i=0;i<n;i++) { packed[i*16]=packed[i*16+5]=packed[i*16+10]=0x3f800000;
+        packed[i*16+12]=0x3f000000u | (uint32_t)i;packed[i*16+13]=0x01000000;packed[i*16+14]=0xabcdef00;packed[i*16+15]=1; }
+    double rmw[31],bulk[31];
+    for(int pass=-5;pass<31;pass++) {
+        double t=now_ms();
+        for(size_t i=0;i<n;i++) {
+            size_t b=i*16;
+            for(size_t a=0;a<12;a++)words[b+a]=packed[b+a];
+            words[b+12]=(words[b+12]&0xff000000u)|((uint32_t)i&0x00ffffffu);
+            words[b+12]=(0x3fu<<24)|(words[b+12]&0x00ffffffu);
+            words[b+13]=(words[b+13]&0xff000000u);
+            words[b+13]=(1u<<24)|(words[b+13]&0x00ffffffu);
+            words[b+14]=0xabcdef00;words[b+15]=1;
+        }
+        atomic_thread_fence(memory_order_seq_cst);
+        double a=now_ms()-t;t=now_ms();memcpy(mapped,packed,n*64);
+        atomic_thread_fence(memory_order_seq_cst);
+        double b=now_ms()-t;
+        if(memcmp(mapped,packed,n*64)) {fprintf(stderr,"writer probe mismatch\n");exit(1);}
+        if(pass>=0){rmw[pass]=a;bulk[pass]=b;}
+    }
+    qsort(rmw,31,sizeof(double),compare_double);qsort(bulk,31,sizeof(double),compare_double);
+    printf("Instance writer probe: n=%zu memory_flags=0x%x rmw_median_ms=%.6f bulk_median_ms=%.6f\n",n,flags,rmw[15],bulk[15]);free(packed);
+}
+int main(int argc,char **argv) {
+    if(argc!=4){fprintf(stderr,"Usage: %s shader.spv tree.seed tree.expected\n",argv[0]);return 1;}
+    size_t code_bytes,seed_bytes,expected_bytes;
+    uint32_t *code=read_file(argv[1],&code_bytes),*seed=read_file(argv[2],&seed_bytes),*expected=read_file(argv[3],&expected_bytes);
+    if(seed_bytes!=expected_bytes || seed_bytes<32 || seed[1]<1024){fprintf(stderr,"bad seed\n");return 1;}
+    VkApplicationInfo app={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="RTest light tree smoke",.apiVersion=VK_API_VERSION_1_2};
+    VkInstanceCreateInfo ici={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app};
+    VkInstance instance;CHECK(vkCreateInstance(&ici,NULL,&instance));
+    uint32_t count=0;CHECK(vkEnumeratePhysicalDevices(instance,&count,NULL));if(!count)return 1;
+    VkPhysicalDevice *devices=malloc(count*sizeof(*devices));CHECK(vkEnumeratePhysicalDevices(instance,&count,devices));
+    VkPhysicalDevice physical=VK_NULL_HANDLE;uint32_t family=0,timestamp_bits=0;
+    for(uint32_t d=0;d<count && !physical;d++) {
+        uint32_t nc=0;vkGetPhysicalDeviceQueueFamilyProperties(devices[d],&nc,NULL);
+        VkQueueFamilyProperties *properties=malloc(nc*sizeof(*properties));vkGetPhysicalDeviceQueueFamilyProperties(devices[d],&nc,properties);
+        for(uint32_t q=0;q<nc;q++)if((properties[q].queueFlags & VK_QUEUE_COMPUTE_BIT) && properties[q].timestampValidBits){physical=devices[d];family=q;timestamp_bits=properties[q].timestampValidBits;break;}
+        free(properties);
+    }
+    free(devices);if(!physical)return 1;
+    VkPhysicalDeviceProperties props;vkGetPhysicalDeviceProperties(physical,&props);
+    float priority=1;
+    VkDeviceQueueCreateInfo qci={.sType=VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,.queueFamilyIndex=family,.queueCount=1,.pQueuePriorities=&priority};
+    VkDeviceCreateInfo dci={.sType=VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,.queueCreateInfoCount=1,.pQueueCreateInfos=&qci};
+    VkDevice device;CHECK(vkCreateDevice(physical,&dci,NULL,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
+    VkBufferCreateInfo bci={.sType=VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,.size=seed_bytes,.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,.sharingMode=VK_SHARING_MODE_EXCLUSIVE};
+    VkBuffer buffer;CHECK(vkCreateBuffer(device,&bci,NULL,&buffer));VkMemoryRequirements req;vkGetBufferMemoryRequirements(device,buffer,&req);
+    VkPhysicalDeviceMemoryProperties memory;vkGetPhysicalDeviceMemoryProperties(physical,&memory);
+    uint32_t type=UINT32_MAX;
+    for(uint32_t i=0;i<memory.memoryTypeCount;i++)if((req.memoryTypeBits & (1u<<i)) &&
+        (memory.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)){type=i;break;}
+    for(uint32_t i=0;i<memory.memoryTypeCount;i++)if((req.memoryTypeBits & (1u<<i)) &&
+        (memory.memoryTypes[i].propertyFlags & 7u)==7u){type=i;break;}
+    if(type==UINT32_MAX){fprintf(stderr,"No coherent host-visible memory\n");return 1;}
+    VkMemoryAllocateInfo mai={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=req.size,.memoryTypeIndex=type};
+    VkDeviceMemory allocation;CHECK(vkAllocateMemory(device,&mai,NULL,&allocation));CHECK(vkBindBufferMemory(device,buffer,allocation,0));
+    void *mapped;CHECK(vkMapMemory(device,allocation,0,req.size,0,&mapped));write_probe(mapped,seed_bytes,memory.memoryTypes[type].propertyFlags);
+    memset(mapped,0xcd,seed_bytes);
+    memcpy(mapped,seed,32);
+    memcpy((uint32_t*)mapped+seed[4],seed+seed[4],(seed[7]-seed[4])*4);
+    VkShaderModuleCreateInfo smi={.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,.codeSize=code_bytes,.pCode=code};
+    VkShaderModule shader;CHECK(vkCreateShaderModule(device,&smi,NULL,&shader));
+    VkDescriptorSetLayoutBinding binding={.binding=0,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.descriptorCount=1,.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT};
+    VkDescriptorSetLayoutCreateInfo slci={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,.bindingCount=1,.pBindings=&binding};
+    VkDescriptorSetLayout set_layout;CHECK(vkCreateDescriptorSetLayout(device,&slci,NULL,&set_layout));
+    VkDescriptorPoolSize pool_size={.type=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.descriptorCount=1};
+    VkDescriptorPoolCreateInfo pci={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=1,.poolSizeCount=1,.pPoolSizes=&pool_size};
+    VkDescriptorPool pool;CHECK(vkCreateDescriptorPool(device,&pci,NULL,&pool));
+    VkDescriptorSetAllocateInfo sai={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,.descriptorPool=pool,.descriptorSetCount=1,.pSetLayouts=&set_layout};
+    VkDescriptorSet set;CHECK(vkAllocateDescriptorSets(device,&sai,&set));
+    VkDescriptorBufferInfo dbi={.buffer=buffer,.offset=0,.range=seed_bytes};
+    VkWriteDescriptorSet write={.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstSet=set,.dstBinding=0,.descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&dbi};
+    vkUpdateDescriptorSets(device,1,&write,0,NULL);
+    VkPushConstantRange push={.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT,.offset=0,.size=12};
+    VkPipelineLayoutCreateInfo plci={.sType=VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,.setLayoutCount=1,.pSetLayouts=&set_layout,.pushConstantRangeCount=1,.pPushConstantRanges=&push};
+    VkPipelineLayout layout;CHECK(vkCreatePipelineLayout(device,&plci,NULL,&layout));
+    VkComputePipelineCreateInfo cpci={.sType=VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,.layout=layout,
+        .stage={.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,.stage=VK_SHADER_STAGE_COMPUTE_BIT,.module=shader,.pName="main"}};
+    VkPipeline pipeline;CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&cpci,NULL,&pipeline));
+    VkCommandPoolCreateInfo cpi={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=family};
+    VkCommandPool command_pool;CHECK(vkCreateCommandPool(device,&cpi,NULL,&command_pool));
+    VkCommandBufferAllocateInfo cai={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=command_pool,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};
+    VkCommandBuffer cmd;CHECK(vkAllocateCommandBuffers(device,&cai,&cmd));
+    VkQueryPool query_pool;
+    VkQueryPoolCreateInfo qpci={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=2};
+    CHECK(vkCreateQueryPool(device,&qpci,NULL,&query_pool));
+    VkCommandBufferBeginInfo begin={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,.flags=0};CHECK(vkBeginCommandBuffer(cmd,&begin));
+    vkCmdResetQueryPool(cmd,query_pool,0,2);
+    vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,query_pool,0);
+    VkMemoryBarrier barrier={.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT};
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&set,0,NULL);
+    uint32_t n=seed[1];dispatch(cmd,layout,n-1,n,0);
+    uint32_t bit=1;while(bit<=(n-1)/2)bit*=2;
+    barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+    for(int64_t first=bit-1;first>=255;first=(first-1)/2) {
+        vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
+        uint32_t rows=(uint32_t)first+1,available=n-1-(uint32_t)first;
+        dispatch(cmd,layout,(uint32_t)first,rows<available?rows:available,0);
+    }
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&barrier,0,NULL,0,NULL);
+    dispatch(cmd,layout,127,128,1);
+    barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&barrier,0,NULL,0,NULL);
+    vkCmdWriteTimestamp(cmd,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,query_pool,1);
+    CHECK(vkEndCommandBuffer(cmd));
+    VkFenceCreateInfo fci={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VkFence fence;CHECK(vkCreateFence(device,&fci,NULL,&fence));
+    VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cmd};
+    double timings[31];
+    for(int iteration=-5;iteration<31;iteration++) {
+        CHECK(vkResetFences(device,1,&fence));
+        CHECK(vkQueueSubmit(queue,1,&submit,fence));
+        CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,10000000000ULL));
+        uint64_t timestamps[2];
+        CHECK(vkGetQueryPoolResults(device,query_pool,0,2,sizeof(timestamps),timestamps,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT));
+        uint64_t mask=timestamp_bits==64?UINT64_MAX:(1ULL<<timestamp_bits)-1;
+        if(iteration>=0)timings[iteration]=((timestamps[1]-timestamps[0]) & mask)*props.limits.timestampPeriod/1e6;
+    }
+    qsort(timings,31,sizeof(double),compare_double);
+    printf("GPU build timestamp: samples=31 warmup=5 median_ms=%.6f min_ms=%.6f max_ms=%.6f\n",timings[15],timings[0],timings[30]);
+    size_t mismatches=0;uint32_t *actual=mapped;
+    for(size_t i=0;i<seed_bytes/4;i++)if(actual[i]!=expected[i]){if(mismatches<8)fprintf(stderr,"word %zu expected %08x got %08x\n",i,expected[i],actual[i]);mismatches++;}
+    printf("GPU light tree on %s: emitters=%u nodes=%u compared_words=%zu mismatches=%zu\n",props.deviceName,n,seed[0],seed_bytes/4,mismatches);
+    vkDestroyQueryPool(device,query_pool,NULL);
+    vkDestroyFence(device,fence,NULL);vkDestroyCommandPool(device,command_pool,NULL);vkDestroyPipeline(device,pipeline,NULL);
+    vkDestroyPipelineLayout(device,layout,NULL);vkDestroyDescriptorPool(device,pool,NULL);vkDestroyDescriptorSetLayout(device,set_layout,NULL);
+    vkDestroyShaderModule(device,shader,NULL);vkUnmapMemory(device,allocation);vkDestroyBuffer(device,buffer,NULL);vkFreeMemory(device,allocation,NULL);
+    vkDestroyDevice(device,NULL);vkDestroyInstance(instance,NULL);free(code);free(seed);free(expected);
+    return mismatches?1:0;
+}

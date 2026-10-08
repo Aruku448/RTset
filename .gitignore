@@ -18,6 +18,9 @@ out/
 run/
 logs/
 
+# Local profiling captures, diagnostic builds and instance backups
+tmp/
+
 # OS files
 .DS_Store
 Thumbs.db

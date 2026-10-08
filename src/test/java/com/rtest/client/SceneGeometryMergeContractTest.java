@@ -57,7 +57,7 @@ public final class SceneGeometryMergeContractTest {
         require(probeSource, "TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS = 2_000_000_000L;");
         require(probeSource, "pendingDirtySections.size() >= SECTIONS_PER_TRANSACTION");
         require(probeSource, "notePendingDirtyEvents();");
-        require(probeSource, "MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 10_000_000;");
+        require(probeSource, "MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY = 50_000_000;");
         require(probeSource, "if (renderGeometry.triangleCount() > MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY)");
         require(probeSource, "if (smokeGeometry.triangleCount() <= MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY)");
         require(probeSource,

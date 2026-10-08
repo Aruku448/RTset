@@ -39,7 +39,7 @@ public final class RtActivationContractTest {
         require(probe, "RtActivationFreeze.mayPublishFullSnapshot(");
         require(probe, "RtActivationFreeze.holdIncrementalUpdates(activationFreeze, smokeGeometry != null)");
         require(probe, "activationFreeze = false;");
-        require(config, ".define(\"terrainLodEnabled\", true);");
+        require(config, ".define(\"terrainLodEnabled\", false);");
 
         int renderFailure = probe.indexOf("public static void renderRtAfterHandCapture()");
         int renderEnd = probe.indexOf("/** Consumes model vertices", renderFailure);

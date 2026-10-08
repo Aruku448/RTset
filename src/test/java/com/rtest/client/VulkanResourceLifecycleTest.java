@@ -123,7 +123,8 @@ public final class VulkanResourceLifecycleTest {
         require(pass, "Attempted to build a closed acceleration structure resource");
         require(dynamicInstances, "DynamicCachedBlas replace(VulkanDevice device");
         require(dynamicInstances, "dynamicBlasCache.replace(device, key, dynamicMesh)");
-        require(dynamicInstances, "DYNAMIC_BLAS_UPDATE_INTERVAL_FRAMES = 4");
+        // Multi-frame animation throttling was reverted; changed geometry updates every frame.
+        require(dynamicInstances, "DYNAMIC_BLAS_UPDATE_INTERVAL_FRAMES = 1");
         require(dynamicInstances, "shouldReplaceDynamicBlas(cached, dynamicFrameNumber)");
         reject(pass, "cached.updateVertices(mesh.vertices())");
         String dispatch = pass.substring(pass.indexOf("int dispatch("), pass.indexOf("/** Replays the last completed FSR image"));

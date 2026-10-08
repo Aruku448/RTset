@@ -27,6 +27,12 @@ public final class NrdMotionShaderContractTest {
         require(shader, "settings.previousWorldToClip");
         require(shader, "imageStore(nrdMotion, pixel, vec4(screenMotion, previousViewZ - currentViewZ, 0.0));");
         require(shader, "imageStore(material, pixel, vec4(hit ? diffuseFactor : vec3(1.0), hit ? roughness : -1.0));");
+        require(shader, "const uint BYPASS_MODEL_HISTORY = 512u;");
+        require(shader, "bypassModelHistory ? SKY_VIEW_Z : currentViewZ");
+        require(shader, "currentViewZ >= SKY_VIEW_Z ? 0.0 : FSR_NEAR_PLANE / currentViewZ");
+        require(RayTracingShaders.RAYGEN_SHADER,
+            "pathContainsDynamicModel = pathContainsDynamicModel || pathDynamicSlot != 0xffffffffu;");
+        require(RayTracingShaders.RAYGEN_SHADER, "(pathContainsDynamicModel && (uint(camera.pbrParallaxSettings.w + 0.5) & 32u) == 0u ? 512u : 0u)");
 
         long compiler = Shaderc.shaderc_compiler_initialize();
         long options = Shaderc.shaderc_compile_options_initialize();

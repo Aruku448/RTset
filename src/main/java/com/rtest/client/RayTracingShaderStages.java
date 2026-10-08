@@ -113,6 +113,7 @@ final class RayTracingShaderStages {
                 vec2 uv = uv01.xy * (1.0 - barycentrics.x - barycentrics.y)
                     + uv01.zw * barycentrics.x
                     + uv2.xy * barycentrics.y;
+                if (uv2.z > 1.5 && uv2.z < 2.5) uv = fract(uv);
                 uint pbrMapIndex = uint(max(lighting.w, 0.0) + 0.5);
                 uv = pbrParallaxUv(pbrMapIndex, uv, normal, lighting.x, lighting.z,
                     gl_WorldRayDirectionEXT, uv2.w > 1.5);
@@ -156,6 +157,7 @@ final class RayTracingShaderStages {
                     : (uv2.z > 0.5
                         ? texelFetch(blockAtlas, materialCutoutTexel(uv, textureSize(blockAtlas, 0)), 0)
                         : textureLod(blockAtlas, uv, 0.0));
+                if (uv2.z > 2.5) textureSample = vec4(vec3(1.0), textureSample.r);
                 vec3 baseColor = uv2.w > 0.5
                     ? materialLinearSrgbToWorking(materialDecodeSrgb(textureSample.rgb)
                         * materialDecodeSrgb(tint.rgb))
@@ -187,7 +189,8 @@ final class RayTracingShaderStages {
                 }
                 // The normal payload's otherwise-unused w component carries the material's optical
                 // dispersion scale without changing the established seven-vec4 material ABI.
-                pathNormal = vec4(normal, clamp(lighting.y, 0.0, 1.0));
+                pathNormal = vec4(pbrOrientSurfaceNormal(geometricNormal, normal, gl_WorldRayDirectionEXT),
+                    clamp(lighting.y, 0.0, 1.0));
                 pathBaseColorRoughness = vec4(baseColor, clamp(surface.x, 0.0, 1.0));
                 bool transmissiveMaterial = surface.w > 1.0 || optical.w > 1.001;
                 float materialF0 = surface.w > 1.0 ? surface.w - 1.0 : max(surface.w, 0.04);
@@ -196,7 +199,7 @@ final class RayTracingShaderStages {
                     // Negative opaque values carry vegetation; positive values remain dielectric sides.
                     transmissiveMaterial ? transmissionSide : -materials.entries[materialIndex + 1u].w);
                 // x = IOR; yzw = per-channel Beer-Lambert absorption coefficients.
-                pathOpticalLighting = vec4(optical.w, optical.xyz);
+                pathOpticalLighting = vec4(optical.w, uv2.w > 1.5 ? vec3(0.0) : optical.xyz);
                 pathEmitterIndex = triangleIndex < lightData.values[5]
                     ? uint(lightData.values[lightData.values[6] + triangleIndex]) : 0xffffffffu;
             }
@@ -259,18 +262,32 @@ final class RayTracingShaderStages {
                 vec4 uv2 = materials.entries[materialIndex + 3u];
                 // Ordinary opaque/transmissive hits have no alpha coverage work here.
                 // Closest-hit owns their shading; preserve cutout point sampling below.
-                if (uv2.z <= 0.5) return;
+                if (uv2.z <= 0.5) {
+                    vec4 surface = materials.entries[materialIndex + 5u];
+                    if (uv2.w > 1.5 && surface.w > 1.0) {
+                        vec4 uv01 = materials.entries[materialIndex + 2u];
+                        vec4 optical = materials.entries[materialIndex + 6u];
+                        vec2 uv = uv01.xy * (1.0 - barycentrics.x - barycentrics.y)
+                            + uv01.zw * barycentrics.x + uv2.xy * barycentrics.y;
+                        float alpha = samplePlayerSkin(uv, optical.x).a
+                            * materials.entries[materialIndex].a;
+                        if (alpha <= 0.001) ignoreIntersectionEXT;
+                    }
+                    return;
+                }
                 vec4 uv01 = materials.entries[materialIndex + 2u];
                 vec4 optical = materials.entries[materialIndex + 6u];
                 vec2 uv = uv01.xy * (1.0 - barycentrics.x - barycentrics.y)
                     + uv01.zw * barycentrics.x
                     + uv2.xy * barycentrics.y;
+                if (uv2.z > 1.5 && uv2.z < 2.5) uv = fract(uv);
                 vec4 textureSample = uv2.w > 1.5
                     ? (uv2.z > 0.5 ? samplePlayerSkinCutout(uv, optical.x)
                         : samplePlayerSkin(uv, optical.x))
                     : (uv2.z > 0.5
                         ? texelFetch(blockAtlas, materialCutoutTexel(uv, textureSize(blockAtlas, 0)), 0)
                         : textureLod(blockAtlas, uv, 0.0));
+                if (uv2.z > 2.5) textureSample = vec4(vec3(1.0), textureSample.r);
                 if (uv2.z > 0.5 && textureSample.a < ALPHA_CUTOFF) {
                     ignoreIntersectionEXT;
                 }
@@ -359,12 +376,14 @@ final class RayTracingShaderStages {
                 vec2 uv = uv01.xy * (1.0 - barycentrics.x - barycentrics.y)
                     + uv01.zw * barycentrics.x
                     + uv2.xy * barycentrics.y;
+                if (uv2.z > 1.5 && uv2.z < 2.5) uv = fract(uv);
                 vec4 textureSample = uv2.w > 1.5
                     ? (uv2.z > 0.5 ? samplePlayerSkinCutout(uv, optical.x)
                         : samplePlayerSkin(uv, optical.x))
                     : (uv2.z > 0.5
                         ? texelFetch(blockAtlas, materialCutoutTexel(uv, textureSize(blockAtlas, 0)), 0)
                         : textureLod(blockAtlas, uv, 0.0));
+                if (uv2.z > 2.5) textureSample = vec4(vec3(1.0), textureSample.r);
                 if (uv2.z > 0.5 && textureSample.a < ALPHA_CUTOFF) {
                     ignoreIntersectionEXT;
                 }
@@ -378,7 +397,8 @@ final class RayTracingShaderStages {
                 // opaque hit is accepted by Shadow Closest Hit, which writes vec3(0). Applying
                 // half the absorption per interface approximates the two faces of a thin pane.
                 if (transmissive) {
-                    vec3 baseColor = uv2.w > 0.5
+                    if (uv2.z > 2.5) textureSample = vec4(vec3(1.0), textureSample.r);
+                vec3 baseColor = uv2.w > 0.5
                         ? materialLinearSrgbToWorking(materialDecodeSrgb(textureSample.rgb)
                             * materialDecodeSrgb(tint.rgb))
                         : tint.rgb;
@@ -387,7 +407,7 @@ final class RayTracingShaderStages {
                     vec3 transmissionFilter = materialTransmissionColor(
                         baseColor, transmissionOpacity, optical.w);
                     transmissionFilter = clamp(transmissionFilter, vec3(0.01), vec3(1.0));
-                    transmissionFilter *= exp(-max(optical.xyz, vec3(0.0)) * 0.5);
+                    transmissionFilter *= exp(-max(uv2.w > 1.5 ? vec3(0.0) : optical.xyz, vec3(0.0)) * 0.5);
                     shadowTransmittance *= transmissionFilter;
                     ignoreIntersectionEXT;
                 }

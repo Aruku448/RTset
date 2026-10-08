@@ -67,6 +67,7 @@ public final class BlockEntityModelGeometryAdapter {
     private static final Map<PoseStack.Pose, Owner> submitOwners =
         Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<Long, Snapshot> pending = new ConcurrentHashMap<>();
+    private static final Map<Long, Integer> textChunks = new java.util.HashMap<>();
     private static final Set<String> reportedRejectedModels = ConcurrentHashMap.newKeySet();
     private static volatile RayTracingPbrSampler pbrSampler;
 
@@ -120,11 +121,55 @@ public final class BlockEntityModelGeometryAdapter {
 
     public static void endBlockEntity() {
         submittingOwner.remove();
+        WorldTextGeometry.endSign();
     }
 
     /** Returns whether the current deferred custom-geometry submit belongs to a block entity. */
     public static boolean hasBlockEntityOwner() {
         return submittingOwner.get() != null;
+    }
+
+    static PlayerModelGeometryAdapter.Mesh beaconMaterial(PlayerModelGeometryAdapter.Mesh mesh, RenderType type) {
+        if (!LivingEntityGeometryAdapter.isBeaconBeam(type)) return mesh;
+        float[] data = mesh.materialData().clone();
+        for (int i = 0; i < data.length; i += 28) {
+            // Alpha-test mode 2 keeps the animated beam UV periodic along the entire column.
+            data[i + 14] = 2;
+            data[i + 26] = 1;
+        }
+        return new PlayerModelGeometryAdapter.Mesh(mesh.vertices(), data);
+    }
+
+    public static void captureText(PoseStack pose, float x, float y,
+        net.minecraft.util.FormattedCharSequence text, boolean shadow, net.minecraft.client.gui.Font.DisplayMode mode,
+        int light, int color, int background, int outline) {
+        Owner owner = submittingOwner.get();
+        if (owner == null) return;
+        WorldTextGeometry.capture(Minecraft.getInstance().font, pose, x, y, text, shadow, mode,
+            light, color, background, outline,
+            (float)(owner.cameraX()-owner.x()), (float)(owner.cameraY()-owner.y()),
+            (float)(owner.cameraZ()-owner.z()), (mesh, texture) -> publishText(owner, mesh, texture));
+    }
+
+    private static void publishText(Owner owner, PlayerModelGeometryAdapter.Mesh mesh, Identifier texture) {
+        if (mesh.triangleCount() == 0) return;
+        int chunk = textChunks.getOrDefault(owner.identity(), 0);
+        long id = textIdentity(owner.identity(), chunk);
+        Snapshot previous = pending.get(id);
+        if (previous != null && previous.mesh().triangleCount()+mesh.triangleCount()
+            > DynamicEntityGeometry.DYNAMIC_MODEL_TRIANGLE_CAPACITY) {
+            textChunks.put(owner.identity(), ++chunk);
+            id = textIdentity(owner.identity(), chunk);
+            previous = null;
+        }
+        if (previous != null) mesh = PlayerModelGeometryAdapter.append(previous.mesh(), mesh);
+        pending.put(id, new Snapshot(id, owner.x(), owner.y(), owner.z(), texture,
+            stableTopology("world-text"), mesh));
+    }
+
+    static long textIdentity(long owner, int chunk) {
+        long hash = (owner ^ (0x9e3779b97f4a7c15L * (chunk+1L))) * 0x100000001b3L;
+        return 0x8002000000000000L | (hash & BLOCK_ENTITY_HASH_MASK);
     }
 
     /** Captures custom geometry used by animated block-entity renderers (moving parts, fire, etc.). */
@@ -141,11 +186,13 @@ public final class BlockEntityModelGeometryAdapter {
                 (float)(owner.cameraX() - owner.x()),
                 (float)(owner.cameraY() - owner.y()),
                 (float)(owner.cameraZ() - owner.z()),
-                null,
+                null, texture,
                 pbrSampler,
-                LivingEntityGeometryAdapter.emissionFor(renderType));
+                LivingEntityGeometryAdapter.emissionFor(renderType), renderType.primitiveTopology())
+                .emissiveOffset(LivingEntityGeometryAdapter.emissiveOffsetFor(renderType));
             renderer.render(pose, capture);
-            PlayerModelGeometryAdapter.Mesh mesh = LivingEntityGeometryAdapter.retag(capture.finish(), texture);
+            PlayerModelGeometryAdapter.Mesh mesh = LivingEntityGeometryAdapter.retag(LivingEntityGeometryAdapter.customMaterial(capture.finish(), renderType), texture);
+            mesh = beaconMaterial(mesh, renderType);
             if (mesh.triangleCount() > 0) {
                 Snapshot previous = pending.get(owner.identity());
                 if (previous != null && previous.mesh().triangleCount() > 0) {
@@ -300,6 +347,7 @@ public final class BlockEntityModelGeometryAdapter {
     }
 
     public static void beginWorldDraw() {
+        textChunks.clear();
         pending.clear();
     }
 
@@ -315,6 +363,8 @@ public final class BlockEntityModelGeometryAdapter {
     }
 
     public static void clear() {
+        textChunks.clear();
+        WorldTextGeometry.endSign();
         pending.clear();
         submitOwners.clear();
         submittingOwner.remove();

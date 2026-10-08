@@ -57,16 +57,28 @@ public final class DynamicTlasInstanceWriterTest {
             new DynamicInstanceRegistry.GeometryKey(3, 4),
             DynamicInstanceRegistry.Transform.identity(),
             DynamicInstanceRegistry.FLAG_OPAQUE | DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY, false);
+        firstPersonRegistry.upsert(9L, DynamicInstanceRegistry.Family.ENTITY,
+            new DynamicInstanceRegistry.GeometryKey(3,4), DynamicInstanceRegistry.Transform.identity(),
+            DynamicInstanceRegistry.FLAG_OPAQUE | DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW, false);
         var firstPersonFrame = firstPersonRegistry.finish();
-        ByteBuffer firstPersonBytes = ByteBuffer.allocate(DynamicTlasInstanceWriter.INSTANCE_SIZE)
+        ByteBuffer firstPersonBytes = ByteBuffer.allocate(2*DynamicTlasInstanceWriter.INSTANCE_SIZE)
             .order(ByteOrder.nativeOrder());
-        DynamicTlasInstanceWriter.write(firstPersonBytes, 1, firstPersonFrame,
-            Map.of(8L, 0x5678L), Map.of(8L, 11), 0x9999L);
+        DynamicTlasInstanceWriter.write(firstPersonBytes, 2, firstPersonFrame,
+            Map.of(8L, 0x5678L,9L,0x6789L), Map.of(8L, 11,9L,17), 0x9999L);
         int firstPersonMask = (firstPersonBytes.getInt(48) >>> 24) & 0xff;
         if (firstPersonMask != DynamicTlasInstanceWriter.FIRST_PERSON_BODY_MASK
             || (firstPersonMask & DynamicTlasInstanceWriter.PRIMARY_RAY_MASK) != 0
             || (firstPersonMask & DynamicTlasInstanceWriter.SECONDARY_RAY_MASK) == 0) {
             throw new AssertionError("first-person body visibility mask does not split primary and secondary rays");
+        }
+
+        long completeKey=DynamicEntityGeometry.modelBlasCacheKey(8L,DynamicInstanceRegistry.FLAG_FIRST_PERSON_BODY,false);
+        long viewKey=DynamicEntityGeometry.modelBlasCacheKey(0x2000000000000008L,DynamicInstanceRegistry.FLAG_PRIMARY_BODY_VIEW,false);
+        if(completeKey==viewKey) throw new AssertionError("Camera body BLAS overwrites full reflection/shadow geometry");
+        int viewMask=(firstPersonBytes.getInt(DynamicTlasInstanceWriter.INSTANCE_SIZE+48)>>>24)&0xff;
+        if((viewMask & DynamicTlasInstanceWriter.PRIMARY_RAY_MASK)==0
+            || (viewMask & DynamicTlasInstanceWriter.SECONDARY_RAY_MASK)!=0) {
+            throw new AssertionError("Torso/leg view must be camera-visible without duplicating reflection/shadow geometry");
         }
 
         registry.beginFrame();
