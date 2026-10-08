@@ -131,8 +131,8 @@ public final class NativeGuiClip {
         private Vertex current;
         private Vertex stripPrevious, stripFirst;
         private int stripCount;
-        
-        
+
+
         ClippedConsumer(VertexConsumer output, PrimitiveTopology topology, Snapshot snapshot) {
             this.output=output; this.topology=topology; this.snapshot=snapshot;
         }

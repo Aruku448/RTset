@@ -13,3 +13,5 @@ ReSTIR 测试执行真实 F9 CycleButton 回调，并验证模式切换、独立
 尚未通过：`playerAnimationContractTest` 中手持地图的捕获断言。该独立 Java 测试没有应用 RenderType/RenderSetup 的 Mixin accessor；纹理查询捕获 ClassCastException 后返回 null，自定义手持地图提交因而被跳过。此测试的前置模型、地图四边形和材质检查已执行，但手持地图端到端路径需要带 Mixin 的游戏运行环境进一步验证。本次保留失败断言，没有修改生产纹理查询逻辑，也没有将整个测试套件声明为通过。
 
 105 个光追审计着色器模块编译、ReSTIR 数学和着色器检查、PBR 上传、AS 同步、资源生命周期及其他已运行检查通过。`git diff --check` 通过。待提交 src/docs/tools 中凭据特征扫描无匹配。
+
+合并远程 a2e271d 与 5c42639：保留其 F9 响应式布局、后处理和流体边界功能；冲突处采用本地已测试的后续版本，包含最新默认值、PBR 修复、分段计时与泛光高斯过滤。后处理 Java 描述符布局与同版本 GLSL / SPIR-V 成套保留，避免混用 13 和 15 binding 版本。补齐原先未跟踪工具源码中的两行尾部空白。
