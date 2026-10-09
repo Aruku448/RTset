@@ -33,8 +33,37 @@ public final class AccelerationStructureSynchronizationTest {
                     throw new AssertionError("Compute -> AS build instance input lacks SHADER_READ");
             }
         }
-        if (traceReads != 3 || computeInputs != 1 || hostInputs != 4)
+        if (traceReads != 2 || computeInputs != 1 || hostInputs != 4)
             throw new AssertionError("Missing actual build/traversal or terrain input path");
+        if (!source.contains("needsTopLevelRefresh(this.topLevelBuilt,")
+                || !source.contains("!dynamicBuilds.isEmpty(), this.topLevelUpdatePending,"))
+            throw new AssertionError("A rebuilt animated BLAS must refresh TLAS bounds even with unchanged instances");
+        if (source.contains("this.topLevelUpdatePending = canUpdateTopLevel;"))
+            throw new AssertionError("Geometry publication must rebuild TLAS references rather than refit the old scene");
+        String smokeSource = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingSmokeTest.java"));
+        int deviceLoss = smokeSource.indexOf("throwable instanceof com.mojang.blaze3d.GpuDeviceLossException deviceLoss");
+        int replay = smokeSource.indexOf("if (resourcesWereMatch && activeResources");
+        if (deviceLoss < 0 || deviceLoss >= replay
+                || !smokeSource.substring(deviceLoss, replay).contains("throw deviceLoss;"))
+            throw new AssertionError("Device loss must propagate before any presentation replay or vanilla fallback");
+        String withoutComments = source.replaceAll("//[^\\r\\n]*", "");
+        var targetPublishes = Pattern.compile("imageBarrier\\(commandBuffer, stack,\\s*"
+            + "KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,\\s*"
+            + "KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,([^,]+),([^,]+),\\s*"
+            + "(?:this\\.)?targetImage,", Pattern.DOTALL).matcher(withoutComments);
+        int targetPublishCount = 0;
+        while (targetPublishes.find()) {
+            targetPublishCount++;
+            if (!targetPublishes.group(1).contains("COLOR_ATTACHMENT_OUTPUT_BIT")
+                    || !targetPublishes.group(1).contains("TRANSFER_BIT_KHR")
+                    || !targetPublishes.group(2).contains("COLOR_ATTACHMENT_READ_BIT")
+                    || !targetPublishes.group(2).contains("COLOR_ATTACHMENT_WRITE_BIT")
+                    || !targetPublishes.group(2).contains("TRANSFER_READ_BIT_KHR")) {
+                throw new AssertionError("RT target copy must synchronize native attachment loads/blending and presentation");
+            }
+        }
+        if (targetPublishCount != 2)
+            throw new AssertionError("Both normal RT and replay must publish target copy dependencies");
         String allocationSource = Files.readString(Path.of("src/main/java/com/rtest/client/VulkanAccelerationResources.java")).replace("\r\n", "\n");
         if (!Pattern.compile("BUILD_INPUT_READ_ONLY_BIT_KHR\\) != 0\\s*\\? 16L : 1L", Pattern.DOTALL)
                 .matcher(allocationSource).find()

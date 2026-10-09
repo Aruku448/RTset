@@ -33,6 +33,16 @@ public final class RayTracingSmokeTest {
         return activeResources != null && activeResources.hasPresentedFrame();
     }
 
+    public static String reconstructionStatus() {
+        if (activeFsr == null) return "FSR3";
+        return switch (activeFsr.mode()) {
+            case FSR -> com.rtest.client.fsr.DlssRuntime.requested() == com.rtest.client.fsr.RtestUpscalerMode.FSR
+                ? "FSR3" : "FSR3 (DLSS fallback)";
+            case DLSS -> "DLSS";
+            case DLSS_RR -> "DLSS + RR";
+        };
+    }
+
     /** Keeps the last completed RT world visible during a paused GUI frame. */
     public static boolean replayLastFrame(
         VulkanDevice device, RenderTarget target, TextureAtlas blockAtlas, SceneGeometry geometry,
@@ -64,8 +74,8 @@ public final class RayTracingSmokeTest {
         }
         RtestFsrQualityMode quality = RtestFsrQualityMode.fromId(
             RayTracingClientConfig.INSTANCE.fsrQuality.get());
-        RtestFsrQualityMode.Extent extent = quality.renderExtent(target.width, target.height);
-        return activeFsrQuality == quality && activeResources.matches(
+        RtestFsrQualityMode.Extent extent = com.rtest.client.fsr.DlssRuntime.renderExtent(device, quality, target.width, target.height);
+        return activeFsrQuality == quality && activeFsr.mode() == com.rtest.client.fsr.DlssRuntime.effective(device) && activeResources.matches(
             device, extent.width(), extent.height(), target.width, target.height,
             texture.vkImage(), targetView.vkImageView(), target.getColorTexture().getFormat(),
             geometry, atlasView.vkImageView(), atlasSampler.vkSampler(), activeFsr,
@@ -107,10 +117,11 @@ public final class RayTracingSmokeTest {
             }
             RtestFsrQualityMode fsrQuality = RtestFsrQualityMode.fromId(
                 RayTracingClientConfig.INSTANCE.fsrQuality.get());
-            RtestFsrQualityMode.Extent renderExtent = fsrQuality.renderExtent(target.width, target.height);
+            RtestFsrQualityMode.Extent renderExtent = com.rtest.client.fsr.DlssRuntime.renderExtent(device, fsrQuality, target.width, target.height);
             long resourceMatchStart = System.nanoTime();
             boolean resourcesMatch = activeResources != null && activeFsr != null
                 && activeFsrQuality == fsrQuality
+                && activeFsr.mode() == com.rtest.client.fsr.DlssRuntime.effective(device)
                 && activeResources.matches(
                     device,
                     renderExtent.width(),
@@ -177,6 +188,12 @@ public final class RayTracingSmokeTest {
             return true;
         } catch (Throwable throwable) {
             LOGGER.error("RTest Vulkan ray-tracing smoke test failed", throwable);
+            // Device loss is fatal to Minecraft's Vulkan device. Replaying an image or
+            // returning to vanilla would submit more work to the same failed device.
+            if (throwable instanceof com.mojang.blaze3d.GpuDeviceLossException deviceLoss) {
+                RtResourceRollback.attempt(deviceLoss, RayTracingSmokeTest::close);
+                throw deviceLoss;
+            }
             // If the world was cancelled using a matching, already-presented pass, copy that
             // completed image before teardown. The controller disables cancellation next frame,
             // while this frame still has a visual RT fallback instead of a black target.
@@ -187,7 +204,7 @@ public final class RayTracingSmokeTest {
                     throwable.addSuppressed(replayFailure);
                 }
             }
-            close();
+            RtResourceRollback.attempt(throwable, RayTracingSmokeTest::close);
             return false;
         } finally {
             long durationMillis = (System.nanoTime() - start) / 1_000_000L;

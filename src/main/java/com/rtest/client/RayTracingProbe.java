@@ -52,6 +52,8 @@ public final class RayTracingProbe {
         new DynamicSnapshotLogThrottle(5_000_000_000L);
     private static boolean completed;
     private static boolean smokeTestStarted;
+    private static boolean rtRenderConfirmed;
+    private static String rtConfirmedReconstruction = "";
     private static boolean smokeTestRequested;
     private static boolean sceneDirty;
     private static Frustum frameCullFrustum;
@@ -752,6 +754,14 @@ public final class RayTracingProbe {
         if (rtPresented) {
             nextRtRetryNanos = 0L;
             rtFailureCount = 0;
+            if (RayTracingSmokeTest.hasPresentedFrame() && (!rtRenderConfirmed
+                    || !rtConfirmedReconstruction.equals(RayTracingSmokeTest.reconstructionStatus()))) {
+                rtRenderConfirmed = true;
+                rtConfirmedReconstruction = RayTracingSmokeTest.reconstructionStatus();
+                LOGGER.info("RTest RT rendering confirmed: first GPU frame completed; reconstruction={}", rtConfirmedReconstruction);
+                if (minecraft.player != null) minecraft.gui.hud.setOverlayMessage(
+                    Component.translatable("overlay.rtest.rendering.confirmed", rtConfirmedReconstruction), false);
+            }
             if (activationFreeze) {
                 activationFreeze = false;
                 sceneDirty = fullCaptureRequested
@@ -2002,6 +2012,7 @@ public final class RayTracingProbe {
     private static void stopSmokeTestResources() {
         smokeTestRequested = false;
         smokeTestStarted = false;
+        rtRenderConfirmed = false;
         activationFreeze = false;
         sceneDirty = false;
         fullCaptureRequested = false;
@@ -2120,16 +2131,17 @@ public final class RayTracingProbe {
             return;
         }
 
+        boolean rtToggleRequested = ClientKeyMappings.RUN_RAY_TRACING_SMOKE_TEST.consumeClick();
         GpuDevice device = RenderSystem.tryGetDevice();
-        if (device == null) {
-            return;
-        }
+        if (device == null) return;
 
         if (!(((GpuDeviceAccessor) device).rtest$getBackend() instanceof VulkanDevice vulkanDevice)) {
             if (!completed) {
                 completed = true;
                 LOGGER.warn("RTest ray tracing is disabled because Minecraft is not using the Vulkan backend");
             }
+            if (rtToggleRequested && minecraft.player != null) minecraft.gui.hud.setOverlayMessage(
+                Component.translatable("overlay.rtest.backend.unavailable"), false);
             return;
         }
 
@@ -2160,7 +2172,7 @@ public final class RayTracingProbe {
             return;
         }
 
-        if (!ClientKeyMappings.RUN_RAY_TRACING_SMOKE_TEST.consumeClick()) {
+        if (!rtToggleRequested) {
             return;
         }
         if (smokeTestStarted) {

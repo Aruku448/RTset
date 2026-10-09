@@ -4,7 +4,8 @@ Minecraft 26.2 / NeoForge 26.2 的 Vulkan 光追实验 Mod。它是原型，不�
 
 ## 当前功能概览
 
-- F8 切换 RT，F9 打开设置；运行链为场景捕获 → Vulkan RT → 可选 NRD 降噪（或原始 RT） → FSR 3.1.5 → 原生手部/UI。
+- F8 切换 RT，F9 打开设置；运行链为场景捕获 → Vulkan RT → 可选 NRD 降噪（或原始 RT） → FSR 3.1.5 / DLSS 超分辨率；DLSS 光线重建模式直接重建原始 RT 并替代 NRD。最后合成原生手部/UI。
+- DLSS / DLSS RR 为 Windows NVIDIA RTX 实验功能，F9「渲染」中的「时域重建」切换；不支持时使用 FSR3。SDK 推荐尺寸、DLAA、历史重置与回退已接入，GPU 输出及已知验证限制见 [`docs/dlss-integration-2026-10-09.md`](docs/dlss-integration-2026-10-09.md)。
 - 静态地形支持增量 Section 捕获与 terrain LOD；动态实体、方块实体及部分粒子走动态实例路径。未捕获或超容量对象由原生栅格路径回退。
 - 可选 ReSTIR 直接光照和条件后缀重放/final gather，默认关闭，F9 路径追踪分类中切换；算法范围、显存与验证边界见 [`docs/restir-implementation.md`](docs/restir-implementation.md)。
 - 材质支持 PBR companion map、流体捕获、太阳/天空和体积光等实验功能。各功能的开关及默认值见 `RayTracingClientConfig`。

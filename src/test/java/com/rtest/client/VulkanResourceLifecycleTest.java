@@ -12,6 +12,17 @@ public final class VulkanResourceLifecycleTest {
     }
 
     public static void main(String[] args) throws IOException {
+        for (int bits = 0; bits < 16; bits++) {
+            boolean built = (bits & 8) != 0;
+            boolean blasRebuilt = (bits & 4) != 0;
+            boolean instancesChanged = (bits & 2) != 0;
+            boolean terrainChanged = (bits & 1) != 0;
+            boolean expected = built && (bits & 7) != 0;
+            if (RayTracingVulkanPass.needsTopLevelRefresh(built, blasRebuilt,
+                    instancesChanged, terrainChanged) != expected) {
+                throw new AssertionError("TLAS refresh scheduling mismatch: " + bits);
+            }
+        }
         if (RayTracingVulkanPass.needsIncrementalDynamicBuild(false, true, true)) {
             throw new AssertionError("pending animation updates must not starve the first TLAS build");
         }
@@ -146,13 +157,28 @@ public final class VulkanResourceLifecycleTest {
         require(nrd, "public void cancel(FrameToken token)");
 
         String skybox = source("src/main/java/com/rtest/client/RayTracingSkybox.java");
-        require(skybox, "VulkanCommandEncoder encoder = null;");
-        require(skybox, "encoder = new VulkanCommandEncoder(device);");
-        require(skybox, "encoder.destroy();");
+        require(skybox, "VulkanCommandEncoder encoder = device.createCommandEncoder();");
+        if (skybox.contains("encoder.destroy();") || skybox.contains("new VulkanCommandEncoder(device)")) {
+            throw new AssertionError("skybox must upload after texture initialization on the borrowed Minecraft encoder");
+        }
         require(skybox, "cdfGeometry.writeTables(mapped.buffer());");
         require(skybox, "importance.close();");
         require(skybox, "finally { cdf.close(); }");
-        require(pass, "binding(38)");
+        try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            for (boolean atmosphere : new boolean[] {false, true}) {
+                var bindings = RayTracingPipelineContract.bindings(stack, atmosphere, false);
+                boolean found = false;
+                for (int i = 0; i < bindings.limit(); i++) {
+                    var binding = bindings.get(i);
+                    if (binding.binding() == 38) {
+                        found = binding.descriptorType() == org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                            && binding.descriptorCount() == 1
+                            && binding.stageFlags() == org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+                    }
+                }
+                if (!found) throw new AssertionError("Sky CDF metadata layout binding 38 is invalid");
+            }
+        }
         require(pass, "dstBinding(38)");
         require(pass, "dstBinding(39)");
         require(pass, "dstBinding(40)");

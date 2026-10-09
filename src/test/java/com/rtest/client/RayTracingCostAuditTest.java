@@ -21,7 +21,8 @@ public final class RayTracingCostAuditTest {
                 || RayTracingCostAudit.Profile.NO_GI.effectiveRestirMode(mode) != (mode & 1)
                 || RayTracingCostAudit.Profile.NO_AREA.effectiveRestirMode(mode) != (mode & 2)
                 || RayTracingCostAudit.Profile.PRIMARY_MATERIAL.effectiveRestirMode(mode) != 0
-                || RayTracingCostAudit.Profile.TRAVERSAL_ONLY.effectiveRestirMode(mode) != 0) {
+                || RayTracingCostAudit.Profile.TRAVERSAL_ONLY.effectiveRestirMode(mode) != 0
+                || RayTracingCostAudit.Profile.OPAQUE_TRAVERSAL.effectiveRestirMode(mode) != 0) {
                 throw new AssertionError("ablation and reservoir layout disagree");
             }
         }
@@ -31,6 +32,13 @@ public final class RayTracingCostAuditTest {
             throw new AssertionError("profile change must rebuild pipeline and use the same effective reservoir mode");
         }
         Path directory = Path.of("tmp/profiling/ray-cost-audit-spv");
+        String opaque = RayTracingCostAudit.raygen(RayTracingShaders.RAYGEN_SHADER,
+            RayTracingCostAudit.Profile.OPAQUE_TRAVERSAL);
+        if (!opaque.contains("traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT,")
+                || !opaque.contains("int maxPathSegments = 1;")
+                || !opaque.contains("radiance = primaryHit ? pathBaseColorRoughness.rgb : vec3(0.0);")) {
+            throw new AssertionError("Opaque traversal must bypass any-hit and stop before lighting");
+        }
         String visibility = RayTracingCostAudit.raygen(RayTracingShaders.RAYGEN_SHADER,
             RayTracingCostAudit.Profile.SUN_VISIBILITY);
         if (!visibility.contains("auditSunVisibility += shadowFactor / float(sunSampleCount);")
@@ -44,10 +52,17 @@ public final class RayTracingCostAuditTest {
         Files.createDirectories(directory);
         long compiler = Shaderc.shaderc_compiler_initialize();
         long options = Shaderc.shaderc_compile_options_initialize();
+        RayTracingCostAudit.Profile[] profiles = args.length == 0 ? RayTracingCostAudit.Profile.values()
+            : java.util.Arrays.stream(args).map(name -> RayTracingCostAudit.Profile.valueOf(
+                name.toUpperCase(java.util.Locale.ROOT))).toArray(RayTracingCostAudit.Profile[]::new);
         try {
             Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
             Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
-            for (RayTracingCostAudit.Profile profile : RayTracingCostAudit.Profile.values()) {
+            compile(compiler, options, directory.resolve("control-raygen.spv"),
+                RayTracingShaders.CONTROL_RAYGEN_SHADER, Shaderc.shaderc_glsl_raygen_shader);
+            compile(compiler, options, directory.resolve("control-compute.spv"),
+                RayTracingShaders.CONTROL_COMPUTE_SHADER, Shaderc.shaderc_glsl_compute_shader);
+            for (RayTracingCostAudit.Profile profile : profiles) {
                 for (int requested : new int[] {0, 1, 3}) {
                     for (boolean atmosphere : new boolean[] {false, true}) {
                         String source = RayTracingShaders.RAYGEN_SHADER;
@@ -64,9 +79,9 @@ public final class RayTracingCostAuditTest {
             Shaderc.shaderc_compile_options_release(options);
             Shaderc.shaderc_compiler_release(compiler);
         }
-        System.out.println("Ray cost audit: " + RayTracingCostAudit.Profile.values().length
+        System.out.println("Ray cost audit: " + profiles.length
             + " profiles, baseline identity, reservoir-mode consistency and "
-            + RayTracingCostAudit.Profile.values().length * 7 + " SPIR-V modules passed (not GPU timing)");
+            + (profiles.length * 7 + 2) + " SPIR-V modules passed (not GPU timing)");
     }
 
     private static void compile(long compiler, long options, Path target, String source, int kind) throws Exception {
@@ -86,8 +101,31 @@ public final class RayTracingCostAuditTest {
                 throw new AssertionError(target + ": " + Shaderc.shaderc_result_get_error_message(result));
             }
             ByteBuffer bytes = Shaderc.shaderc_result_get_bytes(result);
+            try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                int stage = kind == Shaderc.shaderc_glsl_closesthit_shader
+                    ? org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
+                    : kind == Shaderc.shaderc_glsl_compute_shader ? org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_COMPUTE_BIT
+                    : org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+                RayTracingPipelineContractTest.reflect(bytes, RayTracingPipelineContract.bindings(stack,
+                    target.getFileName().toString().contains("atmotrue"), true), stage, target.toString());
+            }
             byte[] output = new byte[bytes.remaining()];
             bytes.get(output);
+            if (target.getFileName().toString().equals("control-raygen.spv")
+                    || target.getFileName().toString().startsWith("opaque_traversal-mode")) {
+                ByteBuffer words = ByteBuffer.wrap(output).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int traceCount = 0;
+                for (int offset = 20; offset < output.length;) {
+                    int instruction = words.getInt(offset);
+                    if ((instruction & 0xffff) == 4445) traceCount++; // OpTraceRayKHR
+                    int wordCount = instruction >>> 16;
+                    if (wordCount == 0) throw new AssertionError("Invalid SPIR-V instruction");
+                    offset += wordCount * 4;
+                }
+                int expected = target.getFileName().toString().equals("control-raygen.spv") ? 0 : 1;
+                if (traceCount != expected)
+                    throw new AssertionError(target + " expected " + expected + " trace instructions, got " + traceCount);
+            }
             Files.write(target, output);
         } finally {
             Shaderc.shaderc_result_release(result);

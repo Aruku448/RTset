@@ -18,6 +18,12 @@ public final class RayTracingShaderContractTest {
             compile(compiler, options, "raygen", RayTracingShaders.RAYGEN_SHADER, Shaderc.shaderc_glsl_raygen_shader);
             compile(compiler, options, "miss", RayTracingShaders.MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
             compile(compiler, options, "shadow miss", RayTracingShaders.SHADOW_MISS_SHADER, Shaderc.shaderc_glsl_miss_shader);
+            compile(compiler, options, "shadow closest hit", RayTracingShaders.SHADOW_CLOSEST_HIT_SHADER,
+                Shaderc.shaderc_glsl_closesthit_shader);
+            compile(compiler, options, "control raygen", RayTracingShaders.CONTROL_RAYGEN_SHADER,
+                Shaderc.shaderc_glsl_raygen_shader);
+            compile(compiler, options, "control compute", RayTracingShaders.CONTROL_COMPUTE_SHADER,
+                Shaderc.shaderc_glsl_compute_shader);
             compile(compiler, options, "closest hit", RayTracingShaders.CLOSEST_HIT_SHADER,
                 Shaderc.shaderc_glsl_closesthit_shader);
             // Legacy reflection/GI/refraction stages are disabled; the active integrator is

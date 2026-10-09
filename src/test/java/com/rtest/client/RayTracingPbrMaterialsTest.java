@@ -99,13 +99,17 @@ public final class RayTracingPbrMaterialsTest {
         require(pass, "this.pbrBuffer.map()");
         require(pass, "destination.put(0, mapCount)");
         require(pass, "pbrMaterials == null");
-        require(pass, "bindings.get(5).binding(5).descriptorType");
-        int pbrBinding = pass.indexOf("bindings.get(5).binding(5).descriptorType");
-        int nextBinding = pass.indexOf("bindings.get(6).binding(6)", pbrBinding);
-        if (pbrBinding < 0 || nextBinding < pbrBinding
-            || !pass.substring(pbrBinding, nextBinding).contains("VK_SHADER_STAGE_RAYGEN_BIT_KHR")
-            || !pass.substring(pbrBinding, nextBinding).contains("VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR")) {
-            throw new AssertionError("PBR descriptor binding must be visible to raygen and closest-hit");
+        try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            for (boolean atmosphere : new boolean[] {false, true}) {
+                var binding = RayTracingPipelineContract.bindings(stack, atmosphere, false).get(5);
+                int stages = org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
+                    | org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+                if (binding.binding() != 5 || binding.descriptorCount() != 1
+                        || binding.descriptorType() != org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                        || binding.stageFlags() != stages) {
+                    throw new AssertionError("PBR native descriptor contract is invalid");
+                }
+            }
         }
     }
 

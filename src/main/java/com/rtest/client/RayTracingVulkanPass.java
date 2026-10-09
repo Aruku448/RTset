@@ -225,6 +225,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private final long[] shaderModules;
         private final int sbtStride;
         private static final int BLAS_BUILDS_PER_FRAME = 16;
+        static boolean needsTopLevelRefresh(boolean topLevelBuilt, boolean blasRebuilt,
+                                            boolean instancesChanged, boolean terrainChanged) {
+            return topLevelBuilt && (blasRebuilt || instancesChanged || terrainChanged);
+        }
+
         static boolean needsIncrementalDynamicBuild(
             boolean topLevelBuilt,
             boolean blasBuilt,
@@ -248,7 +253,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             // faster than the bounded build batch can consume them.
             return missingFrame || (!offlineActive && topLevelBuilt);
         }
-        private static final int PLAYER_SKIN_DESCRIPTOR_COUNT = 64;
+        static final int PLAYER_SKIN_DESCRIPTOR_COUNT = 64;
         private final long[] livingEntityTextureViews = new long[PLAYER_SKIN_DESCRIPTOR_COUNT];
         private final long[] livingEntityTextureSamplers = new long[PLAYER_SKIN_DESCRIPTOR_COUNT];
         private final long[] livingEntityTextureViewsScratch = new long[PLAYER_SKIN_DESCRIPTOR_COUNT];
@@ -769,11 +774,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     false
                 );
-                long outputSize = Math.multiplyExact(Math.multiplyExact((long)outputWidth, (long)outputHeight), 4L);
+                long outputSize = Math.max(12L, Math.multiplyExact(Math.multiplyExact((long)outputWidth, (long)outputHeight), 4L));
                 outputBuffer = NativeBuffer.create(
                     device,
                     outputSize,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                        | (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get() ? VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0),
                     true
                 );
                 cameraBuffer = NativeBuffer.create(device, 304, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
@@ -1013,100 +1019,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 shaderModules[8] = skyCdfHit.handle;
 
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(physicalAtmosphere ? 44 : 33, stack);
-                    int restirBindingStart = physicalAtmosphere ? 41 : 30;
-                    for (int index = 0; index < 3; index++) {
-                        bindings.get(restirBindingStart + index).binding(41 + index)
-                            .descriptorType(index == 2 ? VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    }
-                    bindings.get(physicalAtmosphere ? 39 : 28).binding(39)
-                        .descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    bindings.get(physicalAtmosphere ? 40 : 29).binding(40)
-                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    bindings.get(physicalAtmosphere ? 38 : 27).binding(38)
-                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
-                        .stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    bindings.get(0).binding(0).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    bindings.get(1).binding(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    bindings.get(2).binding(2).descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                        );
-                    bindings.get(3).binding(3).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR
-                        );
-                    bindings.get(4).binding(4).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR
-                        );
-                    bindings.get(5).binding(5).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
-                    bindings.get(6).binding(6).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    for (int binding = 7; binding <= 16; binding++) {
-                        bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    }
-                    bindings.get(17).binding(17).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(PLAYER_SKIN_DESCRIPTOR_COUNT).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
-                    bindings.get(18).binding(18).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
-                    bindings.get(19).binding(19).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
-                    bindings.get(20).binding(20).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                        .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    for (int binding = 21; binding <= 25; binding++) {
-                        bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    }
-                    bindings.get(26).binding(26).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                        .descriptorCount(1).stageFlags(
-                            KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                                | KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
-                    if (physicalAtmosphere) {
-                        for (int binding = 27; binding <= 28; binding++) {
-                            bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                                .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        }
-                        bindings.get(29).binding(29).descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        // Physical finite-segment aerial perspective: L output, pinned medium, the
-                        // bank-zero optical-depth and scattering-source samplers, and the
-                        // mean/ground/high multiple-scattering images.
-                        bindings.get(30).binding(30).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        bindings.get(31).binding(31).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        bindings.get(32).binding(32).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        bindings.get(33).binding(33).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        for (int binding = 34; binding <= 36; binding++) {
-                            bindings.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                                .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                        }
-                        bindings.get(37).binding(37).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                            .descriptorCount(1).stageFlags(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-                    }
+                    var bindings = RayTracingPipelineContract.bindings(stack, physicalAtmosphere,
+                        RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get());
                     VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
                         .pBindings(bindings);
                     LongBuffer handle = stack.callocLong(1);
@@ -1330,39 +1244,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     );
                     pipelineLayout = handle.get(0);
 
-                    VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(9, stack);
-                    stages.get(0).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR).module(raygen.handle).pName(stack.UTF8("main"));
-                    stages.get(1).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(miss.handle).pName(stack.UTF8("main"));
-                    stages.get(2).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(shadowMiss.handle).pName(stack.UTF8("main"));
-                    stages.get(3).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(closestHit.handle).pName(stack.UTF8("main"));
-                    stages.get(4).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(anyHit.handle).pName(stack.UTF8("main"));
-                    stages.get(5).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(shadowClosestHit.handle).pName(stack.UTF8("main"));
-                    stages.get(6).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(shadowAnyHit.handle).pName(stack.UTF8("main"));
-                    stages.get(7).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR).module(skyCdfMiss.handle).pName(stack.UTF8("main"));
-                    stages.get(8).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(skyCdfHit.handle).pName(stack.UTF8("main"));
-                    // Group 3 (primary) and group 4 (shadow) share the alpha-testing Any Hit shader.
-                    VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(7, stack);
-                    groups.get(5).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(7).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
-                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(6).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
-                        .generalShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).closestHitShader(8)
-                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(0).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(0).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
-                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(1).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(1).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
-                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(2).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(2).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
-                        .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(3).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
-                        .generalShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).closestHitShader(3)
-                        .anyHitShader(4).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
-                    groups.get(4).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
-                        .generalShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR).closestHitShader(5)
-                        .anyHitShader(6).intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
+                    var stages = RayTracingPipelineContract.stages(stack, shaderModules);
+                    var groups = RayTracingPipelineContract.groups(stack);
                     VkRayTracingPipelineCreateInfoKHR.Buffer pipelineInfo = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
                     pipelineInfo.sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(pipelineLayout);
                     long rtPipelineStart = System.nanoTime();
@@ -1374,6 +1257,28 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     pipeline = handle.get(0);
                     LOGGER.info("RTest startup: RT driver pipeline creation wall_ms={}",
                         (System.nanoTime() - rtPipelineStart) / 1_000_000L);
+                    if (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get()) {
+                        long raygenStack = KHRRayTracingPipeline.vkGetRayTracingShaderGroupStackSizeKHR(
+                            vkDevice, pipeline, 0, KHRRayTracingPipeline.VK_SHADER_GROUP_SHADER_GENERAL_KHR);
+                        long missStack = 0L, hitStack = 0L, anyHitStack = 0L;
+                        for (int group : new int[] {1, 2, 5}) {
+                            missStack = Math.max(missStack, KHRRayTracingPipeline.vkGetRayTracingShaderGroupStackSizeKHR(
+                                vkDevice, pipeline, group, KHRRayTracingPipeline.VK_SHADER_GROUP_SHADER_GENERAL_KHR));
+                        }
+                        for (int group : new int[] {3, 4, 6}) {
+                            hitStack = Math.max(hitStack, KHRRayTracingPipeline.vkGetRayTracingShaderGroupStackSizeKHR(
+                                vkDevice, pipeline, group, KHRRayTracingPipeline.VK_SHADER_GROUP_SHADER_CLOSEST_HIT_KHR));
+                        }
+                        for (int group : new int[] {3, 4}) {
+                            anyHitStack = Math.max(anyHitStack, KHRRayTracingPipeline.vkGetRayTracingShaderGroupStackSizeKHR(
+                                vkDevice, pipeline, group, KHRRayTracingPipeline.VK_SHADER_GROUP_SHADER_ANY_HIT_KHR));
+                        }
+                        // Depth 1, triangle hit groups, no callable shaders; Vulkan supplies this
+                        // default without explicit dynamic stack state. Query only present stages.
+                        LOGGER.info("RTest GPU diagnostic: shader stack raygen={} missMax={} closestHitMax={} anyHitMax={} specDefaultBytes={}",
+                            raygenStack, missStack, hitStack, anyHitStack,
+                            raygenStack + Math.max(Math.max(missStack, hitStack), anyHitStack));
+                    }
 
                     int handleSize = limits.shaderGroupHandleSize();
                     int handleAlignment = limits.shaderGroupHandleAlignment();
@@ -1417,6 +1322,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     // this pass owns its command pools/transient memory, so construct a private
                     // encoder before using the explicit destroy() lifecycle below.
                     encoder = new VulkanCommandEncoder(device);
+                    if (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get()) {
+                        runRaygenControlProbe(device, encoder, outputBuffer, pipelineLayout, descriptorSet, limits);
+                    }
                     RayTracingVulkanPass resources = new RayTracingVulkanPass(
                         device,
                         limits,
@@ -2082,7 +1990,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
             blasCache.trim(activeKeys);
             AccelerationStructure oldTopLevel = this.topLevel;
             NativeBuffer oldInstance = this.instanceBuffer;
-            boolean canUpdateTopLevel = reuseTopLevel && this.topLevelBuilt;
             NativeBuffer oldScratch = this.scratchBuffer;
             NativeBuffer oldMaterial = this.materialBuffer;
             NativeBuffer oldLightData = this.lightDataBuffer;
@@ -2104,7 +2011,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.topLevel = nextTopLevel;
             if (reuseTopLevel) {
                 this.topLevel.rebindInputBuffer(nextInstance);
-                this.topLevelUpdatePending = canUpdateTopLevel;
+                // Publication can replace the BLAS referenced by a slot, including the
+                // dummy BLAS in unused slots. Reuse storage, but build fresh references.
+                this.topLevelUpdatePending = false;
             } else {
                 this.topLevelUpdatePending = false;
             }
@@ -2907,6 +2816,11 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     throw new IllegalStateException("Timed out waiting for previous RTest RT submission");
                 }
                 completed = true;
+                if (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get()
+                        && this.pendingFrameGpuIndex < 8) {
+                    LOGGER.info("RTest GPU diagnostic: fence completed dispatch={} gpuFrame={}",
+                        this.pendingFrameTimingFrame, this.pendingFrameGpuIndex);
+                }
             } finally {
                 timing.add(RayTracingFrameTiming.Segment.FENCE_WAIT_CPU, fenceWaitStart);
                 // Keep an unresolved fence attached to the pass. close() can make one final
@@ -3096,6 +3010,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 this.dynamicBlasRetirement.submitted(holder.tlasBuildRecorded);
                 this.pendingFrameTimingFrame = (int)timingFrame;
                 this.pendingFrameGpuIndex = frameIndex;
+                if (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get() && frameIndex < 8) {
+                    LOGGER.info("RTest GPU diagnostic: commands appended dispatch={} gpuFrame={} extent={}x{} dynamicBuilds={} tlasRefresh={} driverValidation={}",
+                        timingFrame, frameIndex, outputWidth, outputHeight,
+                        holder.dynamicBuilds.size(), holder.tlasBuildRecorded,
+                        NvidiaRayTracingValidation.requested());
+                }
                 int rebuiltDynamics = 0;
                 this.dynamicInstances.recordBlasBuildCommands(holder.dynamicBuilds.size());
                 this.dynamicInstances.recordBlasBuildBatches(holder.dynamicBuildBatches);
@@ -3201,12 +3121,15 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 imageBarrier(commandBuffer, stack,
                     KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
                     KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
-                    // Minecraft presents this target with GpuSurface.blitFromTexture().
-                    // That path performs a transfer read from the target image, so publish
-                    // the copy for TRANSFER_READ rather than leaving the dependency scoped to
-                    // a later color-attachment pass.
-                    KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-                    KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                    // Native screen effects/GUI can load and blend this attachment before
+                    // the final transfer blit. Cover both consumers, including sampled reads.
+                    KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR
+                        | VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                        | VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR
+                        | VK10.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                        | VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                        | VK10.VK_ACCESS_SHADER_READ_BIT,
                     this.targetImage,
                     VK10.VK_IMAGE_LAYOUT_GENERAL,
                     VK10.VK_IMAGE_LAYOUT_GENERAL);
@@ -3378,6 +3301,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             try {
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
+                diagnosticCheckpoint(encoder, commandBuffer, "RT incremental AS begin");
                 barrier(commandBuffer, stack,
                     VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_ACCESS_HOST_WRITE_BIT,
                     KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -3394,6 +3318,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     recordBlas(commandBuffer, stack, cached.bottomLevel, false);
                     newlyBuilt.add(cached);
                 }
+                diagnosticCheckpoint(encoder, commandBuffer, "RT incremental dynamic BLAS recorded");
                 for (CachedBlas cached : sectionBlas) {
                     if (cached.built || newlyBuilt.size() >= BLAS_BUILDS_PER_FRAME) {
                         continue;
@@ -3401,6 +3326,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     recordBlas(commandBuffer, stack, cached.bottomLevel, false);
                     newlyBuilt.add(cached);
                 }
+                diagnosticCheckpoint(encoder, commandBuffer, "RT incremental section BLAS recorded");
                 boolean allBlasBuilt = true;
                 for (DynamicCachedBlas cached : this.dynamicInstances.blases()) {
                     if (!cached.built && !newlyBuilt.contains(cached)) {
@@ -3442,12 +3368,18 @@ import com.rtest.client.fsr.RtestFsrSettings;
                         KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
                         | VK12.VK_ACCESS_SHADER_READ_BIT);
                 }
+                diagnosticCheckpoint(encoder, commandBuffer, "RT incremental AS builds recorded");
                 int endResult = VK10.vkEndCommandBuffer(commandBuffer);
                 commandBufferEnded = true;
                 VulkanUtils.crashIfFailure(device, endResult,
                     "Failed to end incremental acceleration-structure command buffer");
                 encoder.execute(commandBuffer);
                 timing.add(RayTracingFrameTiming.Segment.COMMAND_RECORD, commandRecordStart);
+                if (RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get()
+                        && (this.dispatchTimingFrame <= 8 || allBlasBuilt)) {
+                    LOGGER.info("RTest GPU diagnostic: incremental AS batch dispatch={} builds={} tlasBuild={}",
+                        this.dispatchTimingFrame, newlyBuilt.size(), allBlasBuilt);
+                }
                 try (GpuFence fence = encoder.createFence()) {
                     encoder.submit();
                     long fenceWaitStart = System.nanoTime();
@@ -3608,6 +3540,125 @@ import com.rtest.client.fsr.RtestFsrSettings;
             this.terrainHiZInitialized = true;
         }
 
+        /** One invocation, no AS, no traceRay instruction, no images or hit shaders. */
+        private static void runRaygenControlProbe(VulkanDevice device, VulkanCommandEncoder encoder,
+                NativeBuffer output, long layout, long set, RayTracingSupport.Limits limits) {
+            LOGGER.info("RTest GPU control: BEGIN (transfer/compute/raygen, no scene traversal)");
+            long shader = 0L, controlPipeline = 0L;
+            long computeShader = 0L, computePipeline = 0L;
+            NativeBuffer sbt = null;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                shader = ShaderModule.create(device, RayTracingShaders.CONTROL_RAYGEN_SHADER,
+                    Shaderc.shaderc_glsl_raygen_shader).handle;
+                var stages = VkPipelineShaderStageCreateInfo.calloc(1, stack);
+                stages.get(0).sType$Default().stage(KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR)
+                    .module(shader).pName(stack.UTF8("main"));
+                var groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(1, stack);
+                groups.get(0).sType$Default().type(KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
+                    .generalShader(0).closestHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
+                    .anyHitShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR)
+                    .intersectionShader(KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR);
+                var info = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
+                info.get(0).sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(layout);
+                var handle = stack.callocLong(1);
+                VulkanUtils.crashIfFailure(device, KHRRayTracingPipeline.vkCreateRayTracingPipelinesKHR(
+                    device.vkDevice(), 0L, 0L, info, null, handle), "Failed to create diagnostic raygen pipeline");
+                controlPipeline = handle.get(0);
+                computeShader = ShaderModule.create(device, RayTracingShaders.CONTROL_COMPUTE_SHADER,
+                    Shaderc.shaderc_glsl_compute_shader).handle;
+                var computeStage = VkPipelineShaderStageCreateInfo.calloc(stack).sType$Default()
+                    .stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(computeShader).pName(stack.UTF8("main"));
+                var computeInfo = VkComputePipelineCreateInfo.calloc(1, stack);
+                computeInfo.get(0).sType$Default().stage(computeStage).layout(layout);
+                VulkanUtils.crashIfFailure(device, VK10.vkCreateComputePipelines(
+                    device.vkDevice(), 0L, computeInfo, null, handle), "Failed to create diagnostic compute pipeline");
+                computePipeline = handle.get(0);
+                int stride = alignUp(limits.shaderGroupHandleSize(),
+                    Math.max(limits.shaderGroupHandleAlignment(), limits.shaderGroupBaseAlignment()));
+                sbt = NativeBuffer.createAligned(device, stride,
+                    KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR
+                        | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true, limits.shaderGroupBaseAlignment());
+                var groupHandle = stack.malloc(limits.shaderGroupHandleSize());
+                VulkanUtils.crashIfFailure(device, KHRRayTracingPipeline.vkGetRayTracingShaderGroupHandlesKHR(
+                    device.vkDevice(), controlPipeline, 0, 1, groupHandle), "Failed to retrieve diagnostic SBT handle");
+                byte[] handleBytes = new byte[groupHandle.remaining()];
+                groupHandle.duplicate().get(handleBytes);
+                LOGGER.info("RTest GPU control: SBT handle={}", java.util.HexFormat.of().formatHex(handleBytes));
+                try (NativeBuffer.Mapped mapped = sbt.map()) {
+                    MemoryUtil.memCopy(MemoryUtil.memAddress(groupHandle), MemoryUtil.memAddress(mapped.buffer()), groupHandle.remaining());
+                }
+                try (NativeBuffer.Mapped mapped = output.map()) {
+                    mapped.buffer().order(ByteOrder.nativeOrder()).putInt(0, 0);
+                    mapped.buffer().putInt(4, 0).putInt(8, 0);
+                    mapped.flushOnlyRange(0, 12);
+                }
+                VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+                VK10.vkCmdFillBuffer(cmd, output.buffer, 0L, 12L, 0x54494e49);
+                barrier(cmd, stack, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT, VK10.VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    VK10.VK_ACCESS_SHADER_WRITE_BIT);
+                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, stack.longs(set), null);
+                VK10.vkCmdDispatch(cmd, 1, 1, 1);
+                diagnosticCheckpoint(encoder, cmd, "RT control after compute");
+                diagnosticCheckpoint(encoder, cmd, "RT control before raygen");
+                VK10.vkCmdBindPipeline(cmd, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, controlPipeline);
+                VK10.vkCmdBindDescriptorSets(cmd, KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                    layout, 0, stack.longs(set), null);
+                var raygen = VkStridedDeviceAddressRegionKHR.calloc(stack)
+                    .deviceAddress(sbt.deviceAddress()).stride(stride).size(stride);
+                var empty = VkStridedDeviceAddressRegionKHR.calloc(stack);
+                KHRRayTracingPipeline.vkCmdTraceRaysKHR(cmd, raygen, empty, empty, empty, 1, 1, 1);
+                barrier(cmd, stack, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                        | VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK10.VK_ACCESS_SHADER_WRITE_BIT | VK10.VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK10.VK_PIPELINE_STAGE_HOST_BIT, VK10.VK_ACCESS_HOST_READ_BIT);
+                diagnosticCheckpoint(encoder, cmd, "RT control after raygen");
+                VulkanUtils.crashIfFailure(device, VK10.vkEndCommandBuffer(cmd), "Failed to end diagnostic raygen command");
+                encoder.execute(cmd);
+                try (GpuFence fence = encoder.createFence()) {
+                    encoder.submit();
+                    if (!fence.awaitCompletion(5_000_000_000L)) {
+                        device.graphicsQueue().waitIdle();
+                        throw new IllegalStateException("Diagnostic raygen control timed out");
+                    }
+                }
+                try (NativeBuffer.Mapped mapped = output.map()) {
+                    mapped.flushOnlyWrittenRanges(); // Readback must not flush CPU writes over GPU results.
+                    Vma.vmaInvalidateAllocation(device.vma(), output.allocation, 0L, 12L);
+                    int value = mapped.buffer().order(ByteOrder.nativeOrder()).getInt(0);
+                    int computeValue = mapped.buffer().getInt(4), transferValue = mapped.buffer().getInt(8);
+                    LOGGER.info("RTest GPU control: readback raygen=0x{} compute=0x{} transfer=0x{}",
+                        Integer.toHexString(value), Integer.toHexString(computeValue), Integer.toHexString(transferValue));
+                    if (value != 0x52545052 || computeValue != 0x434f4d50 || transferValue != 0x54494e49)
+                        throw new IllegalStateException("Diagnostic GPU control mismatch: raygen=" + Integer.toHexString(value)
+                            + " compute=" + Integer.toHexString(computeValue) + " transfer=" + Integer.toHexString(transferValue));
+                    LOGGER.info("RTest GPU control: COMPLETE, all three results verified");
+                }
+            } finally {
+                if (sbt != null) sbt.close();
+                if (controlPipeline != 0L) VK10.vkDestroyPipeline(device.vkDevice(), controlPipeline, null);
+                if (shader != 0L) VK10.vkDestroyShaderModule(device.vkDevice(), shader, null);
+                if (computePipeline != 0L) VK10.vkDestroyPipeline(device.vkDevice(), computePipeline, null);
+                if (computeShader != 0L) VK10.vkDestroyShaderModule(device.vkDevice(), computeShader, null);
+            }
+        }
+
+        private static void diagnosticCheckpoint(VulkanCommandEncoder frameEncoder,
+                                                 VkCommandBuffer commandBuffer, String label) {
+            if (!gpuCheckpointsEnabled()) return;
+            var storage = ((com.rtest.mixin.VulkanCommandEncoderCheckpointAccessor)(Object)frameEncoder)
+                .rtest$checkpointStorage();
+            storage.recordCheckpoint(commandBuffer,
+                com.mojang.blaze3d.vulkan.checkpoints.CheckpointExtension.CheckpointType.END_RENDER_PASS,
+                () -> label);
+        }
+
+        private static boolean gpuCheckpointsEnabled() {
+            return NvidiaRayTracingValidation.requested()
+                || RayTracingClientConfig.INSTANCE.gpuCrashDiagnostics.get();
+        }
+
         private VkCommandBufferHolder recordAccelerationStructuresAndDispatch(
             VulkanCommandEncoder frameEncoder,
             MemoryStack stack,
@@ -3615,6 +3666,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             VkCommandBuffer commandBuffer = frameEncoder.allocateAndBeginTransientCommandBuffer();
             boolean commandBufferEnded = false;
             try {
+            diagnosticCheckpoint(frameEncoder, commandBuffer, "RT begin");
             if (gpuTimestampsAvailable) {
                 VK10.vkCmdResetQueryPool(commandBuffer, gpuTimestampQueryPool, 0, GPU_TIMESTAMP_COUNT);
             }
@@ -3658,10 +3710,14 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 if (!cached.built || cached.pendingUpdate) dynamicBuilds.add(cached);
             }
             int dynamicBuildBatches = recordDynamicBlasBatches(commandBuffer, dynamicBuilds);
+            diagnosticCheckpoint(frameEncoder, commandBuffer, "RT dynamic BLAS recorded");
 
             writeGpuTimestamp(commandBuffer, 12, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-            boolean tlasBuildRecorded = this.topLevelBuilt && (this.topLevelUpdatePending
-                || terrainHistoryUsable || terrainTraversalMaskReset);
+            // Animated vertices can change BLAS bounds without changing the instance transform
+            // or address. Refresh the TLAS after those builds before tracing the new geometry.
+            boolean tlasBuildRecorded = needsTopLevelRefresh(this.topLevelBuilt,
+                !dynamicBuilds.isEmpty(), this.topLevelUpdatePending,
+                terrainHistoryUsable || terrainTraversalMaskReset);
             if (tlasBuildRecorded) {
                 barrier(commandBuffer, stack,
                     VK10.VK_PIPELINE_STAGE_HOST_BIT,
@@ -3683,18 +3739,10 @@ import com.rtest.client.fsr.RtestFsrSettings;
                     KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                     KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
                         | VK12.VK_ACCESS_SHADER_READ_BIT);
-            } else if (!dynamicBuilds.isEmpty()) {
-                // An in-place BLAS rebuild can happen without a TLAS UPDATE when only animated
-                // vertices changed. It still needs an explicit build-write -> trace-read dependency.
-                barrier(commandBuffer, stack,
-                    KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                    KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                    KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
-                        | VK12.VK_ACCESS_SHADER_READ_BIT);
             }
             writeGpuTimestamp(commandBuffer, 5,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+            diagnosticCheckpoint(frameEncoder, commandBuffer, "RT TLAS ready / before trace");
 
             writeGpuTimestamp(commandBuffer, 13, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 
@@ -3726,10 +3774,16 @@ import com.rtest.client.fsr.RtestFsrSettings;
             writeGpuTimestamp(commandBuffer, 14, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             writeGpuTimestamp(commandBuffer, 0, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             KHRRayTracingPipeline.vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, outputWidth, outputHeight, 1);
+            diagnosticCheckpoint(frameEncoder, commandBuffer, "RT after trace");
             writeGpuTimestamp(commandBuffer, 1, KHRRayTracingPipeline.VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             writeGpuTimestamp(commandBuffer, 15, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             this.fsr.recordAfterRayTracing(commandBuffer, fsrToken, this.aerialPerspectiveEnabled,
-                query -> writeGpuTimestamp(commandBuffer, query, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT));
+                query -> {
+                    writeGpuTimestamp(commandBuffer, query, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                    if (gpuCheckpointsEnabled()) {
+                        diagnosticCheckpoint(frameEncoder, commandBuffer, "RT post stage " + query);
+                    }
+                });
             this.terrainTraversalPrimed = this.terrainTraversalEnabled;
             writeGpuTimestamp(commandBuffer, 2, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             imageBarrier(commandBuffer, stack,
@@ -3763,14 +3817,21 @@ import com.rtest.client.fsr.RtestFsrSettings;
             imageCopy.extent().set(displayWidth, displayHeight, 1);
             VK10.vkCmdCopyImage(commandBuffer, this.fsr.displayImage(), VK10.VK_IMAGE_LAYOUT_GENERAL,
                     targetImage, VK10.VK_IMAGE_LAYOUT_GENERAL, imageCopy);
+            diagnosticCheckpoint(frameEncoder, commandBuffer, "RT display copied");
             writeGpuTimestamp(commandBuffer, 3, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT);
             writeGpuTimestamp(commandBuffer, 30, VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             imageBarrier(commandBuffer, stack,
                 KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
                 KHRSynchronization2.VK_ACCESS_2_TRANSFER_WRITE_BIT_KHR,
-                // The normal frame's final operation is the swapchain transfer blit.
-                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+                // Screen effects/GUI use the target before the final swapchain transfer.
+                // Submission order alone does not make the copy visible to attachment loads.
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR
+                    | VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                    | VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                KHRSynchronization2.VK_ACCESS_2_TRANSFER_READ_BIT_KHR
+                    | VK10.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                    | VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                    | VK10.VK_ACCESS_SHADER_READ_BIT,
                 targetImage,
                 VK10.VK_IMAGE_LAYOUT_GENERAL,
                 VK10.VK_IMAGE_LAYOUT_GENERAL);

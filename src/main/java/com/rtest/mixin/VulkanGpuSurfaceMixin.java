@@ -15,6 +15,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /** Selects the HDR surface format when the surface exposes one. */
 @Mixin(VulkanGpuSurface.class)
 public abstract class VulkanGpuSurfaceMixin {
+    @org.spongepowered.asm.mixin.injection.Redirect(method = "present",
+        at = @At(value = "INVOKE", target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkQueuePresentKHR(Lorg/lwjgl/vulkan/VkQueue;Lorg/lwjgl/vulkan/VkPresentInfoKHR;)I"))
+    private int rtest$streamlinePresent(org.lwjgl.vulkan.VkQueue queue, org.lwjgl.vulkan.VkPresentInfoKHR info) {
+        return com.rtest.client.fsr.DlssRuntime.present(queue, info);
+    }
     @Unique
     private int rtest$colorSpace = KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 

@@ -1,7 +1,9 @@
 {
   "key.rtest.runRayTracingSmokeTest": "切换 RTest 光线追踪",
   "key.rtest.openRayTracingSettings": "打开 RTest 光线追踪设置",
-  "overlay.rtest.scene.active": "RTest RT 场景已激活；按 F8 停止",
+  "overlay.rtest.scene.active": "RTest 区块捕获完成；正在准备 RT 渲染",
+  "overlay.rtest.rendering.confirmed": "RTest RT 已进入渲染（首帧 GPU 完成，%s）；按 F8 停止",
+  "overlay.rtest.backend.unavailable": "RTest RT 无法启动：当前不是 Vulkan 后端；请查看启动日志",
   "overlay.rtest.capturing": "RTest 正在捕获 RT 区块：%s/%s",
   "overlay.rtest.smokeTest.failed": "RTest RT 测试失败；请查看 latest.log",
   "overlay.rtest.smokeTest.stopped": "RTest RT 测试已停止",
@@ -57,7 +59,7 @@
   "screen.rtest.settings.terrainLodGpuTraversalEnabled": "GPU 地形遍历 + Hi-Z（实验性）",
   "screen.rtest.settings.fluidRtEnabled": "RT 流体捕获",
   "screen.rtest.settings.hdrEnabled": "HDR（需重启）",
-  "screen.rtest.settings.fsrQuality": "FSR3 质量",
+  "screen.rtest.settings.fsrQuality": "重建质量",
   "screen.rtest.settings.nrdEnabled": "NRD 降噪",
   "screen.rtest.settings.nrdStrength": "NRD 混合强度",
   "screen.rtest.settings.nrdHitDistanceReconstruction": "命中距离重建",
@@ -118,7 +120,7 @@
   "screen.rtest.settings.terrainLodGpuTraversalEnabled.tip": "构建 GPU Hi-Z 金字塔并选择/裁剪静态地形 TLAS 实例；Vulkan 驱动验证前建议保持关闭。",
   "screen.rtest.settings.fluidRtEnabled.tip": "启用水和岩浆的流体感知 RT 捕获；关闭后使用已编译地形回退。",
   "screen.rtest.settings.hdrEnabled.tip": "使用 Wayland 线性 scRGB HDR；需要原生 Wayland surface 和支持的 HDR 显示器，切换后重启游戏。",
-  "screen.rtest.settings.fsrQuality.tip": "FSR3 的渲染分辨率和时域重建质量预设。",
+  "screen.rtest.settings.fsrQuality.tip": "FSR3 / DLSS 的渲染分辨率预设。原生抗锯齿在 DLSS 下使用 DLAA；DLSS 的高质量（75%）按质量档处理，精确分辨率由 NVIDIA SDK 决定。",
   "screen.rtest.settings.nrdEnabled.tip": "启用 NRD 4.17.3 ReBLUR；关闭后显示原始 RT。",
   "screen.rtest.settings.nrdStrength.tip": "控制随机间接光与镜面返回光的 NRD 混合比例；直接光和自发光保持原始细节。",
   "screen.rtest.settings.nrdHitDistanceReconstruction.tip": "重建无效命中距离；3x3 通常更稳，5x5 更平滑，关闭适合干净信号。",
@@ -336,5 +338,10 @@
   "screen.rtest.settings.post.motionSamples.unit": "%s 样本",
   "screen.rtest.settings.sunShadowSamples.unit": "%s 样本",
   "screen.rtest.settings.emissionScale": "非 PBR 发光强度",
-  "screen.rtest.settings.emissionScale.tip": "调整原版方块灯源、熔岩、发光物品、发光渲染层和发光粒子的基础辐射亮度，0 关闭这类基础发光。带 PBR 贴图的原版灯源仍使用这项作为照明基准；PBR 贴图发光倍率另行控制。修改后关闭设置界面，已有地形灯源会重新采集。"
+  "screen.rtest.settings.emissionScale.tip": "调整原版方块灯源、熔岩、发光物品、发光渲染层和发光粒子的基础辐射亮度，0 关闭这类基础发光。带 PBR 贴图的原版灯源仍使用这项作为照明基准；PBR 贴图发光倍率另行控制。修改后关闭设置界面，已有地形灯源会重新采集。",
+  "screen.rtest.settings.upscaler": "时域重建",
+  "screen.rtest.settings.upscaler.tip": "选择 FSR3、DLSS 超分辨率或 DLSS + 光线重建。DLSS 需要支持的 NVIDIA RTX 显卡；不支持时回退 FSR3。DLSS 两种模式目前为实验功能，光线重建替代 NRD。",
+  "screen.rtest.settings.upscaler.value.fsr": "FSR3",
+  "screen.rtest.settings.upscaler.value.dlss": "DLSS 超分辨率（实验）",
+  "screen.rtest.settings.upscaler.value.dlss_rr": "DLSS + 光线重建（实验）"
 }

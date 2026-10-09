@@ -37,7 +37,6 @@ final class RayTracingSkybox implements AutoCloseable {
         VulkanGpuTextureView view = null;
         NativeBuffer importance = null;
         SkyCdfAcceleration cdf = null;
-        VulkanCommandEncoder encoder = null;
         RayTracingSkybox result = null;
         try {
             int width = -1;
@@ -69,9 +68,10 @@ final class RayTracingSkybox implements AutoCloseable {
                 throw new IllegalStateException("RTest skybox requires a Vulkan texture");
             }
             texture = vulkanTexture;
-            // createCommandEncoder() returns the device-owned Minecraft encoder. Use a private
-            // encoder here because this upload is explicitly destroyed in the finally block.
-            encoder = new VulkanCommandEncoder(device);
+            // VulkanGpuTexture queued UNDEFINED -> GENERAL on this shared encoder in its
+            // constructor. Upload on the same encoder so the transition executes first.
+            // This encoder belongs to Minecraft and must not be destroyed here.
+            VulkanCommandEncoder encoder = device.createCommandEncoder();
             double[] skyWeights = new double[SkyImportanceTable.COUNT];
             for (int layer = 0; layer < images.length; layer++) {
                 NativeImage image = images[layer];
@@ -96,6 +96,7 @@ final class RayTracingSkybox implements AutoCloseable {
             try (GpuFence fence = encoder.createFence()) {
                 encoder.submit();
                 if (!fence.awaitCompletion(5_000_000_000L)) {
+                    device.graphicsQueue().waitIdle();
                     throw new IllegalStateException("Timed out waiting for RTest skybox upload");
                 }
             }
@@ -118,14 +119,6 @@ final class RayTracingSkybox implements AutoCloseable {
             throw new IllegalStateException("Failed to load RTest skybox", exception);
         } finally {
             try {
-                if (encoder != null) {
-                    // This upload encoder owns command pools, transient staging memory and a
-                    // submission semaphore. It is temporary and must not survive the skybox upload.
-                    // Destroy it before failure cleanup so a timed-out upload cannot race texture
-                    // destruction.
-                    encoder.destroy();
-                }
-            } finally {
                 if (result == null) {
                     if (cdf != null) cdf.close();
                     if (importance != null) importance.close();
@@ -136,6 +129,7 @@ final class RayTracingSkybox implements AutoCloseable {
                         texture.close();
                     }
                 }
+            } finally {
                 for (NativeImage image : images) {
                     if (image != null) {
                         image.close();

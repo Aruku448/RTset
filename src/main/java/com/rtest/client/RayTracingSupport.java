@@ -10,6 +10,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
 
@@ -20,11 +21,11 @@ public final class RayTracingSupport {
     public static final String DEFERRED_HOST_OPERATIONS_EXTENSION = "VK_KHR_deferred_host_operations";
 
     private static final VulkanPNextStruct ACCELERATION_STRUCTURE_FEATURES_STRUCT = new VulkanPNextStruct(
-        VkPhysicalDeviceAccelerationStructureFeaturesKHR.STYPE,
+        org.lwjgl.vulkan.KHRAccelerationStructure.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
         VkPhysicalDeviceAccelerationStructureFeaturesKHR.SIZEOF
     );
     private static final VulkanPNextStruct RAY_TRACING_PIPELINE_FEATURES_STRUCT = new VulkanPNextStruct(
-        VkPhysicalDeviceRayTracingPipelineFeaturesKHR.STYPE,
+        org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR.SIZEOF
     );
     private static final VulkanFeature ACCELERATION_STRUCTURE_FEATURE = new VulkanFeature(
@@ -46,6 +47,18 @@ public final class RayTracingSupport {
         VulkanBackend.VK12_FEATURES_STRUCT,
         "shaderSampledImageArrayNonUniformIndexing",
         VkPhysicalDeviceVulkan12Features.SHADERSAMPLEDIMAGEARRAYNONUNIFORMINDEXING
+    );
+    private static final VulkanFeature STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE = new VulkanFeature(
+        VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageWriteWithoutFormat",
+        VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT
+    );
+    private static final VulkanFeature STORAGE_IMAGE_READ_WITHOUT_FORMAT_FEATURE = new VulkanFeature(
+        VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageReadWithoutFormat",
+        VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEREADWITHOUTFORMAT
+    );
+    private static final VulkanFeature STORAGE_IMAGE_EXTENDED_FORMATS_FEATURE = new VulkanFeature(
+        VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageExtendedFormats",
+        VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEEXTENDEDFORMATS
     );
 
     private RayTracingSupport() {
@@ -74,7 +87,10 @@ public final class RayTracingSupport {
             return acceleration.accelerationStructure()
                 && rayTracing.rayTracingPipeline()
                 && vulkan12.bufferDeviceAddress()
-                && vulkan12.shaderSampledImageArrayNonUniformIndexing();
+                && vulkan12.shaderSampledImageArrayNonUniformIndexing()
+                && features.features().shaderStorageImageWriteWithoutFormat()
+                && features.features().shaderStorageImageReadWithoutFormat()
+                && features.features().shaderStorageImageExtendedFormats();
         }
     }
 
@@ -90,6 +106,12 @@ public final class RayTracingSupport {
         features.add(RAY_TRACING_PIPELINE_FEATURE);
         features.add(BUFFER_DEVICE_ADDRESS_FEATURE);
         features.add(NON_UNIFORM_SKIN_ARRAY_FEATURE);
+        // Bundled NRD compute modules declare formatless storage image reads and writes.
+        features.add(STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE);
+        features.add(STORAGE_IMAGE_READ_WITHOUT_FORMAT_FEATURE);
+        // The raygen motion output uses rg16f and declares StorageImageExtendedFormats.
+        features.add(STORAGE_IMAGE_EXTENDED_FORMATS_FEATURE);
+        NvidiaRayTracingValidation.addDeviceRequirements(extensions, features, physicalDevice);
     }
 
     public static Set<String> requiredExtensions() {
@@ -98,6 +120,18 @@ public final class RayTracingSupport {
             RAY_TRACING_PIPELINE_EXTENSION,
             DEFERRED_HOST_OPERATIONS_EXTENSION
         );
+    }
+
+    /** Inspect the actual final creation chain, rather than supported features or requested sets. */
+    public static void logDeviceCreationFeatures(org.lwjgl.vulkan.VkDeviceCreateInfo info) {
+        if (!NvidiaRayTracingValidation.requested()) return;
+        com.mojang.logging.LogUtils.getLogger().info(
+            "RTest actual device creation features: rayTracingPipeline={} accelerationStructure={} bufferDeviceAddress={} nonUniformSkinArray={} storageImageWriteWithoutFormat={} storageImageReadWithoutFormat={} storageImageExtendedFormats={}",
+            RAY_TRACING_PIPELINE_FEATURE.get(info.address()), ACCELERATION_STRUCTURE_FEATURE.get(info.address()),
+            BUFFER_DEVICE_ADDRESS_FEATURE.get(info.address()), NON_UNIFORM_SKIN_ARRAY_FEATURE.get(info.address()),
+            info.pEnabledFeatures() != null && info.pEnabledFeatures().shaderStorageImageWriteWithoutFormat(),
+            info.pEnabledFeatures() != null && info.pEnabledFeatures().shaderStorageImageReadWithoutFormat(),
+            info.pEnabledFeatures() != null && info.pEnabledFeatures().shaderStorageImageExtendedFormats());
     }
 
     public static Limits queryLimits(com.mojang.blaze3d.vulkan.VulkanDevice device) {

@@ -3,7 +3,8 @@ package com.rtest.client.fsr;
 /** Shared per-frame contract between RayGen guide production and post-process consumption. */
 public enum RtestDenoiserMode {
     OFF(-1.0F),
-    NRD(1.0F);
+    NRD(1.0F),
+    DLSS_RR(2.0F);
 
     private final float shaderSignal;
 

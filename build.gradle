@@ -90,6 +90,13 @@ neoForge {
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 tasks.named('processResources') {
+    from('third_party/streamline') {
+        include 'license.txt', 'nvngx_dlss.license.txt', '3rd-party-licenses.md', 'LLVM-LICENSE.txt', 'sdk-lock.json'
+        into 'META-INF/licenses/streamline'
+    }
+    from('third_party/streamline/vulkan-headers/LICENSE.md') {
+        into 'META-INF/licenses/streamline/vulkan-headers'
+    }
     from('third_party') {
         include 'PRIME-LICENSE.txt', 'PRIME-LICENSE-EXCEPTIONS.txt'
         into 'META-INF/licenses/rtest'
@@ -103,6 +110,27 @@ tasks.named('processResources') {
     }
 }
 
+def verifyDlssResources = tasks.register('verifyDlssResources', Exec) {
+    workingDir projectDir
+    commandLine (project.findProperty('python_executable') ?: 'python'), 'scripts/verify_dlss_resources.py'
+    inputs.file('scripts/verify_dlss_resources.py')
+    inputs.file('third_party/streamline/sdk-lock.json')
+    inputs.dir('src/main/resources/rtest/natives/windows-x86_64/streamline')
+}
+tasks.named('processResources') { dependsOn verifyDlssResources }
+
+tasks.register('dlssContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.fsr.DlssContractTest'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+tasks.named('test') { dependsOn 'dlssContractTest' }
+tasks.register('dlssDeviceNegotiationTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.fsr.DlssDeviceNegotiationTest'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
 // Distribute this archive alongside the mod JAR; a license notice alone is not source delivery.
 tasks.register('correspondingSource', Zip) {
     archiveClassifier = 'corresponding-source'
@@ -110,7 +138,7 @@ tasks.register('correspondingSource', Zip) {
     from(projectDir) {
         include 'src/**', 'native/**', 'scripts/**', 'third_party/**', 'gradle/**'
         include 'gradlew', 'gradlew.bat', '*.gradle', 'gradle.properties', 'LICENSE', 'README.md'
-        include '*.bat', '*.ps1', 'docs/prime-atmosphere*.md'
+        include '*.bat', '*.ps1', 'docs/prime-atmosphere*.md', 'docs/dlss-integration*.md'
         exclude '**/build/**', '**/.gradle/**', '**/__pycache__/**', '**/*.pyc'
     }
 }
@@ -574,3 +602,16 @@ tasks.register('vulkanUnsignedLimitTest', JavaExec) {
     mainClass = 'com.rtest.client.VulkanUnsignedLimitTest'
 }
 tasks.named('test') { dependsOn 'vulkanUnsignedLimitTest' }
+
+tasks.register('vulkanDeviceFeatureChainTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.VulkanDeviceFeatureChainTest'
+    if (project.hasProperty('vulkan_gpu_validation')) args '--gpu'
+}
+tasks.named('test') { dependsOn 'vulkanDeviceFeatureChainTest' }
+
+tasks.register('rayTracingPipelineContractTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.rtest.client.RayTracingPipelineContractTest'
+}
+tasks.named('test') { dependsOn 'rayTracingPipelineContractTest' }

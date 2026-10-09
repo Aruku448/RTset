@@ -35,6 +35,14 @@ final class RtestVulkanImage implements AutoCloseable {
         return this.image;
     }
 
+    long memory() {
+        try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            var info = org.lwjgl.util.vma.VmaAllocationInfo.calloc(stack);
+            Vma.vmaGetAllocationInfo(this.allocator, this.allocation, info);
+            return info.deviceMemory();
+        }
+    }
+
     long view() {
         return this.view;
     }

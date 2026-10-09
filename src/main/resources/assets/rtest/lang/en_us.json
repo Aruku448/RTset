@@ -1,7 +1,9 @@
 {
   "key.rtest.runRayTracingSmokeTest": "Toggle RTest ray tracing",
   "key.rtest.openRayTracingSettings": "RTest ray-tracing settings",
-  "overlay.rtest.scene.active": "RTest RT scene active; press F8 to stop",
+  "overlay.rtest.scene.active": "RTest section capture complete; preparing RT rendering",
+  "overlay.rtest.rendering.confirmed": "RTest RT is rendering (first GPU frame complete, %s); press F8 to stop",
+  "overlay.rtest.backend.unavailable": "RTest RT cannot start: Vulkan backend unavailable; see startup log",
   "overlay.rtest.capturing": "RTest capturing RT sections %s/%s",
   "overlay.rtest.smokeTest.failed": "RTest RT smoke test failed; see latest.log",
   "overlay.rtest.smokeTest.stopped": "RTest RT smoke test stopped",
@@ -57,7 +59,7 @@
   "screen.rtest.settings.terrainLodGpuTraversalEnabled": "GPU terrain traversal + Hi-Z (experimental)",
   "screen.rtest.settings.fluidRtEnabled": "RT fluid capture",
   "screen.rtest.settings.hdrEnabled": "HDR (restart required)",
-  "screen.rtest.settings.fsrQuality": "FSR3 quality",
+  "screen.rtest.settings.fsrQuality": "Reconstruction quality",
   "screen.rtest.settings.nrdEnabled": "NRD denoiser",
   "screen.rtest.settings.nrdStrength": "NRD blend strength",
   "screen.rtest.settings.nrdHitDistanceReconstruction": "Hit-distance reconstruction",
@@ -118,7 +120,7 @@
   "screen.rtest.settings.terrainLodGpuTraversalEnabled.tip": "Build a GPU Hi-Z pyramid and select/cull static terrain TLAS instances; keep off until the Vulkan driver path is validated.",
   "screen.rtest.settings.fluidRtEnabled.tip": "Use fluid-aware RT capture for water and lava; disable to use the compiled-terrain fallback.",
   "screen.rtest.settings.hdrEnabled.tip": "Use the linear scRGB HDR path on native Wayland when the display exposes it; restart after changing this option.",
-  "screen.rtest.settings.fsrQuality.tip": "FSR3 render-resolution and temporal reconstruction quality preset.",
+  "screen.rtest.settings.fsrQuality.tip": "FSR3 / DLSS render-resolution preset. Native AA uses DLAA for DLSS; High quality (75%) maps to the DLSS Quality mode. Exact DLSS dimensions come from NVIDIA SDK.",
   "screen.rtest.settings.nrdEnabled.tip": "Enable NRD 4.17.3 ReBLUR; disable to view raw RT.",
   "screen.rtest.settings.nrdStrength.tip": "Blend stochastic indirect and reflected lighting toward NRD; direct light and visible emission retain raw detail.",
   "screen.rtest.settings.nrdHitDistanceReconstruction.tip": "Reconstruct invalid hit distances; 3x3 is a balanced default, 5x5 is smoother, and off is for clean signals.",
@@ -336,5 +338,10 @@
   "screen.rtest.settings.post.motionSamples.unit": "%s samples",
   "screen.rtest.settings.sunShadowSamples.unit": "%s samples",
   "screen.rtest.settings.emissionScale": "Non-PBR emission strength",
-  "screen.rtest.settings.emissionScale.tip": "Scales base radiance from vanilla block lights, lava, emissive items, render layers and particles; zero disables base emission. Vanilla lights with PBR maps also use this lighting calibration; PBR texture emission has a separate control. Close settings after editing to recapture existing terrain lights."
+  "screen.rtest.settings.emissionScale.tip": "Scales base radiance from vanilla block lights, lava, emissive items, render layers and particles; zero disables base emission. Vanilla lights with PBR maps also use this lighting calibration; PBR texture emission has a separate control. Close settings after editing to recapture existing terrain lights.",
+  "screen.rtest.settings.upscaler": "Temporal reconstruction",
+  "screen.rtest.settings.upscaler.tip": "FSR3, DLSS Super Resolution, or DLSS + Ray Reconstruction. DLSS requires a supported NVIDIA RTX GPU; unsupported devices use FSR3. Both DLSS modes are experimental. Ray Reconstruction replaces NRD.",
+  "screen.rtest.settings.upscaler.value.fsr": "FSR3",
+  "screen.rtest.settings.upscaler.value.dlss": "DLSS Super Resolution (experimental)",
+  "screen.rtest.settings.upscaler.value.dlss_rr": "DLSS + Ray Reconstruction (experimental)"
 }

@@ -2803,7 +2803,7 @@ final class RayTracingShaderRaygen {
                     ? 1.0 : 0.0;
                 imageStore(fsrMotion, outputPixel, vec4(motion, 0.0, 0.0));
                 imageStore(fsrDepth, outputPixel, vec4(depthValue, 0.0, 0.0, 0.0));
-                // Frame-uniform mode: -1=off, 1=NRD. Do not generate
+                // Frame-uniform mode: -1=off, 1=NRD, 2=DLSS RR. Do not generate
                 // eleven unconsumed guide images while NRD is disabled.
                 if (camera.dynamicParameters.w >= 0.0) {
                 vec3 nrdNormal = primaryHit ? normalize(primaryNormal) : vec3(0.0, 0.0, 1.0);
@@ -2860,6 +2860,10 @@ final class RayTracingShaderRaygen {
                     ? diffuseSignalDistance : -1.0;
                 float specularGeneratorHitDistance = nrdSpecularSignalActive > 0.5
                     ? specularSignalDistance : -1.0;
+                if (camera.dynamicParameters.w > 1.5) {
+                    // RR receives an actual secondary distance, without NRD's direct-light fallback.
+                    specularGeneratorHitDistance = max(specularHitDistance, 0.0);
+                }
                 imageStore(nrdNoisyDiffuse, outputPixel,
                     vec4(nrdDiffuseRadiance, diffuseGeneratorHitDistance));
                 imageStore(nrdNoisySpecular, outputPixel,

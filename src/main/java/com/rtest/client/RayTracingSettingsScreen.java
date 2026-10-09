@@ -220,6 +220,7 @@ public final class RayTracingSettingsScreen extends Screen {
             choice("screen.rtest.settings.terrainLodFarCacheEnabled", c.terrainLodFarCacheEnabled, List.of(true, false)),
             choice("screen.rtest.settings.terrainLodGpuTraversalEnabled", c.terrainLodGpuTraversalEnabled, List.of(true, false)),
             choice("screen.rtest.settings.fluidRtEnabled", c.fluidRtEnabled, List.of(true, false)),
+            choice("screen.rtest.settings.upscaler", c.upscaler, List.of("fsr", "dlss", "dlss_rr")),
             choice("screen.rtest.settings.fsrQuality", c.fsrQuality, List.of("native_aa", "quality_75", "quality", "balanced", "performance", "ultra_performance"))
         );
     }

@@ -11,6 +11,7 @@ public final class RayTracingClientConfig {
     private final ModConfigSpec auditSpec;
     public final ModConfigSpec.ConfigValue<String> rayCostAuditProfile;
     public final ModConfigSpec.BooleanValue forceTlasBuild;
+    public final ModConfigSpec.BooleanValue gpuCrashDiagnostics;
     public static final RayTracingClientConfig INSTANCE;
 
     public final PostProcessingSettings post;
@@ -65,6 +66,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.BooleanValue pbrEntityParallaxEnabled;
     public final ModConfigSpec.DoubleValue pbrParallaxDepth;
     public final ModConfigSpec.ConfigValue<String> fsrQuality;
+    public final ModConfigSpec.ConfigValue<String> upscaler;
     public final ModConfigSpec.BooleanValue hdrEnabled;
     public final ModConfigSpec.BooleanValue hdrWideGamutEnabled;
     public final ModConfigSpec.BooleanValue nativeColorDecodeEnabled;
@@ -117,11 +119,14 @@ public final class RayTracingClientConfig {
         restirSpec = restirBuilder.build();
         ModConfigSpec.Builder auditBuilder = new ModConfigSpec.Builder();
         rayCostAuditProfile = auditBuilder
-            .comment("Diagnostic shader ablation. baseline preserves rendering. Other profiles change the image and rebuild the RT pipeline: no_gi, no_sun, no_moon, no_area, no_sky_nee, no_volume, no_restir, no_pom, no_pbr, no_shadow_rays, no_dynamic_delta, primary_material, traversal_only.")
+            .comment("Diagnostic shader ablation. baseline preserves rendering. Other profiles change the image and rebuild the RT pipeline: no_gi, no_sun, no_moon, no_area, no_sky_nee, no_volume, no_restir, no_pom, no_pbr, no_shadow_rays, no_dynamic_delta, primary_material, traversal_only, opaque_traversal (skips alpha any-hit and material reads; solid geometry).")
             .define("rayCostAuditProfile", "baseline", value -> value instanceof String name && RayTracingCostAudit.valid(name));
         forceTlasBuild = auditBuilder
             .comment("Diagnostic: rebuild TLAS instead of refitting with UPDATE. Keeps scene updates and BLAS work. Not a proven DEVICE_LOST fix; may increase build cost.")
             .define("forceTlasBuild", false);
+        gpuCrashDiagnostics = auditBuilder
+            .comment("Diagnostic GPU checkpoints and first-eight-frame CPU retirement logs. Independent of NVIDIA driver validation; no extra waits.")
+            .define("gpuCrashDiagnostics", false);
         auditSpec = auditBuilder.build();
         gpuLightTreeEnabled = builder.comment("Build large emissive light trees using GPU compute; small trees stay on CPU.").define("gpuLightTreeEnabled", true);
         sunIntensity = builder
@@ -260,6 +265,8 @@ public final class RayTracingClientConfig {
         fsrQuality = builder
             .comment("FSR quality preset: native_aa, quality_75, quality, balanced, performance, ultra_performance.")
             .define("fsrQuality", "native_aa");
+        upscaler = builder.comment("Temporal reconstruction: fsr, dlss, dlss_rr. Unsupported GPUs use FSR. RR replaces NRD.")
+            .define("upscaler", "fsr");
         hdrEnabled = builder
             .comment("Use an HDR float swapchain when supported. Disabled by default for a standard sRGB/SDR output.")
             .define("hdrEnabled", false);

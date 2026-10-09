@@ -5,10 +5,10 @@ final class RayTracingCostAudit {
     enum Profile {
         BASELINE, NO_GI, NO_SUN, NO_MOON, NO_AREA, NO_SKY_NEE, NO_VOLUME,
         NO_RESTIR, NO_POM, NO_PBR, NO_SHADOW_RAYS, NO_DYNAMIC_DELTA, PRIMARY_MATERIAL, TRAVERSAL_ONLY,
-        SUN_VISIBILITY;
+        SUN_VISIBILITY, OPAQUE_TRAVERSAL;
 
         String key() { return name().toLowerCase(java.util.Locale.ROOT); }
-        boolean primaryOnly() { return this == PRIMARY_MATERIAL || this == TRAVERSAL_ONLY; }
+        boolean primaryOnly() { return this == PRIMARY_MATERIAL || this == TRAVERSAL_ONLY || this == OPAQUE_TRAVERSAL; }
         int effectiveRestirMode(int requested) {
             if (primaryOnly() || this == NO_RESTIR || this == SUN_VISIBILITY) return 0;
             if (this == NO_GI) return requested & ~RestirLayout.SUFFIX;
@@ -29,6 +29,18 @@ final class RayTracingCostAudit {
 
     static String raygen(String source, Profile profile) {
         if (profile == Profile.BASELINE) return source;
+        if (profile == Profile.OPAQUE_TRAVERSAL) {
+            // Existing traversal_only still executes the material/alpha any-hit shader.
+            // Isolate AS traversal and the minimal closest-hit payload without that code.
+            var primaryTrace = java.util.regex.Pattern.compile(
+                "traceRayEXT\\(\\s*topLevelAS,\\s*0,\\s*\\(bounce == 0 \\? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK\\),");
+            if (primaryTrace.matcher(source).results().count() != 1L)
+                throw new IllegalArgumentException("Expected one primary path trace seam");
+            source = primaryTrace.matcher(source).replaceFirst(
+                "traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, (bounce == 0 ? PRIMARY_RAY_MASK : SECONDARY_RAY_MASK),");
+            source = replace(source, "uint debugView = uint(max(camera.parameters.z, 0.0) + 0.5);",
+                "uint debugView = 0u; // audit: also omit optional debug shadow/blocker rays");
+        }
         if (profile == Profile.NO_GI || profile.primaryOnly()) {
             source = replace(source, "int maxPathSegments = 1 + giBounces;", "int maxPathSegments = 1;");
         }
@@ -91,7 +103,7 @@ final class RayTracingCostAudit {
     }
 
     static String closestHit(String source, Profile profile) {
-        if (profile == Profile.TRAVERSAL_ONLY) {
+        if (profile == Profile.TRAVERSAL_ONLY || profile == Profile.OPAQUE_TRAVERSAL) {
             source = replace(source, "void main() {", "void main() {\n"
                 + "pathPosition = vec4(gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT, 1.0);\n"
                 + "pathLocalPosition = vec4(gl_ObjectRayOriginEXT + gl_HitTEXT * gl_ObjectRayDirectionEXT, 1.0);\n"

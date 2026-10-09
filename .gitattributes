@@ -3,3 +3,8 @@
 /third_party/prime-atmosphere-26.3/**/*.slang text eol=lf
 /third_party/prime-atmosphere-26.3/**/*.json text eol=lf
 /third_party/prime-atmosphere-26.3/*.json text eol=lf
+
+# Streamline runtime files (including the license) are verified byte-for-byte.
+# Preserve official SDK headers and notices without checkout normalization.
+/src/main/resources/rtest/natives/windows-x86_64/streamline/** -text
+/third_party/streamline/** -text

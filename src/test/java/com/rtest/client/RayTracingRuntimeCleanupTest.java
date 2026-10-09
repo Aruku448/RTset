@@ -9,8 +9,8 @@ public final class RayTracingRuntimeCleanupTest {
 
     public static void main(String[] args) throws Exception {
         com.rtest.client.fsr.NrdImageListTest.main(args);
-        String pass = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingVulkanPass.java"));
-        String dynamic = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingDynamicInstances.java"));
+        String pass = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingVulkanPass.java")).replace("\r\n", "\n");
+        String dynamic = Files.readString(Path.of("src/main/java/com/rtest/client/RayTracingDynamicInstances.java")).replace("\r\n", "\n");
         if (count(pass, "RayTracingSupport.queryLimits(") != 1 || dynamic.contains("RayTracingSupport.queryLimits(")) {
             throw new AssertionError("device limits must be queried once during pass creation, not every update");
         }

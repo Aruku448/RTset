@@ -80,6 +80,7 @@ public final class RtestFsr3 implements AutoCloseable {
         RtestVulkanContext context = new RtestVulkanContext(device);
         List<RtestVulkanImage> created = new ArrayList<>();
         NrdDenoiser nrd = null;
+        RtestFsr3Upscaler upscaler = null;
         AerialPerspectiveComposite aerialComposite = null;
         try {
             RtestVulkanImage scene = own(created, context.createImage2D(renderWidth, renderHeight,
@@ -109,12 +110,17 @@ public final class RtestFsr3 implements AutoCloseable {
                     "RTest physical aerial L"));
             aerialComposite = AerialPerspectiveComposite.create(
                     context, scene, depth, physicalAerialL);
-            RtestFsr3Upscaler upscaler = RtestFsr3Upscaler.create(
+            upscaler = RtestFsr3Upscaler.create(
                     context, renderWidth, renderHeight, displayWidth, displayHeight,
                     qualityMode, scene, motion, depth, reactive, transparency, display);
+            RtestUpscalerMode mode = DlssRuntime.effective(device);
+            if (mode != RtestUpscalerMode.FSR) upscaler.enableDlss(mode, scene, motion, depth, nrd);
             return new RtestFsr3(context, scene, motion, depth, terrainHiZ, reactive, transparency,
                     display, physicalAerialL, upscaler, nrd, aerialComposite);
         } catch (RuntimeException | Error exception) {
+            if (upscaler != null) {
+                try { upscaler.destroy(); } catch (Throwable cleanup) { exception.addSuppressed(cleanup); }
+            }
             if (aerialComposite != null) {
                 try {
                     aerialComposite.destroy();
@@ -148,6 +154,8 @@ public final class RtestFsr3 implements AutoCloseable {
     public int renderWidth() {
         return this.sceneColor.width();
     }
+
+    public RtestUpscalerMode mode() { return this.upscaler.mode(); }
 
     public int renderHeight() {
         return this.sceneColor.height();
@@ -226,6 +234,7 @@ public final class RtestFsr3 implements AutoCloseable {
         this.frameNrdStrength = RayTracingClientConfig.INSTANCE.nrdStrength.get().floatValue();
         RtestDenoiserMode nextDenoiserMode = RtestDenoiserMode.select(
             RayTracingClientConfig.INSTANCE.nrdEnabled.get(), this.frameNrdStrength);
+        if (this.upscaler.mode() == RtestUpscalerMode.DLSS_RR) nextDenoiserMode = RtestDenoiserMode.DLSS_RR;
         if (nextDenoiserMode != this.frameDenoiserMode) {
             // FSR must not blend previous raw/other-denoiser output into this mode's history.
             // Request before beginFrame snapshots the reset bit; stable modes do not reset.

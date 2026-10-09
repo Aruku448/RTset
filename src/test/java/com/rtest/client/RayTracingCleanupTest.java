@@ -13,7 +13,8 @@ public final class RayTracingCleanupTest {
             if (field.getName().endsWith("_SHADER")) stages.add(field.getName());
         }
         Set<String> active = Set.of("RAYGEN_SHADER", "MISS_SHADER", "CLOSEST_HIT_SHADER",
-            "SHADOW_MISS_SHADER", "SHADOW_CLOSEST_HIT_SHADER", "ANY_HIT_SHADER", "SHADOW_ANY_HIT_SHADER");
+            "SHADOW_MISS_SHADER", "SHADOW_CLOSEST_HIT_SHADER", "ANY_HIT_SHADER", "SHADOW_ANY_HIT_SHADER",
+            "CONTROL_RAYGEN_SHADER", "CONTROL_COMPUTE_SHADER");
         if (!stages.equals(active)) throw new AssertionError("unused/missing shader stages: " + stages);
         String raygen = RayTracingShaders.RAYGEN_SHADER;
         for (String dead : new String[] {"pcgHash(", "randomFloat(", "inout uint seed",

@@ -100,6 +100,14 @@ public final class RtestFsr3Upscaler implements Destroyable {
     private boolean resetRequested = true;
     private boolean initialized;
     private boolean destroyed;
+    private DlssReconstruction dlss;
+
+    void enableDlss(RtestUpscalerMode mode, RtestVulkanImage scene, RtestVulkanImage motion,
+                    RtestVulkanImage depth, NrdDenoiser guides) {
+        this.dlss = new DlssReconstruction(context, mode, qualityMode, scene, motion, depth, guides, resources.fsrOutput);
+    }
+
+    RtestUpscalerMode mode() { return dlss == null ? RtestUpscalerMode.FSR : dlss.mode(); }
 
     private RtestFsr3Upscaler(
             RtestVulkanContext context,
@@ -404,6 +412,10 @@ public final class RtestFsr3Upscaler implements Destroyable {
         int rcasY = divideRoundUp(this.displayHeight, 16);
 
         milestone.accept(19);
+        if (this.dlss != null) {
+            this.dlss.record(commandBuffer, token);
+            for (int stage = 20; stage <= 26; stage++) milestone.accept(stage);
+        } else {
         this.passes[0].record(commandBuffer, parity, sourceX, sourceY, null);
         computeBarrier(commandBuffer);
         milestone.accept(20);
@@ -427,6 +439,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
         milestone.accept(26);
         this.passes[7].record(commandBuffer, parity, rcasX, rcasY, null);
         computeBarrier(commandBuffer);
+        }
         milestone.accept(27);
         RtestFsrDebugView debugView = RtestFsrSettings.debugView();
         if (debugView == RtestFsrDebugView.OVERVIEW) {
@@ -839,6 +852,7 @@ public final class RtestFsr3Upscaler implements Destroyable {
 
     @Override
     public void destroy() {
+        if (this.dlss != null) { this.dlss.close(); this.dlss = null; }
         if (this.destroyed) {
             return;
         }
@@ -1170,6 +1184,9 @@ public final class RtestFsr3Upscaler implements Destroyable {
         public boolean cameraCut() {
             return this.cameraCut;
         }
+
+        RtestFsrCamera camera() { return this.camera; }
+        RtestFsrCamera previousCamera() { return this.owner.previousCamera; }
     }
 
     private static final class Resources implements Destroyable {
