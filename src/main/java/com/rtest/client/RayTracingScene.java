@@ -1,10 +1,5 @@
 package com.rtest.client;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
-import com.mojang.blaze3d.vulkan.VulkanGpuSampler;
-import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -22,7 +17,6 @@ import net.minecraft.client.renderer.block.FluidRenderer;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.model.geom.builders.UVPair;
@@ -36,7 +30,6 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -45,57 +38,7 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.core.registries.BuiltInRegistries;
 import org.joml.Vector3fc;
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import com.mojang.blaze3d.vulkan.VulkanUtils;
 import com.mojang.logging.LogUtils;
-import java.nio.ByteBuffer;
-import java.nio.FloatBuffer;
-import java.nio.LongBuffer;
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.shaderc.Shaderc;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.vulkan.KHRAccelerationStructure;
-import org.lwjgl.vulkan.KHRRayTracingPipeline;
-import org.lwjgl.vulkan.KHRSynchronization2;
-import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK12;
-import org.lwjgl.vulkan.VkAccelerationStructureBuildGeometryInfoKHR;
-import org.lwjgl.vulkan.VkBufferImageCopy;
-import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryInstancesDataKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureGeometryTrianglesDataKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
-import org.lwjgl.vulkan.VkDependencyInfo;
-import org.lwjgl.vulkan.VkDescriptorBufferInfo;
-import org.lwjgl.vulkan.VkDescriptorImageInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolSize;
-import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkDeviceOrHostAddressConstKHR;
-import org.lwjgl.vulkan.VkDeviceOrHostAddressKHR;
-import org.lwjgl.vulkan.VkImageMemoryBarrier2;
-import org.lwjgl.vulkan.VkImageSubresourceRange;
-import org.lwjgl.vulkan.VkMemoryBarrier2;
-import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
-import org.lwjgl.vulkan.VkImageSubresourceLayers;
-import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
-import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
-import org.lwjgl.vulkan.VkRayTracingPipelineCreateInfoKHR;
-import org.lwjgl.vulkan.VkRayTracingShaderGroupCreateInfoKHR;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
-import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
-import org.lwjgl.vulkan.VkWriteDescriptorSet;
-import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 import org.slf4j.Logger;
 
 public final class RayTracingScene {
@@ -538,7 +481,7 @@ public final class RayTracingScene {
                 sectionTriangleCount(sections), renderDistanceChunks,
                 source.originX, source.originY, source.originZ, false,
                 NEXT_REVISION.incrementAndGet(), true, false,
-                previousActive.materialLayout.update(sections), previousActive);
+                previousActive.materialLayout.updatePreservingAddresses(sections), previousActive);
         }
 
         /**
@@ -586,14 +529,32 @@ public final class RayTracingScene {
             for (SectionGeometry section : this.sections) {
                 merged.put(sectionOriginKey(section), section);
             }
+            java.util.Set<Long> replacementOrigins = new java.util.HashSet<>();
+            for (SectionGeometry section : replacements.sections) {
+                replacementOrigins.add(sectionOriginKey(section));
+            }
             for (long origin : dirtySectionOrigins) {
-                merged.remove(origin);
+                if (!replacementOrigins.contains(origin)) merged.remove(origin);
             }
             for (SectionGeometry section : replacements.sections) {
-                merged.put(sectionOriginKey(section), section);
+                long key = sectionOriginKey(section);
+                SectionGeometry previous = merged.get(key);
+                // Keep existing insertion order and identity for equal recaptures. Moving a
+                // section to the end also reorders emitter IDs and unnecessarily rebuilds the tree.
+                boolean identical = previous != null
+                    && previous.vertexFingerprint == section.vertexFingerprint
+                    && previous.materialFingerprint == section.materialFingerprint
+                    && previous.terrainNodeKey.equals(section.terrainNodeKey)
+                    && java.util.Arrays.equals(previous.vertices, section.vertices)
+                    && java.util.Arrays.equals(previous.materialData, section.materialData);
+                merged.put(key, identical ? previous : section);
             }
 
             List<SectionGeometry> mergedSections = new ArrayList<>(merged.values());
+            if (mergedSections.equals(this.sections)
+                && (replacements.pbrData.length == 0 || java.util.Arrays.equals(this.pbrData, replacements.pbrData))) {
+                return this;
+            }
             if (mergedSections.isEmpty()) {
                 addFallbackGeometry(mergedSections, cameraPosition);
             }
@@ -684,6 +645,8 @@ public final class RayTracingScene {
             private final boolean ownsPbrMaterials;
             private int cursor;
             private int compiledMeshSections;
+            private int sodiumMeshSections;
+            private int sodiumHybridFluidSections;
             private int cpuFallbackSections;
             private int fluidSections;
             private boolean closed;
@@ -775,6 +738,7 @@ public final class RayTracingScene {
                     BlockPos origin = this.sectionOrigins.get(this.cursor++);
                     LevelChunkSection capturedSection = section(this.level, origin);
                     CompiledSectionMeshCache.CompiledMesh compiled = CompiledSectionMeshCache.get(origin);
+                    SodiumTerrainMeshCache.Mesh sodium = SodiumTerrainMeshCache.get(origin);
                     boolean fluidEnabled = RayTracingClientConfig.INSTANCE.fluidRtEnabled.get();
                     boolean containsFluid = fluidEnabled
                         && capturedSection != null
@@ -810,11 +774,15 @@ public final class RayTracingScene {
                         ? null : compiled;
                     SectionGeometry section = captureSection(
                         this.level, this.modelSet, this.fluidModelSet, this.blockColors,
-                        this.pbrMaterials, origin, capturedSection, source, fluidEnabled);
+                        this.pbrMaterials, origin, capturedSection, source, fluidEnabled,
+                        capturedSection != null ? sodium : null);
                     if (containsFluid) {
                         this.fluidSections++;
                     }
-                    if (source != null) {
+                    if (sodium != null && capturedSection != null) {
+                        this.sodiumMeshSections++;
+                        if (containsFluid) this.sodiumHybridFluidSections++;
+                    } else if (source != null) {
                         this.compiledMeshSections++;
                     } else {
                         this.cpuFallbackSections++;
@@ -872,6 +840,10 @@ public final class RayTracingScene {
                 }
                 // A partial capture is only a section delta consumed by replaceSections(); it
                 // never needs scene-wide arrays or the static PBR table.
+                LOGGER.info("RTest terrain reuse: capture={} processed={} sodium={} hybridFluid={} compiled={} cpu={}; {}",
+                    allowFallback ? "full" : "incremental", this.cursor, this.sodiumMeshSections,
+                    this.sodiumHybridFluidSections, this.compiledMeshSections, this.cpuFallbackSections,
+                    SodiumTerrainMeshCache.diagnostics());
                 if (!allowFallback) {
                     return new SceneGeometry(
                         this.sections,
@@ -893,6 +865,7 @@ public final class RayTracingScene {
                 LOGGER.info("RTest loaded {} PBR companion texture sets during scene capture", this.pbrMaterials.loadedMapCount());
                 LOGGER.info("RTest scene capture used {} compiled MeshData sections and {} CPU fallback sections",
                     this.compiledMeshSections, this.cpuFallbackSections);
+                LOGGER.info("RTest scene capture reused {} sprite-aware Sodium sections", this.sodiumMeshSections);
                 if (this.fluidSections > 0) {
                     LOGGER.info("RTest fluid capture inspected {} sections; fluid-aware CPU path={} (fallback={})",
                         this.fluidSections, RayTracingClientConfig.INSTANCE.fluidRtEnabled.get(),
@@ -980,8 +953,12 @@ public final class RayTracingScene {
             BlockPos sectionOrigin,
             LevelChunkSection capturedSection,
             CompiledSectionMeshCache.CompiledMesh compiled,
-            boolean fluidRtEnabled
+            boolean fluidRtEnabled,
+            SodiumTerrainMeshCache.Mesh sodium
         ) {
+            if (sodium != null && (capturedSection == null || !fluidRtEnabled || !capturedSection.hasFluid())) {
+                return captureSodiumSection(sectionOrigin, sodium, pbrMaterials);
+            }
             if (compiled != null) {
                 return new SectionGeometry(
                     sectionOrigin.getX(), sectionOrigin.getY(), sectionOrigin.getZ(),
@@ -992,6 +969,7 @@ public final class RayTracingScene {
             }
             FloatAccumulator sectionVertices = new FloatAccumulator();
             FloatAccumulator sectionMaterialData = new FloatAccumulator();
+            if (sodium != null) appendSodiumBlocks(sectionVertices, sectionMaterialData, sectionOrigin, sodium, pbrMaterials);
             List<BlockStateModelPart> parts = new ArrayList<>();
             // Reuse mutable block and neighbor positions plus one RandomSource per Section,
             // avoiding millions of short-lived BlockPos allocations in the face-culling loop.
@@ -1013,7 +991,9 @@ public final class RayTracingScene {
                         if (fluidRtEnabled && !fluidState.isEmpty()) {
                             addFluidGeometry(sectionVertices, sectionMaterialData, sectionOrigin, level, fluidModelSet, position, state, fluidState);
                         }
-                        if (state.getRenderShape() != RenderShape.MODEL) {
+                        // The Sodium component contains all ordinary blocks, including those
+                        // with waterlogging. Only reconstruct fluids in a hybrid section.
+                        if (sodium != null || state.getRenderShape() != RenderShape.MODEL) {
                             continue;
                         }
                         BlockStateModel model = modelSet.get(state);
@@ -1048,6 +1028,39 @@ public final class RayTracingScene {
             return SectionGeometry.takeOwnership(
                 sectionOrigin.getX(), sectionOrigin.getY(), sectionOrigin.getZ(),
                 toFloatArray(sectionVertices), toFloatArray(sectionMaterialData));
+        }
+
+        /** Reuses Sodium's transformed geometry and pre-lighting tint with RTest's material ABI. */
+        static SectionGeometry captureSodiumSection(BlockPos origin, SodiumTerrainMeshCache.Mesh mesh,
+                                                     RayTracingPbrMaterials pbrMaterials) {
+            FloatAccumulator vertices = new FloatAccumulator();
+            FloatAccumulator materials = new FloatAccumulator();
+            appendSodiumBlocks(vertices, materials, origin, mesh, pbrMaterials);
+            return vertices.size() == 0 ? null : SectionGeometry.takeOwnership(
+                origin.getX(), origin.getY(), origin.getZ(), vertices.toArray(), materials.toArray());
+        }
+
+        private static void appendSodiumBlocks(FloatAccumulator vertices, FloatAccumulator materials,
+                                                BlockPos origin, SodiumTerrainMeshCache.Mesh mesh,
+                                                RayTracingPbrMaterials pbrMaterials) {
+            for (var captured : mesh.quads()) {
+                BakedQuad quad = captured.geometry();
+                BlockState state = captured.state();
+                String name = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+                boolean translucent = quad.materialInfo().layer().translucent()
+                    || name.contains("glass") || name.contains("water");
+                MaterialProperties properties = materialProperties(state, quad);
+                // Positions already include Sodium's section-local model offset. The block
+                // position is the section origin so it is not applied a second time.
+                addOrientedTriangle(vertices, materials, origin, origin,
+                    quad.position0(), quad.position1(), quad.position2(), quad.direction(),
+                    captured.triangleColor(0, 1, 2), properties, translucent, !translucent,
+                    quad, pbrMaterials, 0, 1, 2);
+                addOrientedTriangle(vertices, materials, origin, origin,
+                    quad.position0(), quad.position2(), quad.position3(), quad.direction(),
+                    captured.triangleColor(0, 2, 3), properties, translucent, !translucent,
+                    quad, pbrMaterials, 0, 2, 3);
+            }
         }
 
         private static void addFallbackGeometry(List<SectionGeometry> sections, Vec3 cameraPosition) {

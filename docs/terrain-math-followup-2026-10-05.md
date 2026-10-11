@@ -1,5 +1,8 @@
 # 区块构建与地形遍历数学复查
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 ## 范围
 
 检查 Scene 的 section 原点/窗口、CompiledSectionMeshCache 的三角展开、TerrainLod 的父节点/界盒/SAT、TerrainTraversalAbi 的投影与 Hi-Z，以及实际 GPU terrain traversal/Hi-Z shader。LOD 构建算法没有改为另一种近似。

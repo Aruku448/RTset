@@ -39,11 +39,14 @@ public final class LightTreeReuseMathTest {
         SceneGeometry resized = merge(first, dark, section(16, 4, 0));
         exact(resized);
         if (resized.lightTree == first.lightTree) throw new AssertionError("changed material-map extent reused old words");
-        // Replacing the first of two equal-power lamps changes source ordering/tie stability.
+        // An equivalent recapture must preserve source order, emitter IDs and scene identity.
         SceneGeometry tied = scene(List.of(section(0, 2, 1), section(16, 2, 1)));
         SceneGeometry reordered = merge(tied, tied.sections.getFirst(), section(0, 2, 1));
         exact(reordered);
-        if (reordered.lightTree == tied.lightTree) throw new AssertionError("emitter source order ignored");
+        if (reordered != tied || reordered.lightTree != tied.lightTree)
+            throw new AssertionError("equivalent recapture reordered emitters or republished the scene");
+        // An explicitly different source order still requires a new hierarchy.
+        check(tied, List.of(tied.sections.getLast(), tied.sections.getFirst()), tied.materialLayout, 0, false);
         // Non-emissive growth changes only the material lookup extent, not the tree topology.
         var grownSections = List.of(lamp, section(16, 4, 0));
         var grownLayout = first.materialLayout.update(grownSections);

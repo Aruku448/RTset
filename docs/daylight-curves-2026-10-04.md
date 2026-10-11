@@ -1,5 +1,8 @@
 # 不透明度与太阳光照等级曲线
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 - 修复物理天空路径强制使用手动不透明度的问题。`skyboxDaylightOpacityEnabled=true` 时，晨昏曲线覆盖手动 PNG 混合值；关闭时恢复 `skyboxTextureOpacity`。曲线只影响贴图混合，不修改介质。
 - 新增 `sunDaylightIntensityEnabled`（默认启用）与 `sunDaylightPeakIntensity`（默认 16，范围 3–16）。F9 光照页可切换自动模式和调整峰值。
 - 自动太阳强度为 `3 + (peak−3) * t² * (3−2t)`，其中 `t=clamp((SKY_LIGHT_LEVEL−4)/11,0,1)`。使用维度天空光照等级，非局部方块照度；这是艺术控制，不是物理照度拟合。

@@ -1,5 +1,8 @@
 # AW custom avatars in the Vulkan RT scene
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 ## Evidence
 
 The live RTest log recorded `player-mesh-over-capacity[entity.minecraft.player]` at 23:39:42 and 23:41:56. CPU admission and GPU material ranges both allowed only 512 model triangles.

@@ -20,7 +20,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.client.model.quad.BakedNormals;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 

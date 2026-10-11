@@ -1,5 +1,16 @@
 # 论文作者实现对照（2026-10-07）
 
+> **文档状态：已归档；已解决项见下表/说明** · 归档日期：2026-10-11。
+> 当前行为见 [实现说明](../../restir-implementation.md) 与 [后续实施记录](../../restir-follow-up-implementation-2026-10-11.md)。[归档索引](README.md)
+
+## 归档结论（2026-10-11）
+
+**已解决：** 旧文提出的前缀保存/续追、避免主射线和主表面 NEE 重复工作，以及每个后续前缀必追 canonical 的开销，已有后续实现。后续前缀采用完整种子支持域的历史 gather；不是直接移植作者公式 23。
+
+**仍未实施：** prefix GRIS、世界空间 KNN、hybrid 几何重连接、双向 shift/Jacobian、紧凑重追踪队列。下文“当前 RT”是 2026-10-07 快照。
+
+## 原始记录（保留当时语境）
+
 源码：NVlabs/conditional-restir-prototype，检查固定提交 2188c2049aaa27b2576ce6486a51785d74db7bff。只读检出位于 /tmp/conditional-restir-author-review，没有编译、运行作者程序或将作者代码复制进项目。参考 PDF：/home/aruku/文档/kettunen2023conditional.pdf，第5–7页算法1及公式18–23，第10页图3–4。
 
 ## 实际结构

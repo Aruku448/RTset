@@ -1,5 +1,8 @@
 # 光追数学与算法优化候选
 
+> **文档状态：部分已被实施的旧候选** · 整理日期：2026-10-11。
+> AOV 门控、BSDF 能量复用及零位移 POM 早退已有后续实现；文中 Sundial 模式也已删除。不要把完整列表当作待办。阶段变更见 [首批优化记录](rt-optimization-implemented.md)，当前入口见 [开发说明](DEVELOPMENT.md)。 [分类索引](README.md)
+
 ## 审计范围与结论
 
 只读检查当前 shader、CPU 几何更新/LOD/material 流程、FSR 调度与灯光树，未修改渲染实现。此前实时原生分辨率窗口 `rt_ms=42.417 ms`、`post_rt_ms=1.176 ms`、已测合计 `43.619 ms`；这是样本均值，不是整帧时间。当前 GI=4、体积质量=3、POM 开启、NRD/Sundial/LOD 关闭。

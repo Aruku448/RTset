@@ -46,6 +46,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.IntValue restirCandidates;
     public final ModConfigSpec.IntValue restirSpatialNeighbors;
     public final ModConfigSpec.IntValue restirGatherPrefixes;
+    public final ModConfigSpec.BooleanValue restirSingleDonorGather;
     public final ModConfigSpec.ConfigValue<String> pbrFormat;
     public final ModConfigSpec.DoubleValue pbrNormalStrength;
     public final ModConfigSpec.BooleanValue pbrTextureAoEnabled;
@@ -58,6 +59,7 @@ public final class RayTracingClientConfig {
     public final ModConfigSpec.IntValue terrainLodNativeRadiusChunks;
     public final ModConfigSpec.IntValue terrainLodMaxLevel;
     public final ModConfigSpec.IntValue terrainLodBuildBudget;
+    public final ModConfigSpec.IntValue terrainLodPublishBudgetKiB;
     public final ModConfigSpec.IntValue terrainLodQueueLimit;
     public final ModConfigSpec.BooleanValue terrainLodFarCacheEnabled;
     public final ModConfigSpec.IntValue terrainLodFarRadiusChunks;
@@ -114,8 +116,10 @@ public final class RayTracingClientConfig {
             .defineInRange("restirCandidates", 11, 1, 16);
         restirSpatialNeighbors = restirBuilder.comment("Previous-frame spatial reservoir proposals in addition to the temporal proposal.")
             .defineInRange("restirSpatialNeighbors", 2, 0, 4);
-        restirGatherPrefixes = restirBuilder.comment("Independent first-scatter prefixes for conditional suffix final gather. Each includes a fresh canonical suffix.")
+        restirGatherPrefixes = restirBuilder.comment("Independent first-scatter prefixes for conditional suffix final gather. The first refreshes the reservoir; later prefixes reuse full-support tapes, with fresh fallback on history misses.")
             .defineInRange("restirGatherPrefixes", 2, 1, 4);
+        restirSingleDonorGather = restirBuilder.comment("Experimental speed mode: later gather prefixes select one historical tape group with reciprocal-probability compensation. May increase variance; the first prefix retains full reservoir updating.")
+            .define("restirSingleDonorGather", false);
         restirSpec = restirBuilder.build();
         ModConfigSpec.Builder auditBuilder = new ModConfigSpec.Builder();
         rayCostAuditProfile = auditBuilder
@@ -236,11 +240,14 @@ public final class RayTracingClientConfig {
             .comment("Native-detail radius around the camera for terrain LOD, in chunks.")
             .defineInRange("terrainLodNativeRadiusChunks", 8, 2, 64);
         terrainLodMaxLevel = builder
-            .comment("Maximum terrain LOD level: 1=32^3 blocks, 2=64^3 blocks.")
+            .comment("Maximum terrain LOD level: 1=32^3 blocks with 4-block cells, 2=64^3 blocks with 8-block cells.")
             .defineInRange("terrainLodMaxLevel", 2, 1, 2);
         terrainLodBuildBudget = builder
             .comment("Maximum number of terrain LOD builds started per frame.")
             .defineInRange("terrainLodBuildBudget", 1, 1, 8);
+        terrainLodPublishBudgetKiB = builder
+            .comment("Maximum new LOD mesh bytes admitted per composition, in KiB. One oversized node is allowed alone; this excludes native-scene compaction and acceleration-structure costs.")
+            .defineInRange("terrainLodPublishBudgetKiB", 2048, 64, 65536);
         terrainLodQueueLimit = builder
             .comment("Maximum queued terrain LOD builds.")
             .defineInRange("terrainLodQueueLimit", 32, 4, 256);

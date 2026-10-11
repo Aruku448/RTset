@@ -1,5 +1,8 @@
 # 当前画面参数设为默认（2026-10-08）
 
+> **文档状态：2026-10-08 参数快照** · 整理日期：2026-10-11。
+> JSON 和逐项相等检查仅证明当时状态，不代表当前源码默认值或现有实例配置；当前默认值查 RayTracingClientConfig / PostProcessingSettings。 [分类索引](README.md)
+
 来源：RTest 实例 rtest-client.toml 与 rtest-restir-client.toml 的实际字段值，不使用旧的 #Default 注释。116 项非诊断参数完整快照见 [default-settings-2026-10-08.json](default-settings-2026-10-08.json)，记录包含采集时间。debugView 保持 0，审计默认保持 baseline。
 
 RayTracingClientConfig 与 PostProcessingSettings 的配置定义默认值已与快照逐项一致。保留精确浮点值，不对当前参数进行量化。现有实例配置文件未改写；F9 的恢复默认按钮和新生成配置将使用新的默认值。GI 枚举中的默认标记移到 4 层，AO 提示去除过期的默认关闭说明，基础发光提示去除旧默认 25。

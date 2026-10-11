@@ -1,5 +1,8 @@
 # 22:35 GPU 崩溃与同步规范审计
 
+> **文档状态：研究/审计快照** · 整理日期：2026-10-11。
+> 来源版本与本地行号只对应记录时点；建议不是自动生效的待办，实施情况需对照源码和后续记录。 [分类索引](README.md)
+
 ## 实际故障
 
 RTest 于 2026-10-07 22:35:45 抛出 `VK_ERROR_DEVICE_LOST: Failed to present image`。内核同秒记录 `Illegal opcode in command stream`、gfx ring timeout，归属游戏 Java PID 1033114 / Render thread，并执行 ring reset。present 是故障检测位置，不能确定就是故障源。清理期 semaphore 等待失败是 device-lost 后续症状。

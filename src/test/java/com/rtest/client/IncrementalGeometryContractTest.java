@@ -20,7 +20,7 @@ public final class IncrementalGeometryContractTest {
         assertCompilerPublication(compilerMixin);
         assertDirtyNeighborPropagation(probe);
         assertSectionMergeKeepsUnchanged(scene);
-        assertGeometryPublicationResetsTemporalHistory(vulkan);
+        assertGeometryPublicationSeparatesTemporalHistory(vulkan);
 
         System.out.println("Incremental geometry contract tests passed");
     }
@@ -80,7 +80,7 @@ public final class IncrementalGeometryContractTest {
         require(merge, "true,\n                false");
     }
 
-    private static void assertGeometryPublicationResetsTemporalHistory(String source) {
+    private static void assertGeometryPublicationSeparatesTemporalHistory(String source) {
         int start = source.indexOf("void updateGeometry(SceneGeometry nextGeometry");
         int end = source.indexOf("private void updateLivingEntityTextureDescriptors", start);
         if (start < 0 || end < 0) {
@@ -88,6 +88,10 @@ public final class IncrementalGeometryContractTest {
         }
         String publish = source.substring(start, end);
         require(publish, "this.geometry = nextGeometry;");
+        require(publish, "this.restirHistoryReady = false;");
+        require(publish, "boolean fullTemporalReset = this.geometry.revision() != nextGeometry.revision();");
+        require(publish, "if (fullTemporalReset) this.fsr.requestReset();");
+        require(publish, "PRESERVE_INCREMENTAL_HISTORY");
         require(publish, "this.dynamicInstances.markHistoryResetPending();");
         require(publish, "this.fsr.requestReset();");
         require(publish, "RTest geometry publish:");

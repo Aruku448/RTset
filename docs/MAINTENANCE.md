@@ -1,5 +1,7 @@
 # 维护与排障
 
+> **文档状态：维护入口** · 整理核对：2026-10-11。当前事实以源码为准；旧验证不自动延续。[文档索引](README.md)
+
 实现变化频繁，故障处理先查日志和源码。此页只保留排查入口，避免过期的绑定号、阈值和历史配置误导诊断。
 
 ## 资源与同步
@@ -23,9 +25,9 @@
 
 查看动态 admission/fallback 诊断与 raster fallback 条件；检查 capture 是否运行在最终顶点/模型提交 seam、RT 显示时序是否与原生绘制重叠。不要仅凭早期动态 placeholder 验证记录推断当前行为。
 
-### FSR/NRD/Sundial 异常
+### FSR/NRD/DLSS 或后处理异常
 
-检查资源是否打包、设备格式支持、shader 编译错误、输入尺寸与 history reset 日志。NRD native bridge 及版本/许可说明见 `native/nrd/README.md`。FSR3、NRD 与 Sundial 的具体选择和互斥策略以当前配置/dispatch 代码为准。
+检查资源是否打包、设备格式支持、shader 编译错误、输入尺寸与 history reset 日志。NRD native bridge 及版本/许可说明见 [`native/nrd/README.md`](../native/nrd/README.md)。DLSS/RR 还需核对平台、设备、运行库加载与回退日志，见 [集成记录](dlss-integration-2026-10-09.md)。当前不存在 Sundial 降噪器；参考 Sundial 的后处理由 `RtestPostProcessing` 管理。
 
 ### Shader 编译或 Vulkan validation 错误
 

@@ -5,12 +5,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.ToLongFunction;
 
 /**
  * A Minecraft-independent, bounded scheduler for asynchronous terrain LOD work.
@@ -92,7 +92,12 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
         this.capacity = maxQueuedRequests;
         this.generator = Objects.requireNonNull(generator, "generator");
         this.executor = new ThreadPoolExecutor(workerCount, workerCount, 0L, TimeUnit.MILLISECONDS,
-                new PriorityBlockingQueue<>());
+                new PriorityBlockingQueue<>(), runnable -> {
+                    Thread worker = new Thread(runnable, "rtest-lod-builder");
+                    worker.setDaemon(true);
+                    worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 2));
+                    return worker;
+                });
         this.executor.prestartAllCoreThreads();
     }
 
@@ -100,6 +105,13 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
     public RayTracingTerrainLodScheduler(Function<Request, T> generator, int workerCount,
                                          int maxQueuedRequests) {
         this(workerCount, maxQueuedRequests, generator);
+    }
+
+    /** Running, queued and completed-but-unconsumed jobs all reserve a slot. */
+    public int remainingCapacity() {
+        synchronized (lock) {
+            return closed ? 0 : Math.max(0, capacity - current.size());
+        }
     }
 
     /** Creates a request with a fresh immutable token. */
@@ -121,6 +133,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
                 return false;
             }
             ready.removeIf(completed -> completed.request.nodeKey().equals(request.nodeKey()));
+            failures.removeIf(failure -> failure.request().nodeKey().equals(request.nodeKey()));
             Job old = current.get(request.nodeKey());
             if (old != null) {
                 old.cancelled = true;
@@ -157,6 +170,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
         Objects.requireNonNull(nodeKey, "nodeKey");
         synchronized (lock) {
             Job job = current.remove(nodeKey);
+            failures.removeIf(failure -> failure.request().nodeKey().equals(nodeKey));
             if (job == null) return;
             job.cancelled = true;
             if (job.work != null) executor.getQueue().remove(job.work);
@@ -166,7 +180,7 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
 
     /** Polls only completed work that is still the current request for its node. */
     public List<Result<T>> poll(int resultBudget) {
-        return pollInternal(resultBudget, null, null, null);
+        return pollInternal(resultBudget, Long.MAX_VALUE, value -> 0L, null, null, null);
     }
 
     /**
@@ -175,26 +189,46 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
      */
     public List<Result<T>> poll(int resultBudget, long worldGeneration, long windowGeneration,
                                 Map<NodeKey, NodeVersion> nodeVersions) {
-        return pollInternal(resultBudget, worldGeneration, windowGeneration,
-                Objects.requireNonNull(nodeVersions, "nodeVersions"));
+        return poll(resultBudget, Long.MAX_VALUE, value -> 0L,
+            worldGeneration, windowGeneration, nodeVersions);
     }
 
-    private List<Result<T>> pollInternal(int budget, Long world, Long window, Map<NodeKey, NodeVersion> versions) {
+    /**
+     * Admits whole results before publication. Only the first result may exceed the
+     * byte budget, so one oversized node cannot permanently block the queue.
+     */
+    public List<Result<T>> poll(int resultBudget, long byteBudget, ToLongFunction<T> byteSize,
+                                long worldGeneration, long windowGeneration,
+                                Map<NodeKey, NodeVersion> nodeVersions) {
+        if (byteBudget <= 0) return List.of();
+        return pollInternal(resultBudget, byteBudget, Objects.requireNonNull(byteSize, "byteSize"),
+            worldGeneration, windowGeneration, Objects.requireNonNull(nodeVersions, "nodeVersions"));
+    }
+
+    private List<Result<T>> pollInternal(int budget, long byteBudget, ToLongFunction<T> byteSize,
+                                        Long world, Long window, Map<NodeKey, NodeVersion> versions) {
         if (budget <= 0) {
             return List.of();
         }
         ArrayList<Result<T>> output = new ArrayList<>(Math.min(budget, 16));
         synchronized (lock) {
-            while (output.size() < budget && !ready.isEmpty()) {
-                Completed<T> completed = ready.remove(0);
+            long admittedBytes = 0;
+            var iterator = ready.iterator();
+            while (output.size() < budget && iterator.hasNext()) {
+                Completed<T> completed = iterator.next();
                 Job job = current.get(completed.request.nodeKey());
                 if (job == null || job.request != completed.request || job.cancelled
                         || (world != null && !matches(completed.request, world, window, versions))) {
+                    iterator.remove();
                     if (job != null && job.request == completed.request) {
                         current.remove(completed.request.nodeKey());
                     }
                     continue;
                 }
+                long bytes = Math.max(0L, byteSize.applyAsLong(completed.value));
+                if (!output.isEmpty() && bytes > byteBudget - admittedBytes) break;
+                iterator.remove();
+                admittedBytes += bytes;
                 current.remove(completed.request.nodeKey());
                 output.add(new Result<>(completed.request, completed.value));
             }
@@ -229,6 +263,8 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
             }
             current.clear();
             ready.clear();
+            failures.clear();
+            executor.getQueue().clear();
         }
     }
 
@@ -247,6 +283,17 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
             failures.clear();
         }
         executor.shutdownNow();
+    }
+
+    /** Near distance buckets win; within a bucket coarser coverage builds first. */
+    static int comparePriority(int level, double distance, long sequence,
+                               int otherLevel, double otherDistance, long otherSequence) {
+        int bucket = Long.compare((long)(distance / 32.0), (long)(otherDistance / 32.0));
+        if (bucket != 0) return bucket;
+        int priority = Integer.compare(otherLevel, level);
+        if (priority != 0) return priority;
+        int exact = Double.compare(distance, otherDistance);
+        return exact != 0 ? exact : Long.compare(sequence, otherSequence);
     }
 
     private final class Job {
@@ -270,9 +317,8 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
 
         @Override
         public int compareTo(Work other) {
-            int priority = Integer.compare(other.job.request.priority(), job.request.priority());
-            return priority != 0 ? priority
-                    : Double.compare(job.request.cameraDistance(), other.job.request.cameraDistance());
+            return comparePriority(job.request.priority(), job.request.cameraDistance(), job.request.token().id(),
+                other.job.request.priority(), other.job.request.cameraDistance(), other.job.request.token().id());
         }
 
         @Override
@@ -285,10 +331,11 @@ public final class RayTracingTerrainLodScheduler<T> implements AutoCloseable {
                 value = Objects.requireNonNull(generator.apply(job.request), "generator returned null");
             } catch (RuntimeException | Error failure) {
                 synchronized (lock) {
-                    if (current.get(job.request.nodeKey()) == job) {
+                    boolean stillCurrent = current.get(job.request.nodeKey()) == job && !job.cancelled;
+                    if (stillCurrent) {
                         current.remove(job.request.nodeKey());
                     }
-                    if (!closed) {
+                    if (!closed && stillCurrent) {
                         if (failures.size() >= 64) failures.remove(0);
                         failures.add(new Failure(job.request, failure));
                     }

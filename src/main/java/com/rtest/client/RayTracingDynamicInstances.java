@@ -338,23 +338,6 @@ final class RayTracingDynamicInstances implements AutoCloseable {
             this.bottomLevel = bottomLevel;
         }
 
-        private boolean updateVertices(float[] vertices) {
-            if (vertices.length * Float.BYTES != vertexBuffer.size) {
-                throw new IllegalArgumentException("Dynamic mesh topology changed during BLAS UPDATE");
-            }
-            if (java.util.Arrays.equals(uploadedVertices, vertices)) return false;
-            try (NativeBuffer.Mapped mapped = vertexBuffer.map()) {
-                mapped.buffer().asFloatBuffer().put(vertices);
-            }
-            uploadedVertices = java.util.Arrays.copyOf(vertices, vertices.length);
-            // Keep the cache fingerprint in sync with the uploaded geometry. Otherwise an
-            // animated model is mistaken for a topology replacement on every frame, causing
-            // a fresh BLAS allocation instead of an in-place update.
-            fingerprint = java.util.Arrays.hashCode(vertices);
-            pendingUpdate = true;
-            return true;
-        }
-
         @Override
         public void close() {
             if (closed) {

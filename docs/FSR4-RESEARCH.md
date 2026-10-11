@@ -1,5 +1,8 @@
 # FSR4 / AMD FSR Upscaling 研究记录
 
+> **文档状态：历史 SDK 支持调查** · 整理日期：2026-10-11。
+> 只对应原 SDK/平台版本；不是当前官方支持承诺。项目运行时入口见 [开发说明](DEVELOPMENT.md)。 [分类索引](README.md)
+
 > **历史快照（2026-09-12）**：本文结论只对应当时检查的 SDK/平台。运行时能力和官方支持需查当前 AMD SDK 文档；不要把 Proton/DX12 DLL 视为原生 Vulkan 后端。
 
 当时的结论是：RTest 的 Linux/Vulkan 渲染路径没有可直接调用的官方 FSR4 Vulkan backend；项目实际使用 FidelityFX FSR 3.1.5 Vulkan shader 路径。硬件支持某一 FSR 版本，不代表操作系统、图形 API 或 SDK 分发形式也受支持。

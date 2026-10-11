@@ -1,6 +1,9 @@
 # 降噪方案研究记录
 
-> **历史快照（2026-09-15）**：这里只保留当时的选型背景。RTest 当前降噪实现请查 `RayTracingClientConfig`、`RtestFsr3`、`NrdDenoiser`、`SundialDenoiser` 和 shader 源码；本文不描述当前运行状态。
+> **文档状态：历史选型研究** · 整理日期：2026-10-11。
+> 只对应原记录日期；当前降噪/重建入口见 [开发说明](DEVELOPMENT.md)，Sundial 降噪已移除。 [分类索引](README.md)
+
+> **历史快照（2026-09-15）**：这里只保留当时的选型背景。Sundial 降噪已移除；当前入口为 `RayTracingClientConfig`、`RtestFsr3`、`NrdDenoiser`、`DlssReconstruction` 和 shader 源码，见 [开发说明](DEVELOPMENT.md)。本文不描述当前运行状态。
 
 ## 当时的判断
 

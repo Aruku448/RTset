@@ -1,5 +1,8 @@
 # 告示牌文字与地图接入 RT
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 ## 原生入口
 
 - 在 SubmitNodeCollection.submitText 捕获世界文本，复用 Font.prepareText／prepare8xTextOutline 的排版、字形、字体图集和原生 pose。支持普通／悬挂告示牌正反面、颜色、发光墨囊及轮廓；GUI 文本没有世界 owner，不进入捕获。

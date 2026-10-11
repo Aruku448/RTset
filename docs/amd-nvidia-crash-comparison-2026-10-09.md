@@ -1,5 +1,8 @@
 # AMD / NVIDIA 崩溃差异：15:50 复测
 
+> **文档状态：历史测量/排障记录** · 整理日期：2026-10-11。
+> 日志、参数、安装 hash 和结论只属于文中日期及环境，不能当作当前基准或跨平台根因。 [分类索引](README.md)
+
 ## 新的命令阶段证据
 
 测试实例最新报告为 `crash-2026-10-09_15.50.59-client.txt`。初始 AS 经过 15 个分批完成，最后一批日志 `tlasBuild=true`，每批沿用原有提交后等待。首个光追帧日志：`dispatch=15 gpuFrame=1 extent=854x480 dynamicBuilds=0 tlasRefresh=false driverValidation=false`，之后未见 fence 完成。

@@ -1,5 +1,8 @@
 # DLSS / DLSS Ray Reconstruction 接入记录（2026-10-09）
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 新增 Windows x86_64 NVIDIA RTX 路径：`upscaler = "fsr" | "dlss" | "dlss_rr"`。
 默认仍为 FSR3；F9 → 渲染 → 时域重建可切换。DLSS 和 RR 均标记为实验功能。
 启用模组后必须完全重启游戏，使设备创建时包含 SDK 所需功能。

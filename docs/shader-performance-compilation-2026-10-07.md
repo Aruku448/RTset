@@ -1,5 +1,8 @@
 # Shader performance compilation
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 Enabled shaderc_optimization_level_performance in RayTracingVulkanPass.ShaderModule.create. This covers shaders compiled through that runtime helper, including ray stages and the runtime light-tree compute shader. Packaged precompiled SPIR-V assets are not rebuilt by this change. The active-stage compilation contract uses the same performance option.
 
 Passed `./gradlew rayTracingShaderContractTest jar --console=plain`. Active ray-generation, miss, closest-hit, any-hit, shadow and sky-CDF stages compile successfully with optimization. Installed jar SHA256: d7258a28ab88fdf0f37bedc114c75ec84dde0cd1c9410fd16dd3b0c485744d46.

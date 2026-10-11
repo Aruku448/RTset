@@ -2,6 +2,8 @@
 
 > **文档性质：参考资料/阶段性快照。** 不作为当前实现规范、能力清单或待办计划。涉及 RTest 的描述可能已过时或不完整；请以源码与 `docs/HANDOFF.md` 为准，使用前逐项复核。
 
+后续本机不同分支的调查见 [2026-10-10 LOD 对照](../docs/voxy-local-lod-review-2026-10-10.md)和[异步流水线调查](../docs/voxy-local-pipeline-research-2026-10-10.md)；版本不可混用。统一入口见[文档索引](../docs/README.md)。
+
 调查日期：2026-09-22。以下针对分支 `2622` 当时的提交 [`91c96528bc458be0646ddda2564aa90baaf639e2`](https://github.com/MCRcortex/voxy/tree/91c96528bc458be0646ddda2564aa90baaf639e2)，不是对后续版本的承诺。
 
 ## 用途与定位

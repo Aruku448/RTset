@@ -1,5 +1,8 @@
 # 暂停旧天空盒贴图的诊断版
 
+> **文档状态：已被后续方案替代** · 整理日期：2026-10-11。
+> 临时关闭天空盒的诊断已结束；当前源码默认开启天空盒及昼夜透明曲线。见 [大气说明](prime-atmosphere-integration.md) 与 [混合记录](prime-atmosphere-skybox-blend.md)。 [分类索引](README.md)
+
 本文记录此前暂时关闭天空盒的诊断部署。当前源码按用户新要求保留天空盒并支持与物理大气半透明混合；新配置默认开启、默认25%贴图权重。见 `docs/prime-atmosphere-skybox-blend.md`，尚未部署；下面false默认及旧shader行为仅描述历史诊断版。
 
 用户当时要求暂时关闭天空盒贴图，观察Prime物理天空是否生效。

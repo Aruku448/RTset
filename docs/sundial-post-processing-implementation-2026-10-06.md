@@ -1,5 +1,8 @@
 # Sundial 参考后处理：RTset main 实现
 
+> **文档状态：阶段实施记录** · 整理日期：2026-10-11。
+> 这里的 Sundial 指后处理参考，不是已删除的降噪器；曝光行为后续有修正，见 [曝光记录](post-processing-exposure-2026-10-10.md)。 [分类索引](README.md)
+
 ## 范围
 
 参考 `Sundial Alpha Build 2026-07-31.zip` 的可见功能，独立实现 Vulkan compute 后处理；研究依据见 [源码研究](sundial-post-processing-research-2026-10-06.md)。不是逐像素移植，不包含 Sundial 的光照、大气、云或反射求解。

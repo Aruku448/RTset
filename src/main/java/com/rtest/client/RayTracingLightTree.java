@@ -22,7 +22,6 @@ final class RayTracingLightTree {
     private static final int NODE_WORDS = 8;
     private static final int EMITTER_WORDS = 16;
     private static final int LEAF_FLAG = Integer.MIN_VALUE;
-    private static final int INDEX_MASK = Integer.MAX_VALUE;
     private static final float MIN_SOFTENING_DISTANCE_SQUARED = 0.25F;
     // A full block face triangle is 0.5 block². Minecraft block-light levels describe a
     // source, not the authored mesh area; normalize small torch/lantern panels to this

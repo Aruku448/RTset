@@ -19,7 +19,7 @@ package com.rtest.client;
  * SKY-TRACER-NOTICE.md} and docs/prime-atmosphere-integration.md.
  *
  * <p>The bindings below are only declared in the physical raygen variant
- * ({@code RTEST_ATMOSPHERE_LUT}); the legacy variant keeps its 27-binding ABI.
+ * ({@code RTEST_ATMOSPHERE_LUT}).
  */
 final class RayTracingAtmosphereSegmentShader {
     private RayTracingAtmosphereSegmentShader() {
@@ -40,7 +40,6 @@ final class RayTracingAtmosphereSegmentShader {
             layout(set = 0, binding = 36, rgba32f) uniform readonly image2D primeRayleighSource;
 
             const float PATM_BOTTOM_KM = 6360.0;
-            const float PATM_TOP_KM = 6480.0;
             const float PATM_THICKNESS_KM = 120.0;
             const float PATM_PI = 3.141592653589793;
             const float PATM_SPACE_SUN = 12.5;

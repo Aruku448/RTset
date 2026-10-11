@@ -267,6 +267,15 @@ final class RayTracingMaterialBuffer {
 
         /** Reuses surviving section addresses, fills freed spans first, and compacts when fragmentation grows. */
         Layout update(List<SceneGeometry.SectionGeometry> sections) {
+            return update(sections, true);
+        }
+
+        /** LOD replacement must not relocate all native materials to reclaim small holes. */
+        Layout updatePreservingAddresses(List<SceneGeometry.SectionGeometry> sections) {
+            return update(sections, false);
+        }
+
+        private Layout update(List<SceneGeometry.SectionGeometry> sections, boolean allowCompaction) {
             if (sections.isEmpty()) return new Layout(Map.of(), 0);
             Set<SectionKey> nextKeys = new HashSet<>(sections.size());
             Map<SectionKey, Span> nextSpans = new LinkedHashMap<>();
@@ -312,7 +321,7 @@ final class RayTracingMaterialBuffer {
             }
             long fragmentationAllowance = Math.max(
                 COMPACT_ABSOLUTE_SLACK_TRIANGLES, liveTriangles / 20L);
-            if ((long)highWater > (long)liveTriangles + fragmentationAllowance) {
+            if (allowCompaction && (long)highWater > (long)liveTriangles + fragmentationAllowance) {
                 return compact(sections);
             }
             return new Layout(nextSpans, highWater, free);

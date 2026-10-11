@@ -32,7 +32,6 @@ public final class RayTracingSignalQualityTest {
         require(shader, "transmissionRadiance += skyRadiance;");
         require(shader, "transmissionRadiance += localRadiance;");
         for (String contribution : new String[] {"skyRadiance", "localRadiance"}) {
-            require(shader, "diffuseRadiance += " + contribution + " * primaryDiffuseShare;");
             require(shader, "indirectDiffuseRadiance += " + contribution + " * primaryDiffuseShare;");
             require(shader, "specularRadiance += " + contribution + " * (vec3(1.0) - primaryDiffuseShare);");
         }

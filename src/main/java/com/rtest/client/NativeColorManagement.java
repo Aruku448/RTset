@@ -61,8 +61,7 @@ public final class NativeColorManagement {
         if (pipeline == null || shaderType != ShaderType.FRAGMENT || !HdrSupport.isActive()) {
             return source;
         }
-        // Identifier paths include their directory ("core/entity"), never compare bare names: doing so
-        // silently disables the decode, which is how the original UI-only allowlist became dead code.
+        // Shader identifiers include the directory, e.g. "core/entity".
         if (DATA_FRAGMENT_SHADERS.contains(pipeline.getFragmentShader().getPath())) {
             return source;
         }

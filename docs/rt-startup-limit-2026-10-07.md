@@ -1,5 +1,8 @@
 # RT startup scene limit: 50 million triangles
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 User requested a 50,000,000-triangle admission ceiling on 2026-10-07. Changed MAX_TRIANGLES_BEFORE_TERRAIN_LOD_READY from 10,000,000 to 50,000,000. MAX_TRIANGLES_FOR_GPU_TERRAIN_TRAVERSAL derives from this constant.
 
 Live failure evidence: RT presentation repeatedly waited with triangles=18,812,630 and lodEnabled=false. Enabling LOD through live config reload produced a composed scene with 18,030,474 triangles, still exceeding the former ceiling. Restored the prior terrainLodEnabled=false setting after the explicit ceiling-change request. No adaptive-radius implementation is included.

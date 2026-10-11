@@ -219,31 +219,58 @@ vec3 graded(ivec2 at) {
   return imageLoad(gradedImage, clamp(at, ivec2(0), ivec2(p.dimensions.xy) - 1))
       .rgb;
 }
+float meteringWeight(vec2 q) {
+  vec2 off = q - .5;
+  // A sparse meter needs a whole-frame floor: otherwise a solar tap can
+  // dominate, and the highest center weights underflow even on a flat field.
+  float distanceSquared = max(off.x * off.x, off.y * off.y) - 1. / 1024.;
+  return max(.125, exp2(-max(distanceSquared, 0.) *
+                         exp2(2 * p.exposure.z)));
+}
+float meteringBrightness(vec2 q) {
+  return max(dot(max(bt709(sampleScene(q)), vec3(0)), LUMA) * .01, 1e-8);
+}
 void main() {
   ivec2 at = ivec2(gl_GlobalInvocationID.xy);
   vec2 size = vec2(p.dimensions.xy), uv = (vec2(at) + .5) / size;
   if (work.phase == 0u) {
     if (any(notEqual(at, ivec2(0))))
       return;
-    float sum = 0, weights = 0;
+    float logSum = 0, weights = 0;
     for (int y = 0; y < 16; y++)
       for (int x = 0; x < 16; x++) {
-        vec2 q = (vec2(x, y) + .5) / 16., off = q - .5;
-        float w =
-            exp2(-max(off.x * off.x, off.y * off.y) * exp2(2 * p.exposure.z));
-        float b =
-            max(dot(max(bt709(sampleScene(q)), vec3(0)), LUMA) * .01, 1e-8);
-        sum += pow(b, 1 / p.exposure.w) * w;
+        vec2 q = (vec2(x, y) + .5) / 16.;
+        float w = meteringWeight(q);
+        logSum += log2(meteringBrightness(q)) * w;
         weights += w;
       }
-    float brightness = pow(sum / max(weights, 1e-8), p.exposure.w),
+    // Winsorize only the meter, using a geometric reference that resists
+    // isolated solar/firefly samples. Keep the scene and bloom radiance intact.
+    float referenceBrightness = exp2(logSum / weights);
+    float highlightLimit = referenceBrightness * 4.;
+    float sum = 0;
+    for (int y = 0; y < 16; y++)
+      for (int x = 0; x < 16; x++) {
+        vec2 q = (vec2(x, y) + .5) / 16.;
+        float b = min(meteringBrightness(q), highlightLimit);
+        sum += pow(b / referenceBrightness, 1 / p.exposure.w) *
+               meteringWeight(q);
+      }
+    float brightness = max(referenceBrightness * pow(sum / weights, p.exposure.w),
+                           1e-8),
           focus = p.lens.w > .5
                       ? max(max(.3, p.lens.x + .01), viewDepth(vec2(.5)))
                       : p.lens.z;
     vec4 previous = p.frame.w > .5 ? vec4(brightness, focus, 1, 0)
                                    : imageLoad(history, ivec2(0));
-    float rate = 1 - exp(-p.frame.x * (brightness < previous.x ? 4 : 2));
-    brightness = mix(previous.x, brightness, rate);
+    // Adapt in stops, with a bounded step even after a delayed frame. Linear
+    // luminance smoothing lets one bright sample immediately darken the view.
+    float previousEV = log2(max(previous.x, 1e-8));
+    float targetEV = log2(brightness);
+    float speed = targetEV < previousEV ? 4. : 2.;
+    float dt = clamp(p.frame.x, 0., .1);
+    float deltaEV = (targetEV - previousEV) * (1. - exp(-dt * speed));
+    brightness = exp2(previousEV + clamp(deltaEV, -speed * dt, speed * dt));
     focus = p.lens.w > .5 ? 1.0 / mix(1.0 / max(previous.y, .01), 1.0 / focus,
                                       1 - exp(-p.frame.x * 8))
                           : max(focus, p.lens.x + .01);

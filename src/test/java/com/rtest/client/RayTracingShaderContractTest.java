@@ -175,13 +175,9 @@ public final class RayTracingShaderContractTest {
         require(shader, "+ indirectDiffuseRadiance + areaDirectDiffuseRadiance - dynamicDiffuseDelta;");
         require(shader, "+ areaDirectSpecularRadiance - dynamicSpecularDelta;");
         require(shader, "vec3 directAovRadiance = dynamicDiffuseDelta + dynamicSpecularDelta;");
-        require(shader, "diffuseSignalDistance = primaryDirectDistance;");
-        require(shader, "specularSignalDistance = primaryDirectDistance;");
         require(shader, "vec3 nrdDiffuseRadiance = filteredDiffuseRadiance;");
         require(shader, "vec3 nrdSpecularRadiance = directSpecularRadiance");
         require(shader, "+ specularRadiance + transmissionRadiance");
-        require(shader,
-            "vec3 unfilteredRadiance = emissionRadiance;");
         require(shader, "directDiffuseRadiance += throughput * (sunDiffuseContribution + moonDiffuseContribution\n                    + skyDirectDiffuseContribution);");
         require(shader, "directSpecularRadiance += throughput * (sunSpecularContribution + moonSpecularContribution\n                    + skyDirectSpecularContribution);");
         require(shader, "areaDirectDiffuseRadiance += throughput * areaDirect.diffuse;");
@@ -390,10 +386,8 @@ public final class RayTracingShaderContractTest {
         require(RayTracingShaders.RAYGEN_SHADER, "vec3 localRadiance = throughput * (directDiffuseContribution");
         require(RayTracingShaders.RAYGEN_SHADER, "+ directSpecularContribution + emissiveContribution);");
         require(RayTracingShaders.RAYGEN_SHADER, "emissionRadiance += throughput * emissiveContribution;");
-        require(RayTracingShaders.RAYGEN_SHADER, "diffuseRadiance += localRadiance * primaryDiffuseShare;");
         require(RayTracingShaders.RAYGEN_SHADER, "indirectDiffuseRadiance += localRadiance * primaryDiffuseShare;");
         require(RayTracingShaders.RAYGEN_SHADER, "directSpecularRadiance += throughput * (sunSpecularContribution + moonSpecularContribution\n                    + skyDirectSpecularContribution);");
-        reject(RayTracingShaders.RAYGEN_SHADER, "diffuseRadiance += throughput * localRadiance;");
         require(RayTracingShaders.RAYGEN_SHADER, "specularRadiance += localRadiance * (vec3(1.0) - primaryDiffuseShare);");
         require(RayTracingShaders.RAYGEN_SHADER,
             "if (bounce == 0) {\n            // Only directly visible emission is deterministic and bypasses NRD.\n            emissionRadiance += throughput * emissiveContribution;");
@@ -468,7 +462,6 @@ public final class RayTracingShaderContractTest {
         String shader = RayTracingShaders.CLOSEST_HIT_SHADER;
         String raygen = RayTracingShaders.RAYGEN_SHADER;
         require(shader, "const uint PBR_FORMAT_LAB = 0u;");
-        require(shader, "const uint PBR_FORMAT_CLASSIC = 1u;");
         require(shader, "const uint PBR_FORMAT_BEDROCK = 2u;");
         require(shader, "normalZ = sqrt(max(1.0 - dot(normalXY, normalXY), 0.0));");
         require(shader, "textureAo = float(pixel & 0xffu) / 255.0;");

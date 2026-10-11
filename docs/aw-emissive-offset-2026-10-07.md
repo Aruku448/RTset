@@ -1,5 +1,8 @@
 # AW emissive identification and surface offset
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 AW port render pipelines carry the EMISSIVE shader define and use custom pipeline identifiers. The RT adapter previously recognized vanilla EYES/entity emissive pipelines and names only. It now recognizes the EMISSIVE flag for armourers_workshop:pipeline/*.
 
 As requested, native AW emissive custom geometry uses zero displacement and preserves original posed vertex positions in the RT mesh. This applies to entity, block entity and item custom capture. Non-emissive vertices remain unchanged, and vanilla emissive separation remains 0.001. Raster delegates receive original positions; this experiment adjusts RT geometry, not authored UVs or source PNG files. Companion-map-only emissive patches on otherwise non-emissive surfaces are not displaced by this pipeline-layer rule.

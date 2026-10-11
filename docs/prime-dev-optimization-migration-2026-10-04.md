@@ -1,5 +1,8 @@
 # Prime dev 优化迁移评估（2026-10-04）
 
+> **文档状态：上游优化迁移研究** · 整理日期：2026-10-11。
+> 只对应固定上游和当时的本地对照；建议顺序不是当前待办，不能据此断言某优化尚未落地。[分类索引](README.md)
+
 ## 范围与结论
 
 用户指定 dev 提交历史。独立只读 clone `/tmp/prime-dev-upstream-20261004`，检查时 dev HEAD 固定为 `dc708f52c4e4f68b4a7a148e73e3ff224142003c`（2026-10-03）。当前 dev 已有 Rust 场景/Vulkan核心和Slang inline ray-query compute管线，不是本项目 Java+GLSL vkCmdTraceRaysKHR 的同构实现；不能直接cherry-pick后期待相同速度。

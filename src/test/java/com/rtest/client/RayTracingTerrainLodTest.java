@@ -174,8 +174,8 @@ public final class RayTracingTerrainLodTest {
         RayTracingTerrainLod.Node proxy = RayTracingTerrainLod.buildNode(
             new RayTracingTerrainLod.NodeKey(1, 0, 0, 0),
             new RayTracingTerrainLod.SectionInput(0, 0, 0, vertices, materials));
-        if (proxy.mesh().triangleCount() != 20) {
-            throw new AssertionError("adjacent voxels must emit ten exterior quads");
+        if (proxy.mesh().triangleCount() != 12) {
+            throw new AssertionError("adjacent constant-UV voxels must merge into six exterior quads");
         }
         float[] mesh = proxy.mesh().vertices();
         for (int offset = 0; offset < mesh.length; offset += 9) {
@@ -194,7 +194,7 @@ public final class RayTracingTerrainLodTest {
         RayTracingTerrainLod.Node proxy = RayTracingTerrainLod.buildNode(
             new RayTracingTerrainLod.NodeKey(1, 0, 0, 0),
             new RayTracingTerrainLod.SectionInput(0, 0, 0, vertices, materials));
-        if (proxy.mesh().triangleCount() != 96 || projectedArea(proxy.mesh().vertices(), 1) != 512.0) {
+        if (proxy.mesh().triangleCount() != 12 || projectedArea(proxy.mesh().vertices(), 1) != 512.0) {
             throw new AssertionError("merged surface did not produce a closed 4x4 voxel slab");
         }
         // Rasterization must not fill the empty half of a diagonal triangle's AABB.
@@ -297,9 +297,9 @@ public final class RayTracingTerrainLodTest {
             new RayTracingTerrainLod.SectionInput(0, 0, 0, vertices, materials);
         RayTracingTerrainLod.Node coarse = RayTracingTerrainLod.buildNode(
             new RayTracingTerrainLod.NodeKey(2, 0, 0, 0), input);
-        // Sixteen adjacent occupied cells form a closed bar: four long sides plus
-        // two end caps. Adjacent voxel faces must not remain in the output.
-        int expectedTriangles = triangleCount * 8 + 4;
+        // Eight 8-block cells cover this bar at L2. Constant-UV exterior faces merge
+        // into four long sides and two end caps; internal faces remain absent.
+        int expectedTriangles = 12;
         if (coarse.mesh().triangleCount() != expectedTriangles) {
             throw new AssertionError("level-two proxy coverage/internal culling failed: "
                 + coarse.mesh().triangleCount() + " != " + expectedTriangles);

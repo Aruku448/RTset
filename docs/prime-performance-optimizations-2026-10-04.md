@@ -1,5 +1,8 @@
 # Prime 机制性能优化第一批（2026-10-04）
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 ## 实施
 
 参考 [3292bbf](https://github.com/bWFuanVzYWth/prime/commit/3292bbf81acd169e8390fc5a82a75b2121cd5a04) 的零源查询早退，以及 [8026f75](https://github.com/bWFuanVzYWth/prime/commit/8026f7554dfd034f5d3a156bb9e450f07cfe6af6) 的接收表面准备/窄状态原则。

@@ -1,5 +1,8 @@
 # AW server crash during block removal
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 Crash archive: minecraft-exported-crash-info-2026-10-07T02-05-08.zip. Server crashed ticking AW skinnable block at (24,-59,22), test world. SkinnableBlockEntity.childTick -> kill -> setBlockAndUpdate -> affectNeighborsAfterRemoval -> abi$onRemove dereferenced a null replacement BlockState.
 
 Compiled original AbstractBlockImpl.affectNeighborsAfterRemoval passed null and false to the legacy onRemove hook. Minecraft 26.2 LevelChunk calls this callback after installing the replacement state. The compatibility bridge now supplies level.getBlockState(pos) and forwards movedByPiston. This repairs the common bridge, including the previously observed SkinLibraryBlock removal exception. No save files were edited.

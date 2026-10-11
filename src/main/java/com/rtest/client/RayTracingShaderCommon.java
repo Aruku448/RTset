@@ -170,7 +170,6 @@ final class RayTracingShaderCommon {
                 return vec2(u0, v0) + coord * span;
             }
             const uint PBR_FORMAT_LAB = 0u;
-            const uint PBR_FORMAT_CLASSIC = 1u;
             const uint PBR_FORMAT_BEDROCK = 2u;
             const uint PBR_FEATURE_TEXTURE_AO = 1u;
             const uint PBR_FEATURE_POROSITY = 2u;

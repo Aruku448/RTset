@@ -379,13 +379,4 @@ public final class BlockEntityModelGeometryAdapter {
             REPORT_LOGGER.info("RTest block-entity model could not be assigned an RT topology: {}", name);
         }
     }
-
-    /** Reports a malformed model layer; the RT pipeline remains authoritative. */
-    private static void reportRejectedLayer(Model<?> model, RenderType renderType) {
-        String name = model.getClass().getSimpleName() + " "
-            + (renderType == null ? "<null>" : renderType.pipeline().toString());
-        if (reportedRejectedModels.add(name)) {
-            REPORT_LOGGER.info("RTest block-entity layer could not be captured by RT: {}", name);
-        }
-    }
 }

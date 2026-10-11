@@ -1,5 +1,8 @@
 # Prime dev 优化提交审查（2026-10-04）
 
+> **文档状态：研究/审计快照** · 整理日期：2026-10-11。
+> 来源版本与本地行号只对应记录时点；建议不是自动生效的待办，实施情况需对照源码和后续记录。 [分类索引](README.md)
+
 ## 范围与证据
 
 用户指定 [dev 提交列表](https://github.com/bWFuanVzYWth/prime/commits/dev/)。本轮使用独立只读 clone `/tmp/prime-dev-upstream-20261004` 核对实际历史和 diff，未 fetch 项目内的 `third_party`，未修改运行代码或部署。

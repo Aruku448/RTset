@@ -14,7 +14,6 @@ import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.NarratorStatus;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.client.gui.narration.NarratableEntry;
@@ -198,6 +197,7 @@ public final class RayTracingSettingsScreen extends Screen {
             number("screen.rtest.settings.restirCandidates", c.restirCandidates, 1D, 16D),
             number("screen.rtest.settings.restirSpatialNeighbors", c.restirSpatialNeighbors, 0D, 4D),
             number("screen.rtest.settings.restirGatherPrefixes", c.restirGatherPrefixes, 1D, 4D),
+            restirToggle("restirSingleDonorGather", c.restirSingleDonorGather),
             choice("screen.rtest.settings.giBounces", c.giBounces, List.of(1, 2, 3, 4)),
             choice("screen.rtest.settings.pbrFormat", c.pbrFormat, List.of("labpbr", "classic", "bedrock")),
             number("screen.rtest.settings.pbrNormalStrength", c.pbrNormalStrength, 0.0D, 3.0D),
@@ -383,7 +383,7 @@ public final class RayTracingSettingsScreen extends Screen {
             case "pbrWetnessStrength" -> c.pbrPorosityEnabled.get();
             case "pbrParallaxDepth", "pbrEntityParallaxEnabled" -> c.pbrParallaxEnabled.get();
             case "restirCandidates", "restirSpatialNeighbors" -> c.restirDirectEnabled.get() || c.restirSuffixEnabled.get();
-            case "restirGatherPrefixes" -> c.restirSuffixEnabled.get();
+            case "restirGatherPrefixes", "restirSingleDonorGather" -> c.restirSuffixEnabled.get();
             default -> true;
         };
     }

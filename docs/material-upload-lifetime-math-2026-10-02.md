@@ -1,5 +1,8 @@
 # 材质上传与资源退役：数学检查及优化（2026-10-02）
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 ## 范围与边界
 
 检查实际 `RayTracingMaterialBuffer.Layout`、SSBO 写入/flush，以及 `RayTracingVulkanPass.updateGeometry` 的失败路径和动态 BLAS 退役。保留现有 fence、barrier、世界/资源失效、捕获预算和渲染质量；不修改 shader 或配置。本次测试是 CPU 数学、Java 写入和 source contract，不是 GPU 像素、驱动故障注入或整帧性能测量。

@@ -1,5 +1,8 @@
 # 论文第 39 章：硬件 CDF 反演已接入
 
+> **文档状态：阶段变更记录** · 整理日期：2026-10-11。
+> 描述当时修改与验证；旧默认值、命令结果、安装 hash 和“当前/未部署”均限于该阶段，不是当前实现规范。 [分类索引](README.md)
+
 来源：Nate Morrical、Stefan Zellmann，*Inverse Transform Sampling Using Ray Tracing Hardware*，
 Ray Tracing Gems II，第 39 章，2021，用户提供的 `978-1-4842-7185-8_39.pdf`。
 本文实现其 39.4–39.5 节的概率带状几何与单次光线搜索，独立编写 Vulkan/GLSL 代码。

@@ -32,6 +32,16 @@ def configureVulkanEarlyWindow = { File gameDir ->
 
 repositories {
     mavenCentral()
+    maven {
+        url = 'https://maven.caffeinemc.net/releases'
+        content { includeGroup 'net.caffeinemc' }
+    }
+}
+
+// Optional, version-gated terrain bridge. Sodium is supplied by the user's instance,
+// never bundled or required by RTest.
+dependencies {
+    compileOnly('net.caffeinemc:sodium-neoforge-mod:0.9.2+mc26.2') { transitive = false }
 }
 
 base {
@@ -138,7 +148,7 @@ tasks.register('correspondingSource', Zip) {
     from(projectDir) {
         include 'src/**', 'native/**', 'scripts/**', 'third_party/**', 'gradle/**'
         include 'gradlew', 'gradlew.bat', '*.gradle', 'gradle.properties', 'LICENSE', 'README.md'
-        include '*.bat', '*.ps1', 'docs/prime-atmosphere*.md', 'docs/dlss-integration*.md'
+        include '*.bat', '*.ps1', 'docs/prime-atmosphere*.md', 'docs/dlss-integration*.md', 'docs/sodium-compatibility*.md', 'docs/post-processing-exposure*.md', 'docs/lod-build-stutter*.md', 'docs/voxy-local*.md', 'docs/lod-voxy*.md'
         exclude '**/build/**', '**/.gradle/**', '**/__pycache__/**', '**/*.pyc'
     }
 }

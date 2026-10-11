@@ -40,7 +40,7 @@ import org.slf4j.Logger;
 public final class RayTracingProbe {
     private static final Logger LOGGER = LogUtils.getLogger();
     // A selected-cut change changes active terrain geometry and can trigger TLAS/material updates.
-    // Readiness can arrive in bursts, so coalesce those changes at this interval.
+    // Readiness is admitted in bounded batches; this interval only throttles other reselection.
     private static final long TERRAIN_LOD_SELECTION_INTERVAL_NANOS = 1_000_000_000L;
     private static final long TERRAIN_DIRTY_IDLE_FLUSH_NANOS = 250_000_000L;
     private static final long TERRAIN_DIRTY_MAX_BATCH_AGE_NANOS = 2_000_000_000L;
@@ -73,6 +73,19 @@ public final class RayTracingProbe {
     private static RayTracingScene.SceneGeometry smokeGeometry;
     private static RayTracingScene.SceneGeometry activeGeometry;
     private static RayTracingTerrainLodScheduler<RayTracingTerrainLod.Node> terrainLodScheduler;
+    private static RayTracingTerrainLod.Builder terrainLodBuilder;
+    private static long terrainLodAdmittedBytes;
+    private static long terrainLodLastAdmissionNanos;
+    private static final Map<RayTracingTerrainLod.NodeKey, TerrainLodCoarseGeometry> terrainLodCoarseGeometry = new HashMap<>();
+    private record TerrainLodCoarseGeometry(RayTracingTerrainLod.Node node,
+        RayTracingScene.SceneGeometry.SectionGeometry geometry) { }
+    private static final Map<Long, TerrainLodFarNode> terrainLodFarNodes = new HashMap<>();
+    private record TerrainLodFarNode(RayTracingTerrainProxyStore.OpaqueNodeMesh payload,
+                                   RayTracingTerrainLod.Node node) { }
+    private record TerrainLodBuildInput(RayTracingTerrainLod.NodeKey key,
+                                       List<RayTracingTerrainLod.SectionInput> sections) { }
+    private record TerrainLodCandidate(long id, RayTracingTerrainLod.NodeKey key, double distance,
+                                      List<RayTracingTerrainLod.SectionInput> sections) { }
     // The store retains only immutable, opaque proxies; it never owns a ClientLevel or chunk
     // object. 4096 nodes is bounded and covers a useful walked/flew-through horizon without
     // turning the experimental path into an unbounded world cache.
@@ -93,7 +106,7 @@ public final class RayTracingProbe {
     private static final Set<Long> terrainLodPending = new LinkedHashSet<>();
     private static final Set<Long> terrainLodSelected = new LinkedHashSet<>();
     private static final Set<RayTracingTerrainLod.NodeKey> terrainLodSelectedKeys = new LinkedHashSet<>();
-    private static final Map<RayTracingTerrainLodScheduler.Token, List<RayTracingTerrainLod.SectionInput>> terrainLodWorkerInputs = new ConcurrentHashMap<>();
+    private static final Map<RayTracingTerrainLodScheduler.Token, TerrainLodBuildInput> terrainLodWorkerInputs = new ConcurrentHashMap<>();
     private static final Map<Long, RayTracingTerrainLodScheduler.Token> terrainLodWorkerTokens = new HashMap<>();
     private static Map<RayTracingTerrainLodScheduler.NodeKey, RayTracingTerrainLodScheduler.NodeVersion>
         terrainLodNodeVersions = Map.of();
@@ -853,7 +866,6 @@ public final class RayTracingProbe {
      * culling is refreshed when a neighbor appears or disappears.</p>
      */
     public static void markChunkDirty(ClientLevel level, ChunkPos chunkPosition, boolean loaded) {
-        CompiledSectionMeshCache.invalidateChunk(chunkPosition, level.getMinSectionY(), level.getMaxSectionY());
         for (ChunkPos affected : affectedChunks(chunkPosition)) {
             CompiledSectionMeshCache.invalidateChunk(affected, level.getMinSectionY(), level.getMaxSectionY());
         }
@@ -970,6 +982,17 @@ public final class RayTracingProbe {
             sceneGeneration++;
             sceneDirty = true;
         }
+    }
+
+    /** A late Sodium mesh may replace the CPU fallback; do not invalidate the new snapshot. */
+    public static void onSodiumSectionMeshReady(BlockPos origin) {
+        if (!smokeTestStarted || smokeGeometry == null || !isWithinCaptureWindow(new ChunkPos(origin.getX() >> 4, origin.getZ() >> 4))) return;
+        long key = origin.asLong();
+        pendingDirtySections.add(key);
+        pendingCaptureSections.add(key);
+        notePendingDirtyEvents();
+        sceneGeneration++;
+        sceneDirty = true;
     }
 
     private static boolean invalidateDirtySection(net.minecraft.core.SectionPos section) {
@@ -1413,14 +1436,21 @@ public final class RayTracingProbe {
         boolean compositionNeeded = sourceChanged || windowChanged;
         if (terrainLodScheduler == null || configChanged) {
             closeTerrainLodScheduler();
+            RayTracingTerrainLod.Builder builder = new RayTracingTerrainLod.Builder();
+            terrainLodBuilder = builder;
+            long[] builderGeneration = {Long.MIN_VALUE};
             terrainLodScheduler = new RayTracingTerrainLodScheduler<>(1, queueLimit,
                 request -> {
-                    RayTracingTerrainLod.NodeKey key = terrainLodNodeKey(request.nodeKey().nodeId());
-                    if (key == null) {
-                        throw new IllegalStateException("Missing terrain LOD node key for worker request");
+                    TerrainLodBuildInput input = terrainLodWorkerInputs.get(request.token());
+                    if (input == null) {
+                        throw new java.util.concurrent.CancellationException("LOD inputs retired");
                     }
-                    return RayTracingTerrainLod.buildNode(key,
-                        terrainLodWorkerInputs.getOrDefault(request.token(), List.of()));
+                    if (builderGeneration[0] != request.worldGeneration()) {
+                        builder.clear();
+                        builderGeneration[0] = request.worldGeneration();
+                    }
+                    return builder.buildNode(input.key(), input.sections(),
+                        () -> !terrainLodWorkerInputs.containsKey(request.token()));
             });
             terrainLodConfigFingerprint = config;
             sourceChanged = true;
@@ -1443,6 +1473,8 @@ public final class RayTracingProbe {
                     invalidateTerrainProxyParents(proxyIdentity, section, maxLevel);
                 }
             }
+            terrainLodCoarseGeometry.clear();
+            terrainLodLastAdmissionNanos = 0;
             terrainLodResults.clear();
             terrainLodInputs.clear();
             terrainLodFingerprints.clear();
@@ -1508,8 +1540,17 @@ public final class RayTracingProbe {
             // preserve pending and ready nodes so rapid movement cannot cancel all LOD work.
             terrainLodSelectionDirty = true;
         }
+        terrainLodAdmittedBytes = 0;
+        // Do not accumulate readiness across a pending composition. The admitted batch
+        // must reach activeGeometry before another batch can invalidate or enlarge it.
+        long admissionNow = System.nanoTime();
+        int admissionBudget = pendingTerrainGeometryComposition == null && !terrainLodCompositionPending
+                && admissionNow - terrainLodLastAdmissionNanos >= TERRAIN_LOD_SELECTION_INTERVAL_NANOS
+            ? Math.max(budget, 8) : 0;
         for (RayTracingTerrainLodScheduler.Result<RayTracingTerrainLod.Node> result :
-                terrainLodScheduler.poll(budget, terrainLodSourceGeneration,
+                terrainLodScheduler.poll(admissionBudget,
+                    (long)RayTracingClientConfig.INSTANCE.terrainLodPublishBudgetKiB.get() << 10,
+                    node -> node.mesh().byteSize(), terrainLodSourceGeneration,
                     terrainLodWindowGeneration, terrainLodNodeVersions)) {
             long id = result.request().nodeKey().nodeId();
             terrainLodPending.remove(id);
@@ -1518,6 +1559,8 @@ public final class RayTracingProbe {
             RayTracingTerrainLod.NodeKey key = terrainLodNodeKey(id);
             if (key != null && key.equals(result.value().key())) {
                 terrainLodResults.put(id, result.value());
+                terrainLodAdmittedBytes += result.value().mesh().byteSize();
+                terrainLodLastAdmissionNanos = admissionNow;
                 terrainLodChangeSerial++;
                 if (farCacheEnabled && proxyIdentity != null && result.value().ready()) {
                     terrainProxyStore.load(proxyIdentity, key, sceneGeneration,
@@ -1530,6 +1573,7 @@ public final class RayTracingProbe {
         }
         for (RayTracingTerrainLodScheduler.Failure failure : terrainLodScheduler.pollFailures(4)) {
             long failedId = failure.request().nodeKey().nodeId();
+            if (!failure.request().token().equals(terrainLodWorkerTokens.get(failedId))) continue;
             terrainLodPending.remove(failedId);
             terrainLodWorkerInputs.remove(failure.request().token());
             terrainLodWorkerTokens.remove(failedId, failure.request().token());
@@ -1538,32 +1582,60 @@ public final class RayTracingProbe {
         }
 
         long selectionNow = System.nanoTime();
-        boolean selectionUpdateDue = terrainLodSelectionDirty
-            && (sourceChanged || windowChanged || terrainLodSelection == null
+        boolean selectionUpdateDue = pendingTerrainGeometryComposition == null && terrainLodSelectionDirty
+            && (sourceChanged || windowChanged || terrainLodSelection == null || terrainLodCompositionPending
                 || selectionNow - terrainLodLastSelectionNanos >= TERRAIN_LOD_SELECTION_INTERVAL_NANOS);
         if (selectionUpdateDue) {
             // Add only immutable proxies that came from a previously observed native section. A
             // proxy overlapping the current ClientLevel snapshot is deliberately ignored: native
             // capture remains authoritative there, including transparent/fluid sections.
             Map<Long, RayTracingTerrainLod.Node> availableTerrainNodes = new HashMap<>(terrainLodResults);
+            boolean farAdmissionDeferred = false;
+            Set<Long> liveFarIds = new HashSet<>();
             if (farCacheEnabled && proxyIdentity != null) {
+                // Build overlap membership once. Scanning every native section for every
+                // cached proxy was quadratic in the loaded scene and cache sizes.
+                Set<RayTracingTerrainLod.NodeKey> nativeParents = new HashSet<>();
+                for (RayTracingScene.SceneGeometry.SectionGeometry section : smokeGeometry.sections) {
+                    for (int level = 1; level <= maxLevel; level++) {
+                        nativeParents.add(terrainLodParentKey(section, level));
+                    }
+                }
+                long meshByteBudget = (long)RayTracingClientConfig.INSTANCE.terrainLodPublishBudgetKiB.get() << 10;
+                boolean allowFarAdmission = admissionBudget > 0 || terrainLodAdmittedBytes > 0;
+                int restored = 0;
                 for (RayTracingTerrainProxyStore.NodeSnapshot snapshot
                         : terrainProxyStore.snapshot(proxyIdentity).nodes()) {
                     RayTracingTerrainLod.NodeKey key = snapshot.id().nodeKey();
                     if (key.level() <= 0 || key.level() > maxLevel
                             || distanceToNode(key, camera) > farRadius * 16.0
-                            || overlapsCurrentNativeGeometry(key, smokeGeometry)) {
-                        continue;
-                    }
+                            || nativeParents.contains(key)) continue;
                     long id = terrainLodId(key);
                     if (terrainLodResults.containsKey(id)) continue;
-                    RayTracingTerrainLod.Node node = RayTracingTerrainLod.Node.fromMesh(
-                        key, snapshot.mesh().vertices(), snapshot.mesh().materialData());
-                    if (node.ready()) {
-                        availableTerrainNodes.put(id, node);
+                    liveFarIds.add(id);
+                    TerrainLodFarNode cached = terrainLodFarNodes.get(id);
+                    RayTracingTerrainLod.Node node;
+                    if (cached != null && cached.payload() == snapshot.mesh()) {
+                        node = cached.node();
+                    } else {
+                        long bytes = snapshot.mesh().byteSize();
+                        if (!allowFarAdmission || restored >= 8
+                                || terrainLodAdmittedBytes > 0 && bytes > meshByteBudget - terrainLodAdmittedBytes) {
+                            farAdmissionDeferred = true;
+                            continue;
+                        }
+                        node = RayTracingTerrainLod.Node.fromMesh(
+                            key, snapshot.mesh().vertices(), snapshot.mesh().materialData());
+                        terrainLodFarNodes.put(id, new TerrainLodFarNode(snapshot.mesh(), node));
+                        terrainLodAdmittedBytes += bytes;
+                        terrainLodLastAdmissionNanos = admissionNow;
+                        terrainLodCompositionPending = true;
+                        restored++;
                     }
+                    if (node.ready()) availableTerrainNodes.put(id, node);
                 }
             }
+            terrainLodFarNodes.keySet().retainAll(liveFarIds);
 
             // Unready LOD keys and native leaves are implicit fallbacks. They never need nodes in
             // the selector: retaining only ready coarse nodes preserves the selected cut while
@@ -1598,7 +1670,7 @@ public final class RayTracingProbe {
                 // candidate set itself is the selected CPU cut. Recompose when that cut moves
                 // so a newly selected parent cannot coexist with its old child proxies.
                 || selectedSetChanged;
-            terrainLodSelectionDirty = false;
+            terrainLodSelectionDirty = farAdmissionDeferred;
             terrainLodLastSelectionNanos = selectionNow;
         }
         Map<Long, RayTracingTerrainLod.Node> availableTerrainNodes = terrainLodAvailableNodes;
@@ -1608,7 +1680,10 @@ public final class RayTracingProbe {
         int submitted = 0;
         int nativeRadiusSkipped = 0;
         boolean hasFarProxy = false;
+        int submissionBudget = Math.min(budget, terrainLodScheduler.remainingCapacity());
+        List<TerrainLodCandidate> candidates = new ArrayList<>(submissionBudget);
         for (Map.Entry<Long, List<RayTracingTerrainLod.SectionInput>> entry : terrainLodInputs.entrySet()) {
+            if (submissionBudget == 0) break;
             long id = entry.getKey();
             if (terrainLodBlocked.contains(id) || terrainLodPending.contains(id) || terrainLodResults.containsKey(id)) continue;
             RayTracingTerrainLod.NodeKey key = terrainLodKeyFromId(id);
@@ -1617,16 +1692,33 @@ public final class RayTracingProbe {
                 nativeRadiusSkipped++;
                 continue;
             }
+            int position = 0;
+            while (position < candidates.size()) {
+                TerrainLodCandidate other = candidates.get(position);
+                if (RayTracingTerrainLodScheduler.comparePriority(key.level(), distance, id,
+                        other.key().level(), other.distance(), other.id()) < 0) break;
+                position++;
+            }
+            if (position >= submissionBudget) continue;
+            candidates.add(position, new TerrainLodCandidate(id, key, distance, entry.getValue()));
+            if (candidates.size() > submissionBudget) candidates.remove(candidates.size() - 1);
+        }
+        // Keep only the best K requests instead of sorting/allocating the entire hierarchy.
+        // Insertion order must not decide which far corner monopolizes a small queue.
+        for (TerrainLodCandidate candidate : candidates) {
+            if (submitted >= budget) break;
+            long id = candidate.id();
             long fingerprint = terrainLodFingerprints.getOrDefault(id, 0L);
             RayTracingTerrainLodScheduler.NodeVersion nodeVersion = terrainLodNodeVersions.get(
                 new RayTracingTerrainLodScheduler.NodeKey(id));
             if (nodeVersion == null) continue;
             RayTracingTerrainLodScheduler.Request request = terrainLodScheduler.request(
                 new RayTracingTerrainLodScheduler.NodeKey(id), terrainLodSourceGeneration,
-                terrainLodWindowGeneration,
-                nodeVersion.nodeGeneration(), fingerprint, key.level(), distance);
-            terrainLodWorkerInputs.put(request.token(), List.copyOf(entry.getValue()));
-            if (submitted >= budget || !terrainLodScheduler.submit(request)) {
+                terrainLodWindowGeneration, nodeVersion.nodeGeneration(), fingerprint,
+                candidate.key().level(), candidate.distance());
+            terrainLodWorkerInputs.put(request.token(),
+                new TerrainLodBuildInput(candidate.key(), List.copyOf(candidate.sections())));
+            if (!terrainLodScheduler.submit(request)) {
                 terrainLodWorkerInputs.remove(request.token());
                 break;
             }
@@ -1634,7 +1726,9 @@ public final class RayTracingProbe {
             terrainLodWorkerTokens.put(id, request.token());
             submitted++;
         }
-        gpuTraversalEnabled &= terrainLodPending.isEmpty();
+        // Pending parents use native leaves in the ready-node cut below. Switching the
+        // entire scene to CPU traversal for every streaming build needlessly republishes
+        // geometry and then switches it back as soon as the queue drains.
         if (gpuTraversalEnabled != terrainLodGpuTraversalActive) {
             compositionNeeded = true;
         }
@@ -1674,12 +1768,15 @@ public final class RayTracingProbe {
             // the same ray. GPU traversal still performs frustum/Hi-Z selection over this cut,
             // while the CPU cut guarantees that a ray cannot hit overlapping LOD proxies.
             for (RayTracingTerrainLod.NodeKey key : selectedTerrainKeys) {
-                if (key.level() == 0 || distanceToNode(key, camera) > farRadius * 16.0) continue;
+                // Far-cache proxies were range-checked when assembling available nodes.
+                // Captured terrain follows the same cut as CPU traversal: a square chunk
+                // window can contain corners beyond this circular far-cache radius.
+                if (key.level() == 0) continue;
                 long nodeId = terrainLodId(key);
                 RayTracingTerrainLod.Node node = availableTerrainNodes.get(nodeId);
                 if (node == null) continue;
                 RayTracingScene.SceneGeometry.SectionGeometry coarse =
-                    RayTracingScene.SceneGeometry.SectionGeometry.coarse(node);
+                    coarseTerrainGeometry(node);
                 if (coarse != null) {
                     coarseSections.add(coarse);
                     gpuCoarseKeys.add(key);
@@ -1725,7 +1822,7 @@ public final class RayTracingProbe {
                 RayTracingTerrainLod.Node node = availableTerrainNodes.get(selectedId);
                 if (node != null) {
                     RayTracingScene.SceneGeometry.SectionGeometry coarse =
-                        RayTracingScene.SceneGeometry.SectionGeometry.coarse(node);
+                        coarseTerrainGeometry(node);
                     if (coarse != null) {
                         coarseSections.add(coarse);
                         hasFarProxy |= !terrainLodResults.containsKey(selectedId);
@@ -1733,6 +1830,8 @@ public final class RayTracingProbe {
                 }
             }
         }
+        // Retain only geometry wrappers referenced by this publication's cut.
+        terrainLodCoarseGeometry.keySet().retainAll(selectedTerrainKeys);
         if (coarseSections.isEmpty() && nativeSections.size() == smokeGeometry.sections.size()) {
             activeGeometry = smokeGeometry;
             terrainLodGpuTraversalActive = gpuTraversalEnabled;
@@ -1811,14 +1910,28 @@ public final class RayTracingProbe {
             "RTest terrain LOD: frame={} radius_chunks={} max_level={} gpu={} source_sections={} "
                 + "hierarchy_nodes={} ready_nodes={} ready_l1={} ready_l2={} selected_l1={} selected_l2={} "
                 + "native_fallbacks={} native_radius_skipped={} submitted={} pending={} blocked={} "
-                + "active_native={} active_coarse={} far_proxy={}",
+                + "active_native={} active_coarse={} far_proxy={} admitted_mesh_bytes={} "
+                + "voxel_cache_hits={} voxel_cache_misses={} voxel_cache_bytes={}",
             frame, radius, maxLevel, gpuTraversalEnabled,
             terrainLodSourceGeometry == null ? 0 : terrainLodSourceGeometry.sections.size(),
             terrainLodHierarchyKeys.size(), readyNodes, levelOneReady, levelTwoReady,
             selectedLevelOne, selectedLevelTwo, nativeFallbacks, nativeRadiusSkipped,
             submitted, terrainLodPending.size(), terrainLodBlocked.size(),
             activeGeometry == null ? 0 : activeGeometry.sections.size() - activeCoarse,
-            activeCoarse, hasFarProxy);
+            activeCoarse, hasFarProxy, terrainLodAdmittedBytes,
+            terrainLodBuilder == null ? 0 : terrainLodBuilder.cacheHits(),
+            terrainLodBuilder == null ? 0 : terrainLodBuilder.cacheMisses(),
+            terrainLodBuilder == null ? 0 : terrainLodBuilder.retainedBytes());
+    }
+
+    private static RayTracingScene.SceneGeometry.SectionGeometry coarseTerrainGeometry(
+            RayTracingTerrainLod.Node node) {
+        TerrainLodCoarseGeometry cached = terrainLodCoarseGeometry.get(node.key());
+        if (cached != null && cached.node() == node) return cached.geometry();
+        RayTracingScene.SceneGeometry.SectionGeometry geometry =
+            RayTracingScene.SceneGeometry.SectionGeometry.coarse(node);
+        if (geometry != null) terrainLodCoarseGeometry.put(node.key(), new TerrainLodCoarseGeometry(node, geometry));
+        return geometry;
     }
 
     private static boolean isOpaqueSection(RayTracingScene.SceneGeometry.SectionGeometry section) {
@@ -1876,22 +1989,6 @@ public final class RayTracingProbe {
                 Math.floorDiv(sx, 1 << level), Math.floorDiv(sy, 1 << level),
                 Math.floorDiv(sz, 1 << level)));
         }
-    }
-
-    private static boolean overlapsCurrentNativeGeometry(RayTracingTerrainLod.NodeKey node,
-                                                          RayTracingScene.SceneGeometry geometry) {
-        RayTracingTerrainLod.Bounds bounds = RayTracingTerrainLod.boundsFor(node);
-        for (RayTracingScene.SceneGeometry.SectionGeometry section : geometry.sections) {
-            if (section.originX + RayTracingTerrainLod.SECTION_SIZE > bounds.minX()
-                    && section.originX < bounds.maxX()
-                    && section.originY + RayTracingTerrainLod.SECTION_SIZE > bounds.minY()
-                    && section.originY < bounds.maxY()
-                    && section.originZ + RayTracingTerrainLod.SECTION_SIZE > bounds.minZ()
-                    && section.originZ < bounds.maxZ()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** Assigns a collision-free scheduler identity for the current immutable source snapshot. */
@@ -1971,6 +2068,11 @@ public final class RayTracingProbe {
             terrainLodScheduler.close();
             terrainLodScheduler = null;
         }
+        terrainLodBuilder = null;
+        terrainLodAdmittedBytes = 0;
+        terrainLodLastAdmissionNanos = 0;
+        terrainLodCoarseGeometry.clear();
+        terrainLodFarNodes.clear();
         terrainLodPending.clear();
         terrainLodResults.clear();
         terrainLodInputs.clear();

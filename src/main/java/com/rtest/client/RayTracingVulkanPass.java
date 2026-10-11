@@ -11,22 +11,16 @@ import static com.rtest.client.RayTracingMaterialBuffer.writeChangedSectionMater
 import static com.rtest.client.RayTracingMaterialBuffer.writeMaterialBuffer;
 
 import com.rtest.client.RayTracingDynamicInstances.DynamicCachedBlas;
-import static com.rtest.client.RayTracingDynamicInstances.DYNAMIC_PLAYER_MATERIAL_TRIANGLES;
 import static com.rtest.client.RayTracingDynamicInstances.DYNAMIC_SLOT_MATERIAL_TRIANGLES;
-import static com.rtest.client.RayTracingDynamicInstances.MATERIAL_FLOATS_PER_TRIANGLE;
 
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuFence;
 import com.mojang.blaze3d.textures.GpuSampler;
-import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuSampler;
-import com.mojang.blaze3d.vulkan.VulkanGpuSampler;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import net.neoforged.neoforge.client.IRenderableSection;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -35,29 +29,16 @@ import java.util.Map;
 import java.util.Set;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.color.block.BlockColors;
-import net.minecraft.client.color.block.BlockTintSource;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.block.BlockStateModelSet;
-import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
-import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.resources.model.geometry.BakedQuad;
-import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.level.block.RenderShape;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.core.registries.BuiltInRegistries;
 import org.joml.Matrix4f;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
-import org.joml.Vector3fc;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanUtils;
 import java.nio.ByteBuffer;
@@ -78,7 +59,6 @@ import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildGeometryInfoKHR;
-import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
@@ -92,13 +72,10 @@ import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkDeviceOrHostAddressConstKHR;
-import org.lwjgl.vulkan.VkDeviceOrHostAddressKHR;
 import org.lwjgl.vulkan.VkImageCopy;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkImageSubresourceRange;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
-import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkImageSubresourceLayers;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
@@ -111,7 +88,6 @@ import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
-import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
@@ -124,7 +100,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
     final class RayTracingVulkanPass implements AutoCloseable {
         private static final Logger LOGGER = LogUtils.getLogger();
         private enum TemporalResetReason {
-            GEOMETRY_PUBLICATION
+            FULL_SCENE_REVISION,
+            PRESERVE_INCREMENTAL_HISTORY
         }
 
         /**
@@ -159,7 +136,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private int restirSettingsToken = -1;
         private int restirFrame;
         private long restirRevision = Long.MIN_VALUE;
-        private boolean restirHistoryReady;
+        private int restirHistoryReadyMask;
         private NativeBuffer materialBuffer;
         private NativeBuffer lightDataBuffer;
         private NativeBuffer pbrBuffer;
@@ -1742,6 +1719,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
             long blasAcquireNanos = 0, sceneBuffersNanos = 0, materialNanos = 0;
             long lightUploadNanos = 0, descriptorsNanos = 0, phaseStart = 0;
             int previousSectionCount = this.sectionBlas.size();
+            boolean fullTemporalReset = this.geometry.revision() != nextGeometry.revision();
             List<CachedBlas> nextBlas = new ArrayList<>();
             Set<SectionKey> activeKeys = new HashSet<>();
             NativeBuffer nextInstance = null;
@@ -2017,21 +1995,30 @@ import com.rtest.client.fsr.RtestFsrSettings;
             } else {
                 this.topLevelUpdatePending = false;
             }
+            // A seed-only suffix does not reference old emitters or primitives. Preserve
+            // its full seed domain across incremental publication in the same coordinates
+            // and scene generation. DI additionally needs identical emitter/PDF data.
+            boolean sameRestirDomain = this.geometry.revision() == nextGeometry.revision()
+                && Double.doubleToRawLongBits(this.geometry.originX) == Double.doubleToRawLongBits(nextGeometry.originX)
+                && Double.doubleToRawLongBits(this.geometry.originY) == Double.doubleToRawLongBits(nextGeometry.originY)
+                && Double.doubleToRawLongBits(this.geometry.originZ) == Double.doubleToRawLongBits(nextGeometry.originZ);
+            this.restirHistoryReadyMask &= sameRestirDomain
+                ? RestirLayout.SUFFIX | (reuseLightData ? RestirLayout.DIRECT : 0) : 0;
             this.geometry = nextGeometry;
-            // Incremental publications can preserve resetRevision while changing emitter indices.
-            // Invalidate by publication, not only by revision equality.
-            this.restirHistoryReady = false;
             this.topLevelBuilt = false;
             // Only a new allocation or a shifted base initialized/cleared the dynamic ranges.
             // Both incremental writes and full static fallbacks with a stable base preserve
             // their old contents, so retain the prior pending state instead of forcing a
             // redundant dynamic material upload.
             if (dynamicMaterialRangesReset) this.dynamicInstances.markMaterialWritePending();
-            // NRD only receives motion for the primary hit. A static primary surface can still
-            // reflect a changed dynamic/scene TLAS, so preserve no specular history across this
-            // resource publication.
-            this.dynamicInstances.markHistoryResetPending();
-            this.fsr.requestReset();
+            // Changed emitter data invalidate DI above, but not all image/suffix history.
+            // Incremental streaming keeps the scene reset revision: depth/normal reprojection
+            // rejects disocclusions and NRD's anti-lag handles changing illumination.
+            // Keep entity-local invalidation when its material ranges had to be reinitialized.
+            if (fullTemporalReset || dynamicMaterialRangesReset) {
+                this.dynamicInstances.markHistoryResetPending();
+            }
+            if (fullTemporalReset) this.fsr.requestReset();
             if (!reuseTopLevel) {
                 oldTopLevel.close();
             }
@@ -2058,7 +2045,9 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 "RTest geometry publish: oldSections={}, newSections={}, reuseTopLevel={}, rebuildInstanceBuffer={}, rebuildMaterialBuffer={}, reuseLightData={}, incrementalMaterialWrite={}, temporalReset={}, resetReason={}, duration={} ms, blas_acquire_ms={}, scene_buffers_ms={}, material_write_ms={}, light_pbr_upload_ms={}, descriptors_ms={}, retire_ms={}, material_capacity_bytes={}, material_live_bytes={}, reuseLightAllocation={}, light_capacity_bytes={}",
                 previousSectionCount, nextBlas.size(), reuseTopLevel, !reuseInstance, !reuseMaterial,
                 reuseLightData,
-                incrementalMaterialWrite, true, TemporalResetReason.GEOMETRY_PUBLICATION,
+                incrementalMaterialWrite, fullTemporalReset,
+                fullTemporalReset ? TemporalResetReason.FULL_SCENE_REVISION
+                    : TemporalResetReason.PRESERVE_INCREMENTAL_HISTORY,
                 (System.nanoTime() - startNanos) / 1_000_000L,
                 formatGpuMs(blasAcquireNanos / 1_000_000.0), formatGpuMs(sceneBuffersNanos / 1_000_000.0),
                 formatGpuMs(materialNanos / 1_000_000.0), formatGpuMs(lightUploadNanos / 1_000_000.0),
@@ -2174,20 +2163,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
             return tlasChanged;
         }
 
-        private static NativeBuffer createInstanceBuffer(
-            VulkanDevice device,
-            SceneGeometry geometry,
-            List<CachedBlas> sectionBlas,
-            int dynamicSlotCapacity,
-            int instanceCapacity,
-            int usage
-        ) {
-            NativeBuffer buffer = NativeBuffer.create(
-                device, (long)instanceCapacity * VkAccelerationStructureInstanceKHR.SIZEOF, usage, true);
-            writeInstanceBuffer(buffer, geometry, sectionBlas, dynamicSlotCapacity, instanceCapacity);
-            return buffer;
-        }
-
         private static void writeInstanceBuffer(
             NativeBuffer buffer,
             SceneGeometry geometry,
@@ -2248,23 +2223,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 .instanceCustomIndex(0).instanceShaderBindingTableRecordOffset(0)
                 .flags(KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
                 .accelerationStructureReference(dummyBlasAddress);
-        }
-
-        private static NativeBuffer uploadFloatBuffer(VulkanDevice device, float[] values, int usage) {
-            NativeBuffer buffer = NativeBuffer.create(device, (long)values.length * Float.BYTES, usage, true);
-            try {
-                writeFloatBuffer(buffer, values);
-                return buffer;
-            } catch (Throwable throwable) {
-                buffer.close();
-                throw throwable;
-            }
-        }
-
-        private static void writeFloatBuffer(NativeBuffer buffer, float[] values) {
-            try (NativeBuffer.Mapped mapped = buffer.map()) {
-                mapped.buffer().asFloatBuffer().put(values);
-            }
         }
 
         private static NativeBuffer uploadLightDataBuffer(VulkanDevice device, RayTracingLightTree.Data data) {
@@ -2571,7 +2529,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 // scale as vanilla block lights without increasing the visible lamp surface.
                 buffer.putFloat(288, pbrParallaxDepth)
                     .putFloat(292, emissionScale)
-                    // Previously unused lane: legacy PNG sampling; atmosphere LUT is independent.
+                    // Legacy PNG sampling flag; atmosphere LUT is independent.
                     .putFloat(296, this.skyboxTextureEnabled ? 1.0F : 0.0F)
                     .putFloat(300, pbrParallaxFlags | (cameraInWater ? 4 : 0));
             }
@@ -2597,7 +2555,8 @@ import com.rtest.client.fsr.RtestFsrSettings;
             var config = RayTracingClientConfig.INSTANCE;
             int requested = RayTracingRestirShader.requestedMode();
             int settingsToken = requested | (config.restirCandidates.get() << 2)
-                | (config.restirSpatialNeighbors.get() << 7) | (config.restirGatherPrefixes.get() << 10);
+                | (config.restirSpatialNeighbors.get() << 7) | (config.restirGatherPrefixes.get() << 10)
+                | (config.restirSingleDonorGather.get() ? 1 << 13 : 0);
             long requiredBytes = RestirLayout.bytes(this.outputWidth, this.outputHeight, requested);
             if (requiredBytes > this.restirStorageLimit) {
                 if (settingsToken != this.restirSettingsToken) {
@@ -2621,12 +2580,12 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 NativeBuffer oldCurrent = this.restirCurrentBuffer;
                 this.restirPreviousBuffer = previous;
                 this.restirCurrentBuffer = current;
-                this.restirHistoryReady = false;
+                this.restirHistoryReadyMask = 0;
                 oldPrevious.close();
                 oldCurrent.close();
             }
             if (settingsToken != this.restirSettingsToken) {
-                this.restirHistoryReady = false;
+                this.restirHistoryReadyMask = 0;
                 this.fsr.requestReset();
                 this.restirSettingsToken = settingsToken;
                 LOGGER.info("ReSTIR mode={}, candidates={}, neighbors={}, gather_prefixes={}, bank_bytes={}",
@@ -2652,13 +2611,13 @@ import com.rtest.client.fsr.RtestFsrSettings;
         private void uploadRestirParameters(RtestFsr3Upscaler.FrameToken token) {
             if (this.restirPipelineMode == 0) return;
             var config = RayTracingClientConfig.INSTANCE;
-            boolean valid = RestirLayout.historyUsable(this.restirHistoryReady, token.reset(),
+            boolean valid = RestirLayout.historyUsable(this.restirHistoryReadyMask != 0, token.reset(),
                 this.restirRevision, this.geometry.revision(), this.restirFrame);
             try (NativeBuffer.Mapped mapped = this.restirParamsBuffer.map()) {
                 mapped.buffer().putInt(0, this.restirMode).putInt(4, config.restirCandidates.get())
                     .putInt(8, config.restirSpatialNeighbors.get()).putInt(12, config.restirGatherPrefixes.get())
-                    .putInt(16, valid ? 1 : 0).putInt(20, RestirLayout.stride(this.restirMode))
-                    .putInt(24, this.restirFrame).putInt(28, 0);
+                    .putInt(16, valid ? this.restirHistoryReadyMask & this.restirMode : 0).putInt(20, RestirLayout.stride(this.restirMode))
+                    .putInt(24, this.restirFrame).putInt(28, config.restirSingleDonorGather.get() ? 1 : 0);
             }
         }
 
@@ -3035,7 +2994,7 @@ import com.rtest.client.fsr.RtestFsrSettings;
                 NativeBuffer previousRestir = this.restirPreviousBuffer;
                 this.restirPreviousBuffer = this.restirCurrentBuffer;
                 this.restirCurrentBuffer = previousRestir;
-                this.restirHistoryReady = this.restirMode != 0;
+                this.restirHistoryReadyMask = this.restirMode;
                 this.restirRevision = this.geometry.revision();
                 this.restirFrame++;
                 if (frameIndex % 120 == 0) {
@@ -3256,13 +3215,6 @@ import com.rtest.client.fsr.RtestFsrSettings;
             }
             return plan.batches().size();
         }
-
-        /** Vulkan's AS scratch alignment applies to the device address, not just buffer size. */
-        private long scratchDeviceAddress() {
-            long alignment = Math.max(1L, this.accelerationLimits.minScratchAlignment());
-            return this.scratchBuffer.alignedDeviceAddress(alignment);
-        }
-
         private VkAccelerationStructureBuildGeometryInfoKHR.Buffer topLevelBuildInfo(
             MemoryStack stack, boolean update) {
             // Single diagnostic switch for both incremental and per-frame TLAS recorders.

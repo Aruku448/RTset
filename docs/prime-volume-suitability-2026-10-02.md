@@ -1,5 +1,8 @@
 # Prime 体积光雾对 RTest26.2 的适配性评估（2026-10-02）
 
+> **文档状态：研究/审计快照** · 整理日期：2026-10-11。
+> 来源版本与本地行号只对应记录时点；建议不是自动生效的待办，实施情况需对照源码和后续记录。 [分类索引](README.md)
+
 > 历史阶段1评估：下面RTest“无finite aerial hook”等描述已过时；当前已有四波长有限段、太阳/月光及FSR前L合成。最新primary复核见 `prime-atmosphere-unified-migration-research.md`，逐步统一方案见 `prime-atmosphere-unified-migration-plan.md`。特别明确：固定上游 `aerialStep` 对 `(direct+multiple)` 整体乘scalar terrain visibility；当前RTest只对direct乘RGB阴影是adapter选择，不是完整Prime aerial阴影行为。
 
 评估对象：上游 `bWFuanVzYWth/prime` commit `3ab5f75e33de3f6947e96f4a4dd1406588e9e98b`（"移植新的大气：现在计算各向异性的多重散射"）的 epipolar 体积光雾（aerial perspective）与太阳阴影 clipmap。RTest 现状：已移植 7 个固定介质核与 Sky/相机透射（`RayTracingAtmosphere.java:23-28`），aerial 与 clipmap 未移植；旧 volume 为每像素 4/8/16 step、逐 step TLAS 阴影（`RayTracingShaderRaygen.java:410-490`）。**本文档只评估，不改任何代码/配置。**

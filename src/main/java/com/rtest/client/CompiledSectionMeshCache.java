@@ -103,6 +103,7 @@ public final class CompiledSectionMeshCache {
     }
 
     static synchronized void invalidate(BlockPos origin) {
+        SodiumTerrainMeshCache.invalidate(origin);
         long key = SectionPos.asLong(origin);
         advanceGeneration(key);
         remove(key);
@@ -110,6 +111,7 @@ public final class CompiledSectionMeshCache {
 
     /** Invalidates one chunk without throwing away compiled meshes from unrelated chunks. */
     static synchronized void invalidateChunk(ChunkPos chunkPos, int minSectionY, int maxSectionY) {
+        SodiumTerrainMeshCache.invalidateChunk(chunkPos, minSectionY, maxSectionY);
         for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
             long key = SectionPos.asLong(chunkPos.x(), sectionY, chunkPos.z());
             advanceGeneration(key);
@@ -118,6 +120,7 @@ public final class CompiledSectionMeshCache {
     }
 
     public static synchronized void invalidateAll() {
+        SodiumTerrainMeshCache.invalidateAll();
         globalGeneration++;
         MESHES.clear();
         cachedBytes = 0L;

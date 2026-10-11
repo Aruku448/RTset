@@ -1,5 +1,8 @@
 # RT 表面输运数学审计（2026-10-04）
 
+> **文档状态：研究/审计快照** · 整理日期：2026-10-11。
+> 来源版本与本地行号只对应记录时点；建议不是自动生效的待办，实施情况需对照源码和后续记录。 [分类索引](README.md)
+
 范围：当前 `src/main/java/com/rtest/client/RayTracingShaderRaygen.java` 的 BSDF、NEE、MIS、Sobol、roulette、折射与草木响应。只读运行源码；本报告没有修改、构建或部署 mod。行号以本次检查时为准。不能据此声称 GPU 实测加速。
 
 ## 优先结论

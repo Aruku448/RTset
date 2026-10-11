@@ -3,7 +3,6 @@ package com.rtest.mixin;
 import com.rtest.client.BlockEntityModelGeometryAdapter;
 import com.rtest.client.LivingEntityGeometryAdapter;
 import net.minecraft.client.renderer.SubmitNodeCollector;
-import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;

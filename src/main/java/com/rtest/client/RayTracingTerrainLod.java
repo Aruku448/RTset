@@ -15,8 +15,8 @@ import java.util.Set;
  * Vulkan, or Voxy dependency; callers provide immutable snapshots of native sections.
  *
  * <p>The hierarchy uses the same spatial convention as Voxy: level 0 is one 16^3 section,
- * level 1 is 32^3 blocks, and level 2 is 64^3 blocks. Parent meshes are always generated from
- * the original {@link SectionInput} values. A parent is never made by reducing a child mesh.
+ * level 1 is 32^3 blocks, and level 2 is 64^3 blocks. Coarse nodes share cached
+ * section-local surface voxels. Parent samples reduce those voxels, never a child mesh.
  * Surface triangles are conservatively voxelized into occupied cells, then meshed at
  * occupied/empty transitions. This closes the old single-plane proxies; it is not a full
  * block-state mip chain because the snapshot boundary contains surfaces, not solid volumes.</p>
@@ -26,7 +26,8 @@ public final class RayTracingTerrainLod {
     public static final int MATERIAL_FLOATS_PER_TRIANGLE = 28;
     public static final int MAX_HIERARCHY_LEVEL = 2;
     private static final int LEVEL_ONE_BINS_PER_AXIS = 8;
-    private static final int LEVEL_TWO_BINS_PER_AXIS = 16;
+    private static final int LEVEL_TWO_BINS_PER_AXIS = 8;
+    private static final int SECTION_VOXELS_PER_AXIS = 4;
     private static final float AREA_EPSILON = 1.0e-10F;
     private static final int[] NORMAL_WINDING = {0, 1, 2, 0, 2, 3};
     private static final int[] REVERSED_WINDING = {0, 3, 2, 0, 2, 1};
@@ -156,8 +157,12 @@ public final class RayTracingTerrainLod {
         private final long fingerprint;
 
         private Mesh(float[] vertices, float[] materialData) {
-            this.vertices = vertices.clone();
-            this.materialData = materialData.clone();
+            this(vertices, materialData, true);
+        }
+
+        private Mesh(float[] vertices, float[] materialData, boolean copy) {
+            this.vertices = copy ? vertices.clone() : vertices;
+            this.materialData = copy ? materialData.clone() : materialData;
             this.fingerprint = RayTracingTerrainLod.fingerprint(this.vertices, this.materialData);
         }
 
@@ -165,6 +170,7 @@ public final class RayTracingTerrainLod {
         public float[] materialData() { return materialData.clone(); }
         public int triangleCount() { return vertices.length / 9; }
         public long fingerprint() { return fingerprint; }
+        public long byteSize() { return ((long)vertices.length + materialData.length) * Float.BYTES; }
     }
 
     /** A node is ready iff its immutable coarse mesh is non-null and non-empty. */
@@ -399,66 +405,273 @@ public final class RayTracingTerrainLod {
         return new ErrorMetric(distance, b.diagonal() * focalLength / Math.max(distance, 1.0e-6));
     }
 
-    /** Builds a level node from an immutable section snapshot collection. */
+    /** Builds a node without retaining a worker cache after this call. */
     public static Node buildNode(NodeKey key, Iterable<SectionInput> sections) {
-        if (sections == null) throw new IllegalArgumentException("sections is null");
-        Bounds bounds = boundsFor(key);
-        int binsPerAxis = binsPerAxis(key);
-        int binCount = binsPerAxis * binsPerAxis * binsPerAxis;
-        // Six directional materials plus a representative fallback per occupied voxel.
-        // Occupancy, not a winning triangle's normal, determines which faces exist.
-        SectionInput[] selectedSections = new SectionInput[binCount * 7];
-        int[] selectedTriangles = new int[binCount * 7];
-        float[] selectedAreas = new float[binCount * 7];
-        long[] selectedTies = new long[binCount * 7];
-        Arrays.fill(selectedAreas, -1.0F);
-        int minSectionX = Math.multiplyExact(key.x(), key.sectionsPerAxis());
-        int minSectionY = Math.multiplyExact(key.y(), key.sectionsPerAxis());
-        int minSectionZ = Math.multiplyExact(key.z(), key.sectionsPerAxis());
-        for (SectionInput section : sections) {
-            int sx = Math.floorDiv(section.originX(), SECTION_SIZE);
-            int sy = Math.floorDiv(section.originY(), SECTION_SIZE);
-            int sz = Math.floorDiv(section.originZ(), SECTION_SIZE);
-            if (sx < minSectionX || sy < minSectionY || sz < minSectionZ
-                    || sx >= minSectionX + key.sectionsPerAxis()
-                    || sy >= minSectionY + key.sectionsPerAxis()
-                    || sz >= minSectionZ + key.sectionsPerAxis()) continue;
-            selectCandidates(section, bounds, binsPerAxis,
-                selectedSections, selectedTriangles, selectedAreas, selectedTies);
+        return new Builder().buildNode(key, sections);
+    }
+
+    /** Worker-confined cache. Its budget includes source arrays retained by samples. */
+    public static final class Builder {
+        private static final long CACHE_BYTES = 64L << 20;
+        private static final int CACHE_ENTRIES = 1024;
+        private final LinkedHashMap<SectionCacheKey, SectionVoxels> cache =
+            new LinkedHashMap<>(64, 0.75F, true);
+        private final Samples scratch = new Samples(8);
+        private final MeshScratch meshScratch = new MeshScratch();
+        private volatile long retainedBytes;
+        private volatile long cacheHits;
+        private volatile long cacheMisses;
+
+        public long cacheHits() { return cacheHits; }
+        public long cacheMisses() { return cacheMisses; }
+        public long retainedBytes() { return retainedBytes; }
+
+        public void clear() {
+            cache.clear();
+            retainedBytes = 0;
         }
-        int faceCount = 0;
-        for (int bin = 0; bin < binCount; bin++) {
-            if (selectedSections[bin * 7 + 6] == null) continue;
-            for (int face = 0; face < 6; face++) {
-                if (exposedFace(bin, face, binsPerAxis, selectedSections)) faceCount++;
+
+        public Node buildNode(NodeKey key, Iterable<SectionInput> sections) {
+            return buildNode(key, sections, () -> false);
+        }
+
+        public Node buildNode(NodeKey key, Iterable<SectionInput> sections,
+                              java.util.function.BooleanSupplier cancelled) {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(sections, "sections");
+            Bounds bounds = boundsFor(key);
+            scratch.clear();
+            try {
+                for (SectionInput section : sections) {
+                    if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+                        throw new java.util.concurrent.CancellationException("LOD worker stopped");
+                    }
+                    int sx = Math.floorDiv(section.originX(), SECTION_SIZE);
+                    int sy = Math.floorDiv(section.originY(), SECTION_SIZE);
+                    int sz = Math.floorDiv(section.originZ(), SECTION_SIZE);
+                    if (Math.floorDiv(sx, key.sectionsPerAxis()) != key.x()
+                            || Math.floorDiv(sy, key.sectionsPerAxis()) != key.y()
+                            || Math.floorDiv(sz, key.sectionsPerAxis()) != key.z()) continue;
+                    if (key.level() == 0) {
+                        selectCandidates(section, bounds, binsPerAxis(key), scratch.sections,
+                            scratch.triangles, scratch.areas, scratch.ties, cancelled);
+                    } else {
+                        // Four-block sampling occurs once per native snapshot. Level two
+                        // reuses its 2x2x2 reduction, including hidden directional samples.
+                        SectionVoxels voxels = sectionVoxels(section, cancelled);
+                        if (voxels.spansSection) {
+                            // Custom models may extend outside their owning section. Keep
+                            // their original coverage rather than clipping at the cache tile.
+                            selectCandidates(section, bounds, binsPerAxis(key), scratch.sections,
+                                scratch.triangles, scratch.areas, scratch.ties, cancelled);
+                            continue;
+                        }
+                        Samples input = key.level() == 1 ? voxels.fine : voxels.coarse;
+                        int width = key.level() == 1 ? 4 : 2;
+                        int ox = Math.floorMod(sx, key.sectionsPerAxis()) * width;
+                        int oy = Math.floorMod(sy, key.sectionsPerAxis()) * width;
+                        int oz = Math.floorMod(sz, key.sectionsPerAxis()) * width;
+                        for (int y = 0; y < width; y++) {
+                            for (int z = 0; z < width; z++) {
+                                for (int x = 0; x < width; x++) {
+                                    int from = ((y * width + z) * width + x) * 7;
+                                    int to = (((oy + y) * 8 + oz + z) * 8 + ox + x) * 7;
+                                    for (int face = 0; face < 7; face++) {
+                                        if (input.sections[from + face] != null) {
+                                            selectSample(to + face, input.sections[from + face],
+                                                input.triangles[from + face], input.areas[from + face],
+                                                input.ties[from + face], scratch.sections,
+                                                scratch.triangles, scratch.areas, scratch.ties);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return meshNode(key, bounds, scratch, meshScratch);
+            } finally {
+                // Do not pin the most recently built node's source snapshots in scratch.
+                Arrays.fill(scratch.sections, null);
             }
         }
-        float[] vertices = new float[faceCount * 18];
-        float[] materials = new float[faceCount * MATERIAL_FLOATS_PER_TRIANGLE * 2];
-        double[] cellMin = new double[3];
-        double[] cellMax = new double[3];
-        float[] corners = new float[12];
-        float[] proxyUv = new float[8];
-        int vo = 0, mo = 0;
-        // Voxy-style occupied/empty transitions: only exterior voxel faces survive.
-        // At unknown node boundaries keep faces conservatively instead of opening holes.
-        for (int bin = 0; bin < binCount; bin++) {
-            if (selectedSections[bin * 7 + 6] == null) continue;
-            for (int face = 0; face < 6; face++) {
-                if (!exposedFace(bin, face, binsPerAxis, selectedSections)) continue;
-                int sample = bin * 7 + face;
-                if (selectedSections[sample] == null) sample = bin * 7 + 6;
-                SectionInput section = selectedSections[sample];
-                int sourceVertexOffset = selectedTriangles[sample] * 9;
-                int sourceMaterialOffset = selectedTriangles[sample] * MATERIAL_FLOATS_PER_TRIANGLE;
-                writeProxyPatch(vertices, vo, materials, mo, section, sourceVertexOffset,
-                    sourceMaterialOffset, bin, face, bounds, binsPerAxis,
-                    cellMin, cellMax, corners, proxyUv);
-                vo += 18;
-                mo += MATERIAL_FLOATS_PER_TRIANGLE * 2;
+
+        private SectionVoxels sectionVoxels(SectionInput section, java.util.function.BooleanSupplier cancelled) {
+            var key = new SectionCacheKey(section.originX(), section.originY(), section.originZ(),
+                section.contentFingerprint());
+            SectionVoxels result = cache.get(key);
+            if (result != null && (result.source.vertices == section.vertices
+                    && result.source.materialData == section.materialData
+                    || Arrays.equals(result.source.vertices, section.vertices)
+                        && Arrays.equals(result.source.materialData, section.materialData))) {
+                cacheHits++;
+                return result;
+            }
+            if (result != null) {
+                retainedBytes -= result.bytes;
+                cache.remove(key);
+            }
+            cacheMisses++;
+            boolean spansSection = Math.floorMod(section.originX(), SECTION_SIZE) != 0
+                || Math.floorMod(section.originY(), SECTION_SIZE) != 0
+                || Math.floorMod(section.originZ(), SECTION_SIZE) != 0;
+            for (float coordinate : section.verticesView()) {
+                spansSection |= Float.isFinite(coordinate)
+                    && (coordinate < -1.0e-4F || coordinate > SECTION_SIZE + 1.0e-4F);
+            }
+            Samples fine = new Samples(SECTION_VOXELS_PER_AXIS);
+            if (!spansSection) selectCandidates(section, new Bounds(section.originX(), section.originY(), section.originZ(),
+                (double)section.originX() + SECTION_SIZE, (double)section.originY() + SECTION_SIZE,
+                (double)section.originZ() + SECTION_SIZE), SECTION_VOXELS_PER_AXIS,
+                fine.sections, fine.triangles, fine.areas, fine.ties, cancelled);
+            Samples coarse = new Samples(2);
+            for (int y = 0; y < 4; y++) {
+                for (int z = 0; z < 4; z++) {
+                    for (int x = 0; x < 4; x++) {
+                        int from = ((y * 4 + z) * 4 + x) * 7;
+                        int to = (((y >> 1) * 2 + (z >> 1)) * 2 + (x >> 1)) * 7;
+                        for (int face = 0; face < 7; face++) {
+                            if (fine.sections[from + face] != null) {
+                                selectSample(to + face, section, fine.triangles[from + face],
+                                    fine.areas[from + face], fine.ties[from + face], coarse.sections,
+                                    coarse.triangles, coarse.areas, coarse.ties);
+                            }
+                        }
+                    }
+                }
+            }
+            long bytes = ((long)section.vertices.length + section.materialData.length) * Float.BYTES
+                + (64L + 8L) * 7L * 24L + 256L;
+            result = new SectionVoxels(section, fine, coarse, bytes, spansSection);
+            // Oversized snapshots are usable for this node, but cannot evict the whole cache.
+            if (bytes <= CACHE_BYTES) {
+                while (!cache.isEmpty() && (retainedBytes + bytes > CACHE_BYTES
+                        || cache.size() >= CACHE_ENTRIES)) {
+                    var iterator = cache.entrySet().iterator();
+                    retainedBytes -= iterator.next().getValue().bytes;
+                    iterator.remove();
+                }
+                cache.put(key, result);
+                retainedBytes += bytes;
+            }
+            return result;
+        }
+    }
+
+    private record SectionCacheKey(int x, int y, int z, long fingerprint) { }
+    private record SectionVoxels(SectionInput source, Samples fine, Samples coarse, long bytes, boolean spansSection) { }
+
+    private static final class Samples {
+        final SectionInput[] sections;
+        final int[] triangles;
+        final float[] areas;
+        final long[] ties;
+
+        Samples(int size) {
+            int count = size * size * size * 7;
+            sections = new SectionInput[count];
+            triangles = new int[count];
+            areas = new float[count];
+            ties = new long[count];
+            clear();
+        }
+
+        void clear() {
+            Arrays.fill(sections, null);
+            Arrays.fill(areas, -1.0F);
+        }
+    }
+
+    private static final class MeshScratch {
+        final int[] patches = new int[8 * 8 * 8 * 6 * 3];
+        final int[] mask = new int[8 * 8];
+        final double[] cellMin = new double[3];
+        final double[] cellMax = new double[3];
+        final float[] corners = new float[12];
+        final float[] uv = new float[8];
+    }
+
+    private static Node meshNode(NodeKey key, Bounds bounds, Samples samples, MeshScratch scratch) {
+        int size = binsPerAxis(key);
+        int patchCount = 0;
+        for (int face = 0; face < 6; face++) {
+            int normal = face / 2;
+            int uAxis = normal == 0 ? 1 : normal == 1 ? 2 : 0;
+            for (int slice = 0; slice < size; slice++) {
+                Arrays.fill(scratch.mask, -1);
+                for (int v = 0; v < size; v++) {
+                    for (int u = 0; u < size; u++) {
+                        int bin = faceBin(slice, u, v, normal, uAxis, size);
+                        if (samples.sections[bin * 7 + 6] == null
+                                || !exposedFace(bin, face, size, samples.sections)) continue;
+                        scratch.mask[v * size + u] = samples.sections[bin * 7 + face] == null
+                            ? bin * 7 + 6 : bin * 7 + face;
+                    }
+                }
+                for (int v = 0; v < size; v++) {
+                    for (int u = 0; u < size; u++) {
+                        int sample = scratch.mask[v * size + u];
+                        if (sample < 0) continue;
+                        int width = 1;
+                        while (u + width < size && mergeCompatible(sample,
+                                scratch.mask[v * size + u + width], samples)) width++;
+                        int height = 1;
+                        rows: while (v + height < size) {
+                            for (int x = 0; x < width; x++) {
+                                if (!mergeCompatible(sample,
+                                        scratch.mask[(v + height) * size + u + x], samples)) break rows;
+                            }
+                            height++;
+                        }
+                        int patch = patchCount++ * 3;
+                        scratch.patches[patch] = (faceBin(slice, u, v, normal, uAxis, size) << 3) | face;
+                        scratch.patches[patch + 1] = width | (height << 8);
+                        scratch.patches[patch + 2] = sample;
+                        for (int row = 0; row < height; row++) {
+                            Arrays.fill(scratch.mask, (v + row) * size + u,
+                                (v + row) * size + u + width, -1);
+                        }
+                    }
+                }
             }
         }
-        return new Node(key, new Mesh(vertices, materials));
+        float[] vertices = new float[patchCount * 18];
+        float[] materials = new float[patchCount * MATERIAL_FLOATS_PER_TRIANGLE * 2];
+        for (int patch = 0; patch < patchCount; patch++) {
+            int packed = scratch.patches[patch * 3];
+            int extent = scratch.patches[patch * 3 + 1];
+            int sample = scratch.patches[patch * 3 + 2];
+            writeProxyPatch(vertices, patch * 18, materials, patch * MATERIAL_FLOATS_PER_TRIANGLE * 2,
+                samples.sections[sample], samples.triangles[sample] * 9,
+                samples.triangles[sample] * MATERIAL_FLOATS_PER_TRIANGLE,
+                packed >>> 3, packed & 7, bounds, size, extent & 255, extent >>> 8,
+                scratch.cellMin, scratch.cellMax, scratch.corners, scratch.uv);
+        }
+        // Arrays are exclusively owned here, so avoid cloning the whole result again.
+        return new Node(key, new Mesh(vertices, materials, false));
+    }
+
+    private static int faceBin(int slice, int u, int v, int normal, int uAxis, int size) {
+        int x = normal == 0 ? slice : uAxis == 0 ? u : v;
+        int y = normal == 1 ? slice : uAxis == 1 ? u : v;
+        int z = normal == 2 ? slice : uAxis == 2 ? u : v;
+        return (y * size + z) * size + x;
+    }
+
+    private static boolean mergeCompatible(int a, int b, Samples samples) {
+        if (b < 0) return false;
+        float[] left = samples.sections[a].materialDataView();
+        float[] right = samples.sections[b].materialDataView();
+        int lo = samples.triangles[a] * MATERIAL_FLOATS_PER_TRIANGLE;
+        int ro = samples.triangles[b] * MATERIAL_FLOATS_PER_TRIANGLE;
+        // The current ABI stores atlas UVs, without per-quad repeat bounds. Only
+        // constant-UV faces can merge without stretching or crossing another tile.
+        if (left[lo + 8] != left[lo + 10] || left[lo + 8] != left[lo + 12]
+                || left[lo + 9] != left[lo + 11] || left[lo + 9] != left[lo + 13]) return false;
+        for (int i = 0; i < MATERIAL_FLOATS_PER_TRIANGLE; i++) {
+            if (Float.floatToIntBits(left[lo + i]) != Float.floatToIntBits(right[ro + i])) return false;
+        }
+        return true;
     }
 
     /** Emits a closed coarse voxel's exterior quad using a representative source material. */
@@ -466,7 +679,7 @@ public final class RayTracingTerrainLod {
                                         float[] outputMaterials, int outputMaterialOffset,
                                         SectionInput section, int sourceVertexOffset,
                                         int sourceMaterialOffset, int bin, int face, Bounds bounds,
-                                        int binsPerAxis,
+                                        int binsPerAxis, int width, int height,
                                         double[] cellMin, double[] cellMax, float[] corners,
                                         float[] proxyUv) {
         float[] source = section.verticesView();
@@ -485,6 +698,9 @@ public final class RayTracingTerrainLod {
         int uAxis = normalAxis == 0 ? 1 : normalAxis == 1 ? 2 : 0;
         int vAxis = normalAxis == 0 ? 2 : normalAxis == 1 ? 0 : 1;
         double normalComponent = (face & 1) == 0 ? -1.0 : 1.0;
+        double cellSize = (bounds.maxX() - bounds.minX()) / binsPerAxis;
+        cellMax[uAxis] = cellMin[uAxis] + width * cellSize;
+        cellMax[vAxis] = cellMin[vAxis] + height * cellSize;
         for (int corner = 0; corner < 4; corner++) {
             double u = (corner == 1 || corner == 2) ? cellMax[uAxis] : cellMin[uAxis];
             double v = corner >= 2 ? cellMax[vAxis] : cellMin[vAxis];
@@ -590,8 +806,8 @@ public final class RayTracingTerrainLod {
     }
 
     /**
-     * Builds level 0, 1 and 2 nodes from the same raw section collection. Every parent call is
-     * made with its own raw group, making accidental child-to-parent mip chains impossible.
+     * Builds all levels using one voxel cache. Parent sampling never consumes emitted mesh;
+     * hidden directional source samples remain available to each coarser level.
      */
     public static Hierarchy buildHierarchy(SectionInput... sourceSections) {
         return buildHierarchy(Arrays.asList(sourceSections.clone()));
@@ -613,8 +829,9 @@ public final class RayTracingTerrainLod {
             }
         }
         Map<NodeKey, Node> nodes = new LinkedHashMap<>();
+        Builder builder = new Builder();
         for (Map.Entry<NodeKey, List<SectionInput>> entry : grouped.entrySet()) {
-            nodes.put(entry.getKey(), buildNode(entry.getKey(), entry.getValue()));
+            nodes.put(entry.getKey(), builder.buildNode(entry.getKey(), entry.getValue()));
         }
         return new Hierarchy(nodes);
     }
@@ -653,7 +870,8 @@ public final class RayTracingTerrainLod {
     private static void selectCandidates(SectionInput section, Bounds bounds,
                                          int binsPerAxis,
                                          SectionInput[] selectedSections, int[] selectedTriangles,
-                                         float[] selectedAreas, long[] selectedTies) {
+                                         float[] selectedAreas, long[] selectedTies,
+                                         java.util.function.BooleanSupplier cancelled) {
         float[] inputVertices = section.verticesView();
         float[] inputMaterials = section.materialDataView();
         double cellSize = (bounds.maxX() - bounds.minX()) / binsPerAxis;
@@ -661,6 +879,9 @@ public final class RayTracingTerrainLod {
         double[] voxelTriangle = new double[9];
         double[] localTriangle = new double[9];
         for (int triangle = 0; triangle < inputVertices.length / 9; triangle++) {
+            if ((triangle & 255) == 0 && (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())) {
+                throw new java.util.concurrent.CancellationException("LOD worker stopped");
+            }
             int vo = triangle * 9, mo = triangle * MATERIAL_FLOATS_PER_TRIANGLE;
             boolean finite = true;
             for (int i = 0; i < 9; i++) {

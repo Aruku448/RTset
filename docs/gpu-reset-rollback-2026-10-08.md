@@ -1,5 +1,8 @@
 # GPU 优化版本重置故障与撤回（2026-10-08）
 
+> **文档状态：中间回滚记录** · 整理日期：2026-10-11。
+> 此后存在部分恢复与新故障调查，不能把本页回滚列表当作当前保留改动。见 [后续变更核查](debug-change-review-2026-10-09.md) 和 [Vulkan 后续调查](prime-dev-vulkan-audit-2026-10-09.md)。 [分类索引](README.md)
+
 ## 已确认事实
 
 用户在部署GPU传输优化版后报告显卡重置。最新日志是baseline audit profile；00:53:19仍输出GPU计时，随后报告 `VK_ERROR_DEVICE_LOST: Failed to present image`，清理阶段进一步出现semaphore等待失败。清理堆栈不是最初根因。

@@ -119,8 +119,6 @@ public final class VulkanResourceLifecycleTest {
         require(pass, "VulkanCommandEncoder frameEncoder = this.device.createCommandEncoder();");
         require(pass, "frameEncoder.execute(holder.commandBuffer);");
         require(pass, "commandBuffer = frameEncoder.allocateAndBeginTransientCommandBuffer();");
-        require(pass, "private long scratchDeviceAddress()");
-        require(pass, "return this.scratchBuffer.alignedDeviceAddress(alignment);");
         require(pass, "scratchBufferSize(scratchSize, scratchAlignment)");
         require(pass, "validateBuildArguments(");
         require(pass, "topLevelBuildInfo(");
